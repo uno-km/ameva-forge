@@ -1,0 +1,55 @@
+=================================================
+ ⚔️  GLADIATOR ARENA: COMBAT HEURISTIC REPORT  ⚔️
+=================================================
+TARGET (TEST)  : test_graph_monster.py
+TIMESTAMP      : 2026. 8. 11. 오후 2:36:24
+PEAK VRAM/MEM  : --
+SPEED (LATENCY): 0.000s
+
+[HEURISTIC ANALYSIS]
+- True Zero-Copy capability fully engaged.
+- Memory IO bottlenecks completely eliminated.
+- Maximum theoretical WebGPU / WASM efficiency achieved. 🩸
+
+--- DETAILED COMBAT LOGS ---
+
+[05:36:24.727] --- THE GATES OPEN: test_graph_monster.py ---
+[05:36:24.743] test_deep_chained_ops (__main__.TestGraphMonster.test_deep_chained_ops)
+[05:36:24.743] ...
+[05:36:24.744] ERROR
+[05:36:24.745] /lib/python311.zip/unittest/case.py:618: RuntimeWarning: coroutine 'TestGraphMonster.asyncSetUp' was never awaited
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+[05:36:24.745] test_gc_leak (__main__.TestMachineGun.test_gc_leak)
+[05:36:24.745] ...
+[05:36:24.746] ERROR
+[05:36:24.747] /lib/python311.zip/unittest/case.py:618: RuntimeWarning: coroutine 'TestMachineGun.asyncSetUp' was never awaited
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+[05:36:24.747] ======================================================================
+[05:36:24.748] ERROR: test_deep_chained_ops (__main__.TestGraphMonster.test_deep_chained_ops)
+[05:36:24.749] ----------------------------------------------------------------------
+[05:36:24.749] Traceback (most recent call last):
+  File "/lib/python311.zip/unittest/async_case.py", line 87, in _callSetUp
+    self._callAsync(self.asyncSetUp)
+  File "/lib/python311.zip/unittest/async_case.py", line 104, in _callAsync
+    return self._asyncioRunner.run(
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lib/python311.zip/asyncio/runners.py", line 93, in run
+    raise RuntimeError(
+RuntimeError: Runner.run() cannot be called from a running event loop
+[05:36:24.749] ======================================================================
+[05:36:24.750] ERROR: test_gc_leak (__main__.TestMachineGun.test_gc_leak)
+[05:36:24.750] ----------------------------------------------------------------------
+[05:36:24.750] Traceback (most recent call last):
+  File "/lib/python311.zip/unittest/async_case.py", line 87, in _callSetUp
+    self._callAsync(self.asyncSetUp)
+  File "/lib/python311.zip/unittest/async_case.py", line 104, in _callAsync
+    return self._asyncioRunner.run(
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lib/python311.zip/asyncio/runners.py", line 93, in run
+    raise RuntimeError(
+RuntimeError: Runner.run() cannot be called from a running event loop
+[05:36:24.750] ----------------------------------------------------------------------
+[05:36:24.750] Ran 2 tests in 0.005s
+[05:36:24.750] FAILED
+[05:36:24.751] (errors=2)
+[05:36:24.752] --- COMBAT FINISHED ---

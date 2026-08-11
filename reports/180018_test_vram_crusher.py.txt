@@ -1,0 +1,44 @@
+=================================================
+ ⚔️  GLADIATOR ARENA: COMBAT HEURISTIC REPORT  ⚔️
+=================================================
+TARGET (TEST)  : test_vram_crusher.py
+TIMESTAMP      : 2026. 8. 11. 오후 6:00:18
+PEAK VRAM/MEM  : --
+SPEED (LATENCY): 26.306s
+
+[HEURISTIC ANALYSIS]
+- Standard execution path engaged.
+
+--- DETAILED COMBAT LOGS ---
+
+[08:59:51.153] --- THE GATES OPEN: test_vram_crusher.py ---
+[08:59:51.759] ======================================================================
+[08:59:51.760] Executing: TestVRAMCrusher
+[08:59:51.760] ----------------------------------------------------------------------
+[08:59:51.760] [gpuCore.ts] init started
+[08:59:51.760] [gpuCore.ts] calling initWebGPU...
+[08:59:51.760] [device.ts] initWebGPU started. current device=NULL
+[08:59:51.761] [device.py] JS Promise detected. Awaiting via asyncio.Future bridge...
+[08:59:51.786] [device.ts] initWebGPU finished. device successfully created.
+[08:59:51.786] [gpuCore.ts] initWebGPU finished
+[08:59:51.786] [device.ts] getDevice called. local device=SET, globalDev=SET
+[08:59:51.821] [device.py] JS Promise resolved successfully.
+[08:59:51.822] Device: GPU
+[08:59:51.822] --- 🧨 VRAM CRUSHER: 12288x12288 Matrix Multiplication ---
+[08:59:52.296] Host allocation: 0.474s, ~1.2 GB RAM (Host)
+[08:59:52.296] WebGPU Upload: 0.000s
+[08:59:52.297] WebGPU Compute Dispatch: 0.001s
+[08:59:52.298] [device.ts] getDevice called. local device=SET, globalDev=SET
+[08:59:52.299] [device.ts] getDevice called. local device=SET, globalDev=SET
+[08:59:52.299] [device.ts] getDevice called. local device=SET, globalDev=SET
+[08:59:52.521] [device.ts] getDevice called. local device=SET, globalDev=SET
+[08:59:52.521] [device.ts] getDevice called. local device=SET, globalDev=SET
+[08:59:52.744] [device.ts] getDevice called. local device=SET, globalDev=SET
+[08:59:52.752] [device.ts] getDevice called. local device=SET, globalDev=SET
+[09:00:18.603] Zero-Copy readback time: 26.306s
+[09:00:18.606] VRAM Crusher Survived! Maximum Hardware Limit Tested. 🩸
+[09:00:18.608] ✅ test_12288_matmul passed in 26.786s
+[09:00:18.614] ----------------------------------------------------------------------
+[09:00:18.614] Ran 1 tests. Passed: 1, Failed: 0
+[09:00:18.614] OK
+[09:00:18.615] --- COMBAT FINISHED ---

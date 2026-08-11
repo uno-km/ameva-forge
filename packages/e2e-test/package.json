@@ -1,0 +1,14 @@
+{
+  "name": "ameva-tensor-e2e",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild app.js --bundle --format=esm --outfile=public/bundle.js",
+    "test": "node runner.js"
+  },
+  "dependencies": {
+    "@ameva/tensor": "file:../../releases/ameva-tensor-0.1.0.tgz",
+    "esbuild": "^0.20.0",
+    "puppeteer": "^22.0.0"
+  }
+}

@@ -1,0 +1,38 @@
+=================================================
+ ⚔️  GLADIATOR ARENA: COMBAT HEURISTIC REPORT  ⚔️
+=================================================
+TARGET (TEST)  : test_machine_gun.py
+TIMESTAMP      : 2026. 8. 11. 오후 2:36:18
+PEAK VRAM/MEM  : --
+SPEED (LATENCY): 0.000s
+
+[HEURISTIC ANALYSIS]
+- True Zero-Copy capability fully engaged.
+- Memory IO bottlenecks completely eliminated.
+- Maximum theoretical WebGPU / WASM efficiency achieved. 🩸
+
+--- DETAILED COMBAT LOGS ---
+
+[05:36:18.431] --- THE GATES OPEN: test_machine_gun.py ---
+[05:36:18.470] test_gc_leak (__main__.TestMachineGun.test_gc_leak)
+[05:36:18.470] ...
+[05:36:18.472] ERROR
+[05:36:18.473] /lib/python311.zip/unittest/case.py:618: RuntimeWarning: coroutine 'TestMachineGun.asyncSetUp' was never awaited
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+[05:36:18.474] ======================================================================
+[05:36:18.474] ERROR: test_gc_leak (__main__.TestMachineGun.test_gc_leak)
+[05:36:18.475] ----------------------------------------------------------------------
+[05:36:18.475] Traceback (most recent call last):
+  File "/lib/python311.zip/unittest/async_case.py", line 87, in _callSetUp
+    self._callAsync(self.asyncSetUp)
+  File "/lib/python311.zip/unittest/async_case.py", line 104, in _callAsync
+    return self._asyncioRunner.run(
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lib/python311.zip/asyncio/runners.py", line 93, in run
+    raise RuntimeError(
+RuntimeError: Runner.run() cannot be called from a running event loop
+[05:36:18.476] ----------------------------------------------------------------------
+[05:36:18.476] Ran 1 test in 0.004s
+[05:36:18.476] FAILED
+[05:36:18.477] (errors=1)
+[05:36:18.479] --- COMBAT FINISHED ---

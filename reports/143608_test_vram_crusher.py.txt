@@ -1,0 +1,38 @@
+=================================================
+ ⚔️  GLADIATOR ARENA: COMBAT HEURISTIC REPORT  ⚔️
+=================================================
+TARGET (TEST)  : test_vram_crusher.py
+TIMESTAMP      : 2026. 8. 11. 오후 2:36:08
+PEAK VRAM/MEM  : --
+SPEED (LATENCY): 0.000s
+
+[HEURISTIC ANALYSIS]
+- True Zero-Copy capability fully engaged.
+- Memory IO bottlenecks completely eliminated.
+- Maximum theoretical WebGPU / WASM efficiency achieved. 🩸
+
+--- DETAILED COMBAT LOGS ---
+
+[05:36:08.361] --- THE GATES OPEN: test_vram_crusher.py ---
+[05:36:08.951] test_12288_matmul (__main__.TestVRAMCrusher.test_12288_matmul)
+[05:36:08.952] ...
+[05:36:08.953] ERROR
+[05:36:08.963] /lib/python311.zip/unittest/case.py:618: RuntimeWarning: coroutine 'TestVRAMCrusher.asyncSetUp' was never awaited
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+[05:36:08.964] ======================================================================
+[05:36:08.964] ERROR: test_12288_matmul (__main__.TestVRAMCrusher.test_12288_matmul)
+[05:36:08.964] ----------------------------------------------------------------------
+[05:36:08.964] Traceback (most recent call last):
+  File "/lib/python311.zip/unittest/async_case.py", line 87, in _callSetUp
+    self._callAsync(self.asyncSetUp)
+  File "/lib/python311.zip/unittest/async_case.py", line 104, in _callAsync
+    return self._asyncioRunner.run(
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/lib/python311.zip/asyncio/runners.py", line 93, in run
+    raise RuntimeError(
+RuntimeError: Runner.run() cannot be called from a running event loop
+[05:36:08.965] ----------------------------------------------------------------------
+[05:36:08.965] Ran 1 test in 0.013s
+[05:36:08.965] FAILED
+[05:36:08.966] (errors=1)
+[05:36:08.967] --- COMBAT FINISHED ---

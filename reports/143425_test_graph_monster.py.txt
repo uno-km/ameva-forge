@@ -1,0 +1,53 @@
+=================================================
+ ⚔️  GLADIATOR ARENA: COMBAT HEURISTIC REPORT  ⚔️
+=================================================
+TARGET (TEST)  : test_graph_monster.py
+TIMESTAMP      : 2026. 8. 11. 오후 2:34:25
+PEAK VRAM/MEM  : --
+SPEED (LATENCY): 0.000s
+
+[HEURISTIC ANALYSIS]
+- True Zero-Copy capability fully engaged.
+- Memory IO bottlenecks completely eliminated.
+- Maximum theoretical WebGPU / WASM efficiency achieved. 🩸
+
+--- DETAILED COMBAT LOGS ---
+
+[05:34:25.755] --- THE GATES OPEN: test_graph_monster.py ---
+[05:34:25.787] test_deep_chained_ops (__main__.TestGraphMonster.test_deep_chained_ops)
+[05:34:25.788] ...
+[05:34:25.790] ERROR
+[05:34:25.791] test_12288_matmul (__main__.TestVRAMCrusher.test_12288_matmul)
+[05:34:25.792] ...
+[05:34:25.794] ERROR
+[05:34:25.795] ======================================================================
+[05:34:25.795] ERROR: test_deep_chained_ops (__main__.TestGraphMonster.test_deep_chained_ops)
+[05:34:25.796] ----------------------------------------------------------------------
+[05:34:25.797] Traceback (most recent call last):
+  File "/lib/python311.zip/unittest/async_case.py", line 85, in _callSetUp
+    self._asyncioRunner.get_loop()
+  File "/lib/python311.zip/asyncio/runners.py", line 83, in get_loop
+    self._lazy_init()
+  File "/lib/python311.zip/asyncio/runners.py", line 146, in _lazy_init
+    self._loop.set_debug(self._debug)
+  File "/lib/python311.zip/asyncio/events.py", line 607, in set_debug
+    raise NotImplementedError
+NotImplementedError
+[05:34:25.798] ======================================================================
+[05:34:25.798] ERROR: test_12288_matmul (__main__.TestVRAMCrusher.test_12288_matmul)
+[05:34:25.798] ----------------------------------------------------------------------
+[05:34:25.799] Traceback (most recent call last):
+  File "/lib/python311.zip/unittest/async_case.py", line 85, in _callSetUp
+    self._asyncioRunner.get_loop()
+  File "/lib/python311.zip/asyncio/runners.py", line 83, in get_loop
+    self._lazy_init()
+  File "/lib/python311.zip/asyncio/runners.py", line 146, in _lazy_init
+    self._loop.set_debug(self._debug)
+  File "/lib/python311.zip/asyncio/events.py", line 607, in set_debug
+    raise NotImplementedError
+NotImplementedError
+[05:34:25.799] ----------------------------------------------------------------------
+[05:34:25.799] Ran 2 tests in 0.008s
+[05:34:25.800] FAILED
+[05:34:25.800] (errors=2)
+[05:34:25.801] --- COMBAT FINISHED ---

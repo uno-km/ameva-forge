@@ -1,0 +1,44 @@
+=================================================
+ ⚔️  GLADIATOR ARENA: COMBAT HEURISTIC REPORT  ⚔️
+=================================================
+TARGET (TEST)  : test_vram_crusher.py
+TIMESTAMP      : 2026. 8. 11. 오후 4:59:16
+PEAK VRAM/MEM  : --
+SPEED (LATENCY): 0.000s
+
+[HEURISTIC ANALYSIS]
+- True Zero-Copy capability fully engaged.
+- Memory IO bottlenecks completely eliminated.
+- Maximum theoretical WebGPU / WASM efficiency achieved. 🩸
+
+--- DETAILED COMBAT LOGS ---
+
+[07:59:13.408] --- THE GATES OPEN: test_vram_crusher.py ---
+[07:59:14.044] ======================================================================
+[07:59:14.045] Executing: TestVRAMCrusher
+[07:59:14.045] ----------------------------------------------------------------------
+[07:59:14.047] WebGPU adapter ready: unknown
+[07:59:15.985] Device: GPU
+[07:59:15.986] --- 🧨 VRAM CRUSHER: 2048x2048 Matrix Multiplication ---
+[07:59:16.005] Host allocation: 0.018s, ~1.2 GB RAM (Host)
+[07:59:16.010] WebGPU Upload: 0.000s
+[07:59:16.011] WebGPU Compute Dispatch: 0.000s
+[07:59:16.037] ❌ test_12288_matmul FAILED
+[07:59:16.041] Traceback (most recent call last):
+[07:59:16.041] File "<exec>", line 86, in _run_tests_in_browser
+[07:59:16.041] File "<exec>", line 45, in test_12288_matmul
+[07:59:16.042] File "/lib/python3.11/site-packages/ameva_tensor/tensor.py", line 178, in numpy_async
+    self.realize()
+[07:59:16.042] File "/lib/python3.11/site-packages/ameva_tensor/tensor.py", line 143, in realize
+    out_handles = js_execute_graph(instructions, inputs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[07:59:16.042] File "/lib/python3.11/site-packages/ameva_tensor/bridge.py", line 82, in js_execute_graph
+    res = core.executeGraph(instructions_json, js_inputs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[07:59:16.042] File "http://localhost:8000/packages/ameva-tensor/dist/index.js", line 1056, in Object.executeGraph
+[07:59:16.043] File "http://localhost:8000/packages/ameva-tensor/dist/index.js", line 59, in getDevice
+[07:59:16.043] pyodide.ffi.JsException: AMEVATensorDeviceError: WebGPU device is not initialized. Call await init() first.
+[07:59:16.043] ----------------------------------------------------------------------
+[07:59:16.043] Ran 1 tests. Passed: 0, Failed: 1
+[07:59:16.043] FAILED
+[07:59:16.045] --- COMBAT FINISHED ---

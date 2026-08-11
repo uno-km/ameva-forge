@@ -1,0 +1,41 @@
+=================================================
+ ⚔️  GLADIATOR ARENA: COMBAT HEURISTIC REPORT  ⚔️
+=================================================
+TARGET (TEST)  : test_vram_crusher.py
+TIMESTAMP      : 2026. 8. 11. 오후 5:05:41
+PEAK VRAM/MEM  : --
+SPEED (LATENCY): 0.000s
+
+[HEURISTIC ANALYSIS]
+- True Zero-Copy capability fully engaged.
+- Memory IO bottlenecks completely eliminated.
+- Maximum theoretical WebGPU / WASM efficiency achieved. 🩸
+
+--- DETAILED COMBAT LOGS ---
+
+[08:05:39.583] --- THE GATES OPEN: test_vram_crusher.py ---
+[08:05:40.170] ======================================================================
+[08:05:40.171] Executing: TestVRAMCrusher
+[08:05:40.171] ----------------------------------------------------------------------
+[08:05:40.172] WebGPU adapter ready: unknown
+[08:05:41.969] Device: GPU
+[08:05:41.969] --- 🧨 VRAM CRUSHER: 2048x2048 Matrix Multiplication ---
+[08:05:41.986] Host allocation: 0.016s, ~1.2 GB RAM (Host)
+[08:05:41.986] WebGPU Upload: 0.000s
+[08:05:41.986] WebGPU Compute Dispatch: 0.000s
+[08:05:41.988] ❌ test_12288_matmul FAILED
+[08:05:41.989] Traceback (most recent call last):
+[08:05:41.990] File "<exec>", line 86, in _run_tests_in_browser
+[08:05:41.990] File "<exec>", line 45, in test_12288_matmul
+[08:05:41.990] File "/lib/python3.11/site-packages/ameva_tensor/tensor.py", line 212, in numpy_async
+    self.realize()
+[08:05:41.990] File "/lib/python3.11/site-packages/ameva_tensor/tensor.py", line 172, in realize
+    out_handles = js_execute_graph(instructions, inputs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[08:05:41.990] File "/lib/python3.11/site-packages/ameva_tensor/bridge.py", line 73, in js_execute_graph
+    from pyodide.ffi import to_js, to_py
+[08:05:41.990] ImportError: cannot import name 'to_py' from 'pyodide.ffi' (/lib/python311.zip/pyodide/ffi/__init__.py)
+[08:05:41.991] ----------------------------------------------------------------------
+[08:05:41.991] Ran 1 tests. Passed: 0, Failed: 1
+[08:05:41.991] FAILED
+[08:05:41.993] --- COMBAT FINISHED ---

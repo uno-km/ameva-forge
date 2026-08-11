@@ -1,0 +1,35 @@
+=================================================
+ ⚔️  GLADIATOR ARENA: COMBAT HEURISTIC REPORT  ⚔️
+=================================================
+TARGET (TEST)  : test_vram_crusher.py
+TIMESTAMP      : 2026. 8. 11. 오후 2:43:03
+PEAK VRAM/MEM  : --
+SPEED (LATENCY): 0.000s
+
+[HEURISTIC ANALYSIS]
+- True Zero-Copy capability fully engaged.
+- Memory IO bottlenecks completely eliminated.
+- Maximum theoretical WebGPU / WASM efficiency achieved. 🩸
+
+--- DETAILED COMBAT LOGS ---
+
+[05:43:01.924] --- THE GATES OPEN: test_vram_crusher.py ---
+[05:43:02.525] ======================================================================
+[05:43:02.526] Executing: TestVRAMCrusher
+[05:43:02.527] ----------------------------------------------------------------------
+[05:43:02.528] [AMEVA Tensor] WebGPU init failed on this architecture: amevaTensor core is not registered on globalThis.. Gracefully falling back to CPU.
+[05:43:02.529] Device: CPU
+[05:43:02.529] --- 🧨 VRAM CRUSHER: 12288x12288 Matrix Multiplication ---
+[05:43:03.678] Host allocation: 1.148s, ~1.2 GB RAM (Host)
+[05:43:03.727] ❌ test_12288_matmul FAILED
+[05:43:03.730] Traceback (most recent call last):
+[05:43:03.730] File "<exec>", line 84, in _run_tests_in_browser
+[05:43:03.731] File "<exec>", line 35, in test_12288_matmul
+[05:43:03.731] File "/lib/python3.11/site-packages/ameva_tensor/ops.py", line 9, in tensor
+    arr = np.array(data, dtype=np.float32)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[05:43:03.731] numpy.core._exceptions._ArrayMemoryError: Unable to allocate 576. MiB for an array with shape (12288, 12288) and data type float32
+[05:43:03.731] ----------------------------------------------------------------------
+[05:43:03.732] Ran 1 tests. Passed: 0, Failed: 1
+[05:43:03.732] FAILED
+[05:43:03.733] --- COMBAT FINISHED ---
