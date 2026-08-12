@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://uno-km.github.io/ameva-forge/sitemap.xml
