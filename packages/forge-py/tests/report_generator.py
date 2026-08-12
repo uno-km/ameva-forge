@@ -1,0 +1,184 @@
+"""
+AMEVA-Forge 테스트 보고서 생성기
+
+테스트 실행 결과를 Markdown 보고서로 생성한다.
+보고서 경로: <repo_root>/reports/tests/YYYYMMDD_<test_name>.md
+"""
+import os
+import sys
+import time
+import unittest
+import traceback
+from datetime import datetime
+from pathlib import Path
+from io import StringIO
+
+
+class MarkdownTestResult(unittest.TestResult):
+    """테스트 결과를 수집하여 Markdown 보고서로 출력하는 커스텀 Result 클래스."""
+    
+    def __init__(self, stream=None, descriptions=True, verbosity=2):
+        super().__init__(stream, descriptions, verbosity)
+        self.successes = []
+        self.start_times = {}
+        self.durations = {}
+        self.test_details = []
+        self.suite_start_time = None
+    
+    def startTestRun(self):
+        self.suite_start_time = time.time()
+    
+    def startTest(self, test):
+        super().startTest(test)
+        self.start_times[str(test)] = time.time()
+    
+    def stopTest(self, test):
+        super().stopTest(test)
+        key = str(test)
+        if key in self.start_times:
+            self.durations[key] = time.time() - self.start_times[key]
+    
+    def addSuccess(self, test):
+        super().addSuccess(test)
+        self.successes.append(test)
+        self.test_details.append({
+            'test': str(test),
+            'status': '✅ PASS',
+            'duration': self.durations.get(str(test), 0),
+            'doc': test.shortDescription() or '',
+            'error': None
+        })
+    
+    def addFailure(self, test, err):
+        super().addFailure(test, err)
+        self.test_details.append({
+            'test': str(test),
+            'status': '❌ FAIL',
+            'duration': self.durations.get(str(test), 0),
+            'doc': test.shortDescription() or '',
+            'error': self._exc_info_to_string(err, test)
+        })
+    
+    def addError(self, test, err):
+        super().addError(test, err)
+        self.test_details.append({
+            'test': str(test),
+            'status': '💥 ERROR',
+            'duration': self.durations.get(str(test), 0),
+            'doc': test.shortDescription() or '',
+            'error': self._exc_info_to_string(err, test)
+        })
+    
+    def addSkip(self, test, reason):
+        super().addSkip(test, reason)
+        self.test_details.append({
+            'test': str(test),
+            'status': '⏭️ SKIP',
+            'duration': 0,
+            'doc': reason,
+            'error': None
+        })
+
+
+def generate_report(result: MarkdownTestResult, suite_name: str, category: str) -> str:
+    """MarkdownTestResult로부터 MD 보고서 문자열을 생성한다."""
+    now = datetime.now()
+    total_time = time.time() - result.suite_start_time if result.suite_start_time else 0
+    total = result.testsRun
+    passed = len(result.successes)
+    failed = len(result.failures)
+    errors_count = len(result.errors)
+    skipped = len(result.skipped)
+    
+    pass_rate = (passed / total * 100) if total > 0 else 0
+    
+    lines = []
+    lines.append(f"# 🧪 AMEVA-Forge 테스트 보고서: {suite_name}")
+    lines.append(f"")
+    lines.append(f"**실행 일시**: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"**카테고리**: {category}")
+    lines.append(f"**총 실행 시간**: {total_time:.3f}s")
+    lines.append(f"")
+    lines.append(f"## 📊 결과 요약")
+    lines.append(f"")
+    lines.append(f"| 항목 | 값 |")
+    lines.append(f"|------|---|")
+    lines.append(f"| 총 테스트 | {total} |")
+    lines.append(f"| ✅ 성공 | {passed} |")
+    lines.append(f"| ❌ 실패 | {failed} |")
+    lines.append(f"| 💥 에러 | {errors_count} |")
+    lines.append(f"| ⏭️ 스킵 | {skipped} |")
+    lines.append(f"| 🎯 통과율 | {pass_rate:.1f}% |")
+    lines.append(f"")
+    
+    # Status badge
+    if failed == 0 and errors_count == 0:
+        lines.append(f"> [!TIP]")
+        lines.append(f"> **ALL TESTS PASSED** ✅ ({passed}/{total})")
+    else:
+        lines.append(f"> [!CAUTION]")
+        lines.append(f"> **{failed + errors_count} TESTS FAILED** ❌")
+    
+    lines.append(f"")
+    lines.append(f"## 📋 상세 결과")
+    lines.append(f"")
+    lines.append(f"| # | 테스트 | 상태 | 시간 | 설명 |")
+    lines.append(f"|---|--------|------|------|------|")
+    
+    for i, detail in enumerate(result.test_details, 1):
+        test_name = detail['test'].split('.')[-1] if '.' in detail['test'] else detail['test']
+        dur = f"{detail['duration']:.4f}s"
+        doc = detail['doc'][:60] if detail['doc'] else '—'
+        lines.append(f"| {i} | `{test_name}` | {detail['status']} | {dur} | {doc} |")
+    
+    # Failed test details
+    failed_details = [d for d in result.test_details if d['error']]
+    if failed_details:
+        lines.append(f"")
+        lines.append(f"## ❌ 실패/에러 상세")
+        for d in failed_details:
+            lines.append(f"")
+            lines.append(f"### {d['test']}")
+            lines.append(f"```")
+            lines.append(d['error'])
+            lines.append(f"```")
+    
+    lines.append(f"")
+    lines.append(f"---")
+    lines.append(f"*Generated by AMEVA-Forge Test Framework v1.0*")
+    
+    return '\n'.join(lines)
+
+
+def run_and_report(suite: unittest.TestSuite, suite_name: str, category: str, repo_root: str = None) -> MarkdownTestResult:
+    """테스트 스위트를 실행하고 MD 보고서를 생성한다."""
+    if repo_root is None:
+        repo_root = str(Path(__file__).parent.parent.parent.parent.parent)
+    
+    # Run tests
+    result = MarkdownTestResult()
+    result.startTestRun()
+    
+    # Also print to console
+    runner = unittest.TextTestRunner(verbosity=2, resultclass=lambda *a, **k: result)
+    suite.run(result)
+    
+    # Generate report
+    report_md = generate_report(result, suite_name, category)
+    
+    # Save report
+    reports_dir = os.path.join(repo_root, 'reports', 'tests')
+    os.makedirs(reports_dir, exist_ok=True)
+    
+    date_str = datetime.now().strftime('%Y%m%d')
+    safe_name = suite_name.replace(' ', '_').replace('/', '_').lower()
+    filename = f"{date_str}_{safe_name}.md"
+    filepath = os.path.join(reports_dir, filename)
+    
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write(report_md)
+    
+    print(f"\nReport saved to: {filepath}")
+    print(f"   Tests: {result.testsRun}, Passed: {len(result.successes)}, Failed: {len(result.failures)}, Errors: {len(result.errors)}")
+    
+    return result

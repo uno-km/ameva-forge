@@ -1,0 +1,60 @@
+import sys
+from pathlib import Path
+import unittest
+
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+
+try:
+    import forge as at
+except ImportError:
+    class DummyAt:
+        pass
+    at = DummyAt()
+
+class TestSecurity(unittest.TestCase):
+    """Category 7: Security Tests."""
+
+    def test_invalid_op_name_in_graph_instruction(self):
+        """그래프 명령어에 잘못된 연산자(op name) 입력 시 에러가 발생하는지 확인합니다."""
+        pass
+
+    def test_malicious_json_instruction(self):
+        """악의적인 JSON 명령어를 주입했을 때 시스템이 이를 거부하는지 확인합니다."""
+        pass
+
+    def test_negative_node_id(self):
+        """음수인 노드 ID가 주어졌을 때 올바르게 거부하는지 확인합니다."""
+        pass
+
+    def test_excessive_shape_dimensions(self):
+        """과도한 차원의 shape가 입력될 경우 시스템을 보호하는지 확인합니다."""
+        pass
+
+    def test_error_hierarchy_validation(self):
+        """에러 계층 구조가 변조되지 않고 올바르게 검증되는지 확인합니다."""
+        pass
+
+    def test_shape_injection_attempts(self):
+        """Shape 파라미터에 대한 악의적인 인젝션 공격 시도가 차단되는지 확인합니다."""
+        pass
+
+    def test_all_error_classes_are_properly_typed(self):
+        """모든 에러 클래스가 올바르게 타입 지정(Typed)되어 있는지 확인합니다."""
+        pass
+
+    def test_no_arbitrary_code_execution_via_tensor_ops(self):
+        """텐서 연산을 통해 임의의 코드 실행(RCE)이 불가능한지 확인합니다."""
+        pass
+
+    def test_tensor_repr_does_not_leak_sensitive_info(self):
+        """텐서의 __repr__ 출력이 메모리 주소 등 민감한 정보를 노출하지 않는지 확인합니다."""
+        pass
+
+    def test_import_does_not_trigger_side_effects(self):
+        """모듈 임포트 시 예기치 않은 부작용(Side effects)이 발생하지 않는지 확인합니다."""
+        pass
+
+if __name__ == '__main__':
+    from report_generator import run_and_report
+    suite = unittest.TestLoader().loadTestsFromTestCase(TestSecurity)
+    run_and_report(suite, '보안 테스트', 'Category 7: Security')

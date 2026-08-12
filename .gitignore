@@ -1,0 +1,48 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Project specific temporary/generated files
+diff.txt
+diff_utf8.txt
+
+# Build / Output directories
+/releases/
+/reports/**/*.txt
+/reports/tests/*.txt
+/reports/*.txt
+
+# Large model weights
+mnist_weights.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+scripts/venv/
+.pytest_cache/

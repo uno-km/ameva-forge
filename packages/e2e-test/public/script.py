@@ -1,4 +1,4 @@
-import ameva_tensor as at
+import forge as at
 
 async def main():
     print("In Pyodide E2E test!")

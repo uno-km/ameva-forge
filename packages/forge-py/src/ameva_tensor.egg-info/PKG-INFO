@@ -1,0 +1,6 @@
+Metadata-Version: 2.4
+Name: forge
+Version: 0.1.0
+Summary: Browser-native Tensor Runtime wrapping @ameva/forge for Pyodide
+Requires-Python: >=3.10
+Requires-Dist: numpy>=1.20.0

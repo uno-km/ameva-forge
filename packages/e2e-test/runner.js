@@ -11,6 +11,17 @@ const server = http.createServer((req, res) => {
   const publicDir = path.join(__dirname, 'public');
   const urlStr = req.url || '/';
   const pathname = urlStr.split('?')[0];
+
+  if (pathname === '/api/wheels') {
+    fs.readdir(publicDir, (err, files) => {
+      if (err) { res.writeHead(500); return res.end(); }
+      const wheels = files.filter(f => f.endsWith('.whl'));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(wheels));
+    });
+    return;
+  }
+  
   let filePath = path.join(publicDir, pathname === '/' ? 'index.html' : pathname);
   
   const extname = path.extname(filePath);
@@ -39,7 +50,7 @@ server.listen(3000, async () => {
   console.log('Server running on http://localhost:3000');
   
   const browser = await puppeteer.launch({
-    executablePath: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    executablePath: process.env.BROWSER_PATH || undefined,
     headless: "new",
     args: [
       '--enable-unsafe-webgpu',

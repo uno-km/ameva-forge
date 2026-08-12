@@ -1,22 +1,22 @@
-// node_modules/@ameva/tensor/dist/index.esm.js
-var AMEVATensorError = class extends Error {
+// node_modules/@ameva/forge/dist/index.esm.js
+var AMEVAForgeError = class extends Error {
   constructor(message) {
     super(message);
     this.name = new.target.name;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 };
-var AMEVATensorShapeError = class extends AMEVATensorError {
+var AMEVAForgeShapeError = class extends AMEVAForgeError {
 };
-var AMEVATensorDeviceError = class extends AMEVATensorError {
+var AMEVAForgeDeviceError = class extends AMEVAForgeError {
 };
-var AMEVATensorDisposedError = class extends AMEVATensorError {
+var AMEVAForgeDisposedError = class extends AMEVAForgeError {
 };
-var AMEVATensorQuotaExceededError = class extends AMEVATensorError {
+var AMEVAForgeQuotaExceededError = class extends AMEVAForgeError {
 };
-var AMEVATensorWebGPUUnavailableError = class extends AMEVATensorError {
+var AMEVAForgeWebGPUUnavailableError = class extends AMEVAForgeError {
 };
-var AMEVATensorSecurityError = class extends AMEVATensorError {
+var AMEVAForgeSecurityError = class extends AMEVAForgeError {
 };
 var device = null;
 var adapter = null;
@@ -25,11 +25,11 @@ async function initWebGPU(options) {
   if (device)
     return;
   if (typeof navigator === "undefined" || !navigator.gpu) {
-    throw new AMEVATensorWebGPUUnavailableError("WebGPU is not available in this environment. Ensure you are running in a supported browser with WebGPU enabled.");
+    throw new AMEVAForgeWebGPUUnavailableError("WebGPU is not available in this environment. Ensure you are running in a supported browser with WebGPU enabled.");
   }
   adapter = await navigator.gpu.requestAdapter(options);
   if (!adapter) {
-    throw new AMEVATensorWebGPUUnavailableError("Failed to request a WebGPU adapter. Your GPU may not support WebGPU, or the browser has disabled it.");
+    throw new AMEVAForgeWebGPUUnavailableError("Failed to request a WebGPU adapter. Your GPU may not support WebGPU, or the browser has disabled it.");
   }
   device = await adapter.requestDevice();
   device.lost.then((info) => {
@@ -43,7 +43,7 @@ async function initWebGPU(options) {
 }
 function getDevice() {
   if (!device) {
-    throw new AMEVATensorDeviceError("WebGPU device is not initialized. Call await init() first.");
+    throw new AMEVAForgeDeviceError("WebGPU device is not initialized. Call await init() first.");
   }
   return device;
 }
@@ -79,7 +79,7 @@ var QuotaManager = class {
     this._assertValidByteLength(hardLimitBytes);
     this._assertValidByteLength(softLimitBytes);
     if (softLimitBytes > hardLimitBytes) {
-      throw new AMEVATensorQuotaExceededError("softLimitBytes must be <= hardLimitBytes");
+      throw new AMEVAForgeQuotaExceededError("softLimitBytes must be <= hardLimitBytes");
     }
     this.hardLimitBytes = hardLimitBytes;
     this.softLimitBytes = softLimitBytes;
@@ -89,20 +89,20 @@ var QuotaManager = class {
     this._assertValidByteLength(hardLimitBytes);
     this._assertValidByteLength(softLimitBytes);
     if (softLimitBytes > hardLimitBytes) {
-      throw new AMEVATensorQuotaExceededError("softLimitBytes must be <= hardLimitBytes");
+      throw new AMEVAForgeQuotaExceededError("softLimitBytes must be <= hardLimitBytes");
     }
     this.hardLimitBytes = hardLimitBytes;
     this.softLimitBytes = softLimitBytes;
   }
   _assertValidByteLength(byteLength) {
     if (!Number.isSafeInteger(byteLength) || byteLength <= 0) {
-      throw new AMEVATensorQuotaExceededError(`Invalid allocation size: ${byteLength}`);
+      throw new AMEVAForgeQuotaExceededError(`Invalid allocation size: ${byteLength}`);
     }
   }
   reserve(byteLength) {
     this._assertValidByteLength(byteLength);
     if (byteLength > this.hardLimitBytes - this.allocatedBytes) {
-      throw new AMEVATensorQuotaExceededError(`Quota Exceeded: Cannot allocate ${byteLength} bytes. Current: ${this.allocatedBytes} (${this.pendingReleaseBytes} pending release), Limit: ${this.hardLimitBytes}`);
+      throw new AMEVAForgeQuotaExceededError(`Quota Exceeded: Cannot allocate ${byteLength} bytes. Current: ${this.allocatedBytes} (${this.pendingReleaseBytes} pending release), Limit: ${this.hardLimitBytes}`);
     }
     this.allocatedBytes += byteLength;
     if (this.allocatedBytes - this.pendingReleaseBytes > this.softLimitBytes) {
@@ -217,10 +217,10 @@ var TensorRegistry = class {
   get(handle) {
     const record = this.records.get(handle);
     if (!record) {
-      throw new AMEVATensorDisposedError(`Tensor not found: ${handle}`);
+      throw new AMEVAForgeDisposedError(`Tensor not found: ${handle}`);
     }
     if (record.disposed) {
-      throw new AMEVATensorDisposedError(`Attempted to access disposed tensor: ${handle}`);
+      throw new AMEVAForgeDisposedError(`Attempted to access disposed tensor: ${handle}`);
     }
     return record;
   }
@@ -525,36 +525,36 @@ var MAX_ELEMENTS = 256 * 1024 * 1024;
 var MAX_INSTRUCTIONS = 1e4;
 function validateInstruction(inst, idx) {
   if (typeof inst !== "object" || inst === null) {
-    throw new AMEVATensorSecurityError(`Instruction[${idx}]: must be an object`);
+    throw new AMEVAForgeSecurityError(`Instruction[${idx}]: must be an object`);
   }
   const i = inst;
   if (typeof i.op !== "string") {
-    throw new AMEVATensorSecurityError(`Instruction[${idx}]: op must be a string`);
+    throw new AMEVAForgeSecurityError(`Instruction[${idx}]: op must be a string`);
   }
   if (!ALLOWED_OPS.has(i.op)) {
-    throw new AMEVATensorSecurityError(`Instruction[${idx}]: unknown op "${i.op}"`);
+    throw new AMEVAForgeSecurityError(`Instruction[${idx}]: unknown op "${i.op}"`);
   }
   if (!Number.isSafeInteger(i.id) || i.id < 1) {
-    throw new AMEVATensorSecurityError(`Instruction[${idx}]: id must be a positive safe integer`);
+    throw new AMEVAForgeSecurityError(`Instruction[${idx}]: id must be a positive safe integer`);
   }
   if (!Array.isArray(i.shape)) {
-    throw new AMEVATensorShapeError(`Instruction[${idx}]: shape must be an array`);
+    throw new AMEVAForgeShapeError(`Instruction[${idx}]: shape must be an array`);
   }
   if (i.shape.length < 1 || i.shape.length > MAX_SHAPE_DIM) {
-    throw new AMEVATensorShapeError(`Instruction[${idx}]: shape rank must be 1\u2013${MAX_SHAPE_DIM}, got ${i.shape.length}`);
+    throw new AMEVAForgeShapeError(`Instruction[${idx}]: shape rank must be 1\u2013${MAX_SHAPE_DIM}, got ${i.shape.length}`);
   }
   let elements = 1;
   for (const dim of i.shape) {
     if (!Number.isSafeInteger(dim) || dim <= 0) {
-      throw new AMEVATensorShapeError(`Instruction[${idx}]: shape dim must be a positive safe integer, got ${dim}`);
+      throw new AMEVAForgeShapeError(`Instruction[${idx}]: shape dim must be a positive safe integer, got ${dim}`);
     }
     if (dim > Number.MAX_SAFE_INTEGER / elements) {
-      throw new AMEVATensorShapeError(`Instruction[${idx}]: shape product integer overflow`);
+      throw new AMEVAForgeShapeError(`Instruction[${idx}]: shape product integer overflow`);
     }
     elements *= dim;
   }
   if (elements > MAX_ELEMENTS) {
-    throw new AMEVATensorShapeError(`Instruction[${idx}]: tensor too large (${elements} elements > ${MAX_ELEMENTS})`);
+    throw new AMEVAForgeShapeError(`Instruction[${idx}]: tensor too large (${elements} elements > ${MAX_ELEMENTS})`);
   }
   return i;
 }
@@ -563,13 +563,13 @@ function executeGraph(instructionsJson, jsInputs) {
   try {
     rawInstructions = JSON.parse(instructionsJson);
   } catch {
-    throw new AMEVATensorSecurityError("executeGraph: invalid JSON in instructionsJson");
+    throw new AMEVAForgeSecurityError("executeGraph: invalid JSON in instructionsJson");
   }
   if (!Array.isArray(rawInstructions)) {
-    throw new AMEVATensorSecurityError("executeGraph: instructionsJson must be a JSON array");
+    throw new AMEVAForgeSecurityError("executeGraph: instructionsJson must be a JSON array");
   }
   if (rawInstructions.length > MAX_INSTRUCTIONS) {
-    throw new AMEVATensorSecurityError(`executeGraph: too many instructions (${rawInstructions.length} > ${MAX_INSTRUCTIONS})`);
+    throw new AMEVAForgeSecurityError(`executeGraph: too many instructions (${rawInstructions.length} > ${MAX_INSTRUCTIONS})`);
   }
   const instructions = rawInstructions.map(validateInstruction);
   let inputs;
@@ -591,7 +591,7 @@ function executeGraph(instructionsJson, jsInputs) {
     if (inst.op === "load") {
       const handle2 = inst.handle;
       if (typeof handle2 !== "string") {
-        throw new AMEVATensorSecurityError(`load instruction missing handle`);
+        throw new AMEVAForgeSecurityError(`load instruction missing handle`);
       }
       idToHandle[inst.id] = handle2;
       idToBuffer[inst.id] = _globalRegistry.get(handle2).buffer;
@@ -616,7 +616,7 @@ function executeGraph(instructionsJson, jsInputs) {
           actualData = Float32Array.from(rawData);
         }
       } catch (e) {
-        throw new AMEVATensorSecurityError(`upload input[${inputIdx - 1}] conversion failed: ${e}, rawData typeof: ${typeof rawData}`);
+        throw new AMEVAForgeSecurityError(`upload input[${inputIdx - 1}] conversion failed: ${e}, rawData typeof: ${typeof rawData}`);
       }
       const buffer = allocateBuffer(byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST);
       writeFloat32Array(buffer, actualData);
@@ -665,7 +665,7 @@ function executeGraph(instructionsJson, jsInputs) {
       const numElements = byteLength / 4;
       wgslCode = inst.op === "relu" ? RELU_WGSL : inst.op === "add" ? ADD_WGSL : inst.op === "mul" ? MUL_WGSL : inst.op === "relu_backward" ? RELU_BACKWARD_WGSL : "";
       if (!wgslCode) {
-        throw new AMEVATensorSecurityError(`Unknown op "${inst.op}"`);
+        throw new AMEVAForgeSecurityError(`Unknown op "${inst.op}"`);
       }
       device2.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([numElements, 0, 0, 0]));
       dispatchX = Math.ceil(numElements / 64);
@@ -716,7 +716,7 @@ function registerPyodideBridge() {
     executeGraph,
     disposeBatch
   };
-  globalThis.amevaTensor = api;
+  globalThis.amevaForge = api;
   return api;
 }
 
@@ -733,8 +733,8 @@ async function run() {
   log("Loading micropip...");
   await pyodide.loadPackage("micropip");
   const micropip = pyodide.pyimport("micropip");
-  log("Installing ameva_tensor wheel...");
-  await micropip.install("/ameva_tensor-0.1.0-py3-none-any.whl");
+  log("Installing forge wheel...");
+  await micropip.install("/forge-0.1.0-py3-none-any.whl");
   log("Fetching Python script...");
   const scriptRes = await fetch("/script.py");
   const scriptCode = await scriptRes.text();

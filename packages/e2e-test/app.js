@@ -1,4 +1,4 @@
-import { registerPyodideBridge } from "@ameva/tensor";
+import { registerPyodideBridge } from "@ameva/forge";
 
 registerPyodideBridge();
 
@@ -15,8 +15,13 @@ async function run() {
   await pyodide.loadPackage("micropip");
   const micropip = pyodide.pyimport("micropip");
   
-  log("Installing ameva_tensor wheel...");
-  await micropip.install("/ameva_tensor-0.1.0-py3-none-any.whl");
+  log("Fetching wheel list...");
+  const wheelsRes = await fetch("/api/wheels");
+  const wheels = await wheelsRes.json();
+  if (wheels.length === 0) throw new Error("No wheel found");
+  
+  log(`Installing ${wheels[0]}...`);
+  await micropip.install("/" + wheels[0]);
   
   log("Fetching Python script...");
   const scriptRes = await fetch("/script.py");

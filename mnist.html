@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AMEVA-Forge | MNIST WebGPU</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0d0d0d;
+            --surface-color: #1a1a1a;
+            --border-color: #333;
+            --primary-color: #00ff88;
+            --text-color: #e0e0e0;
+            --muted-color: #888;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin: 0;
+            font-weight: 800;
+            letter-spacing: -1px;
+            background: linear-gradient(90deg, #fff, var(--primary-color));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p {
+            color: var(--muted-color);
+            margin-top: 5px;
+        }
+
+        .container {
+            display: flex;
+            gap: 40px;
+            background: var(--surface-color);
+            padding: 40px;
+            border-radius: 20px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+        }
+
+        .canvas-section {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+        }
+
+        canvas {
+            background-color: black;
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            cursor: crosshair;
+            box-shadow: 0 0 20px rgba(0, 255, 136, 0.1);
+            transition: border-color 0.3s ease;
+        }
+        
+        canvas:hover {
+            border-color: var(--primary-color);
+        }
+
+        .buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        button {
+            background: transparent;
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-weight: 600;
+        }
+
+        button:hover {
+            background: var(--border-color);
+            color: #fff;
+        }
+
+        button.primary {
+            background: var(--primary-color);
+            color: #000;
+            border: none;
+        }
+
+        button.primary:hover {
+            background: #00cc6a;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 255, 136, 0.3);
+        }
+
+        .result-section {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-width: 200px;
+            border-left: 1px solid var(--border-color);
+            padding-left: 40px;
+        }
+
+        .prediction-box {
+            text-align: center;
+        }
+
+        .prediction-value {
+            font-size: 8rem;
+            font-weight: 800;
+            line-height: 1;
+            color: var(--primary-color);
+            text-shadow: 0 0 30px rgba(0, 255, 136, 0.4);
+            transition: all 0.2s ease;
+        }
+
+        .prediction-label {
+            font-size: 1.2rem;
+            color: var(--muted-color);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-top: 10px;
+        }
+        
+        #loadingOverlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(13, 13, 13, 0.9);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            color: var(--primary-color);
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+        
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 5px solid var(--border-color);
+            border-top-color: var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+        
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+
+    </style>
+</head>
+<body>
+
+    <div id="loadingOverlay">
+        <div class="spinner"></div>
+        <div id="loadingText">Loading Pyodide & AMEVA-Forge Engine...</div>
+    </div>
+
+    <header>
+        <h1>MNIST on WebGPU</h1>
+        <p>Powered by AMEVA-Forge. Draw a digit below.</p>
+    </header>
+
+    <div class="container">
+        <div class="canvas-section">
+            <canvas id="drawCanvas" width="280" height="280"></canvas>
+            <div class="buttons">
+                <button onclick="clearCanvas()">Clear</button>
+                <button class="primary" onclick="predictDigit()">Predict</button>
+            </div>
+        </div>
+        
+        <div class="result-section">
+            <div class="prediction-box">
+                <div class="prediction-value" id="predVal">?</div>
+                <div class="prediction-label">Prediction</div>
+            </div>
+            
+            <div style="margin-top: 30px; text-align: center;">
+                <p style="font-size: 0.8rem; margin-bottom: 5px;">What MLP sees (28x28):</p>
+                <canvas id="debugCanvas" width="28" height="28" style="width: 112px; height: 112px; image-rendering: pixelated; border: 1px solid var(--border-color);"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pyodide and Engine Scripts -->
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+    <script>var exports = {};</script>
+    <script src="./packages/ameva-forge/dist/index.js"></script>
+    
+    <script>
+        // Canvas Setup
+        const canvas = document.getElementById('drawCanvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        let isDrawing = false;
+        
+        // Draw with thick white strokes
+        ctx.lineWidth = 30;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = 'white';
+
+        function getPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            // Handle both touch and mouse
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            return {
+                x: clientX - rect.left,
+                y: clientY - rect.top
+            };
+        }
+
+        function startDrawing(e) {
+            isDrawing = true;
+            const pos = getPos(e);
+            ctx.beginPath();
+            ctx.moveTo(pos.x, pos.y);
+            e.preventDefault();
+        }
+
+        function draw(e) {
+            if (!isDrawing) return;
+            const pos = getPos(e);
+            ctx.lineTo(pos.x, pos.y);
+            ctx.stroke();
+            e.preventDefault();
+        }
+
+        function stopDrawing() {
+            isDrawing = false;
+        }
+
+        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('mouseup', stopDrawing);
+        canvas.addEventListener('mouseout', stopDrawing);
+        
+        canvas.addEventListener('touchstart', startDrawing, {passive: false});
+        canvas.addEventListener('touchmove', draw, {passive: false});
+        canvas.addEventListener('touchend', stopDrawing);
+
+        function clearCanvas() {
+            ctx.fillStyle = 'black';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            document.getElementById('predVal').innerText = "?";
+        }
+
+        // ----------------------------------------------------
+        // Pyodide & AMEVA-Forge Integration
+        // ----------------------------------------------------
+        let pyodide = null;
+        
+        const PYTHON_CODE = `
+import forge as at
+import json
+import numpy as np
+
+# Load weights globally
+w1_tensor = None
+b1_tensor = None
+w2_tensor = None
+b2_tensor = None
+
+async def init_model(weights_json_str):
+    global w1_tensor, b1_tensor, w2_tensor, b2_tensor
+    await at.init()
+    weights = json.loads(weights_json_str)
+    
+    # Load into AMEVA-Forge on WebGPU
+    # Wrap biases in lists to make them 2D (1, N) for safe addition
+    w1_tensor = at.tensor(weights['W1'], device='gpu')
+    b1_tensor = at.tensor([weights['b1']], device='gpu')
+    w2_tensor = at.tensor(weights['W2'], device='gpu')
+    b2_tensor = at.tensor([weights['b2']], device='gpu')
+    return "Model Initialized"
+
+async def predict_digit(flat_pixels):
+    # flat_pixels is a JS array of length 784, normalized 0~1
+    x = at.tensor([flat_pixels], device='gpu')
+    
+    # Layer 1: ReLU(X @ W1 + b1)
+    h1 = at.add(at.matmul(x, w1_tensor), b1_tensor)
+    a1 = at.relu(h1)
+    
+    # Layer 2: X @ W2 + b2
+    logits = at.add(at.matmul(a1, w2_tensor), b2_tensor)
+    
+    # Get result to CPU to find argmax (must be async for WebGPU)
+    res = await logits.numpy_async()
+    pred = int(np.argmax(res[0]))
+    
+    # Clean up to prevent VRAM leak
+    at.dispose(x)
+    at.dispose(h1)
+    at.dispose(a1)
+    at.dispose(logits)
+    
+    return pred
+`;
+
+        async function initSystem() {
+            const loadingText = document.getElementById('loadingText');
+            
+            try {
+                // 1. Initialize Pyodide
+                pyodide = await loadPyodide();
+                await pyodide.loadPackage(['numpy']);
+                
+                // 2. Link JS Bridge
+                if (exports.registerPyodideBridge) {
+                    exports.registerPyodideBridge();
+                }
+                
+                // 3. Mount custom package
+                loadingText.innerText = "Mounting AMEVA-Forge...";
+                const response = await fetch('./packages/forge-py/dist/forge-0.1.0-py3-none-any.whl');
+                const buffer = await response.arrayBuffer();
+                pyodide.unpackArchive(buffer, 'whl');
+                
+                // 4. Load weights
+                loadingText.innerText = "Downloading pre-trained weights...";
+                const weightRes = await fetch('./mnist_weights.json');
+                const weightData = await weightRes.text();
+                
+                // 5. Initialize Python Environment
+                loadingText.innerText = "Warming up WebGPU pipeline...";
+                await pyodide.runPythonAsync(PYTHON_CODE);
+                const init_fn = pyodide.globals.get('init_model');
+                await init_fn(weightData);
+                init_fn.destroy();
+                
+                // Done!
+                document.getElementById('loadingOverlay').style.display = 'none';
+                
+            } catch (err) {
+                console.error(err);
+                loadingText.innerText = "Initialization Failed. Check console.";
+                loadingText.style.color = "red";
+            }
+        }
+        
+        async function predictDigit() {
+            if(!pyodide) return;
+            
+            // Extract 28x28 grayscale image from 280x280 canvas
+            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            const pixels = new Array(784).fill(0);
+            
+            // 1. Find bounding box of the drawing
+            let minX = canvas.width, minY = canvas.height, maxX = -1, maxY = -1;
+            for(let y=0; y<canvas.height; y++){
+                for(let x=0; x<canvas.width; x++){
+                    if (imgData[(y*canvas.width + x)*4] > 0) {
+                        if (x < minX) minX = x;
+                        if (x > maxX) maxX = x;
+                        if (y < minY) minY = y;
+                        if (y > maxY) maxY = y;
+                    }
+                }
+            }
+            
+            if (maxX >= minX && maxY >= minY) {
+                // 2. Scale to fit inside a 20x20 box (MNIST standard) and center it in 28x28
+                const bw = maxX - minX + 1;
+                const bh = maxY - minY + 1;
+                const scale = 20.0 / Math.max(bw, bh);
+                
+                const scaledW = bw * scale;
+                const scaledH = bh * scale;
+                const offsetX = (28 - scaledW) / 2;
+                const offsetY = (28 - scaledH) / 2;
+                
+                // 3. Draw cropped image to a 28x28 offscreen canvas
+                const tCanvas = document.createElement('canvas');
+                tCanvas.width = 28; tCanvas.height = 28;
+                const tCtx = tCanvas.getContext('2d', { willReadFrequently: true });
+                
+                // Fill black background first!
+                tCtx.fillStyle = 'black';
+                tCtx.fillRect(0, 0, 28, 28);
+                
+                tCtx.drawImage(canvas, minX, minY, bw, bh, offsetX, offsetY, scaledW, scaledH);
+                
+                // 4. Extract final 28x28 normalized pixels and boost contrast
+                const tData = tCtx.getImageData(0, 0, 28, 28).data;
+                const debugCtx = document.getElementById('debugCanvas').getContext('2d');
+                const debugImg = debugCtx.createImageData(28, 28);
+                
+                for(let i=0; i<784; i++){
+                    // AMEVA-Forge was trained with 0~1 normalized pixels
+                    // Anti-aliasing might make lines too dim. Boost brightness by 2.0 and clamp.
+                    let val = (tData[i*4] / 255.0) * 2.0;
+                    if (val > 1.0) val = 1.0;
+                    
+                    pixels[i] = val;
+                    
+                    // Draw to debug canvas
+                    const intensity = Math.floor(val * 255);
+                    debugImg.data[i*4] = intensity;
+                    debugImg.data[i*4+1] = intensity;
+                    debugImg.data[i*4+2] = intensity;
+                    debugImg.data[i*4+3] = 255;
+                }
+                debugCtx.putImageData(debugImg, 0, 0);
+            }
+            
+            // Call Python Prediction
+            const predict_fn = pyodide.globals.get('predict_digit');
+            const pred = await predict_fn(pixels);
+            predict_fn.destroy();
+            
+            // Update UI
+            document.getElementById('predVal').innerText = pred;
+        }
+
+        window.onload = initSystem;
+    </script>
+</body>
+</html>
