@@ -4,7 +4,7 @@ const path = require('path');
 
 const app = express();
 app.use(express.text({ limit: '50mb' })); 
-app.use(express.static(__dirname));
+app.use(express.static(path.join(__dirname, '..')));
 
 const REPORTS_DIR = path.join(__dirname, 'reports');
 const TESTS_DIR = path.join(__dirname, 'packages', 'forge-py', 'tests');
