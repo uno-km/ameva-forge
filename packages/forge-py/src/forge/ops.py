@@ -1626,3 +1626,35 @@ class EmbeddingFunction(Function):
 
 def embedding(weight: Tensor, index: Tensor) -> Tensor:
     return EmbeddingFunction.apply(weight, index)
+
+class BmmFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
+        ctx.save_for_backward(a, b)
+        _ensure_same_device(a, b, "bmm")
+        if len(a.shape) != 3 or len(b.shape) != 3:
+            raise AMEVAForgeShapeError("bmm requires 3D tensors")
+        B, N, M = a.shape
+        B2, M2, P = b.shape
+        if B != B2 or M != M2:
+            raise AMEVAForgeShapeError(f"bmm shape mismatch: {a.shape} and {b.shape}")
+
+        if _should_use_gpu(a, b):
+            return Tensor(shape=(B, N, P), dtype="float32", device="gpu",
+                          op="batched_matmul", parents=(a, b), op_params=[int(B), int(N), int(P), int(M)])
+        else:
+            data_a = _require_cpu_data(a, "a")
+            data_b = _require_cpu_data(b, "b")
+            import numpy as np
+            res = np.matmul(data_a, data_b)
+            return Tensor(shape=res.shape, dtype="float32", device="cpu", data=res)
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, Tensor]:
+        a, b = ctx.saved_tensors
+        grad_a = bmm(grad_output, permute(b, (0, 2, 1)))
+        grad_b = bmm(permute(a, (0, 2, 1)), grad_output)
+        return grad_a, grad_b
+
+def bmm(a: Tensor, b: Tensor) -> Tensor:
+    return BmmFunction.apply(a, b)
