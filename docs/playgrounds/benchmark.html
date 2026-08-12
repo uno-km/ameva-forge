@@ -8,7 +8,7 @@
         .dashboard-container { display: flex; flex-direction: row; gap: 20px; margin-top: 20px; }
         .panel { border: 1px solid #ccc; background: #fff; padding: 15px; border-radius: 4px; flex: 1; }
         .panel-header { font-weight: bold; color: #003399; margin-top: 0; border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 15px; }
-        .file-list { list-style: none; padding: 0; margin: 0; max-height: 400px; overflow-y: auto; }
+        .file-list { list-style: none; padding: 0; margin: 0; max-height: 65vh; overflow-y: auto; }
         .file-item { padding: 8px 10px; border-bottom: 1px solid #eee; cursor: pointer; color: #333; }
         .file-item:hover { background-color: #f4f4f4; color: #003399; font-weight: bold; }
         
@@ -18,7 +18,8 @@
         .stat-value { font-size: 1.5em; font-weight: bold; color: #333; }
         .stat-label { font-size: 0.85em; color: #666; margin-top: 5px; text-transform: uppercase; }
         
-        .console { background: #f8f8f8; border: 1px solid #ddd; padding: 15px; height: 300px; overflow-y: auto; font-family: Consolas, monospace; font-size: 0.9em; }
+        .console { background: #f8f8f8; border: 1px solid #ddd; padding: 15px; flex: 1; min-height: 60vh; overflow-y: auto; font-family: Consolas, monospace; font-size: 0.9em; outline: none; }
+        .console:focus { border-color: #003399; box-shadow: 0 0 5px rgba(0,51,153,0.3); }
         .log-entry { margin: 2px 0; white-space: pre-wrap; line-height: 1.4; color: #333; }
         .log-entry.error { color: #d32f2f; }
         .log-entry.success { color: #2e7d32; }
@@ -83,7 +84,7 @@
                     </div>
                     <div class="panel" style="display:flex; flex-direction:column; flex:1;">
                         <h3 class="panel-header" id="arenaTitle">Console Output</h3>
-                        <div class="console" id="reportBoard"></div>
+                        <div class="console" id="reportBoard" tabindex="0"></div>
                     </div>
                 </div>
             </div>
@@ -146,6 +147,17 @@
             setStat('valMem', '--', '#333');
         }
 
+        document.getElementById('reportBoard').addEventListener('keydown', function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+                e.preventDefault();
+                const range = document.createRange();
+                range.selectNodeContents(this);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+        });
+
         async function initDashboard() {
             try {
                 if (!navigator.gpu) {
@@ -206,7 +218,8 @@ sys.stderr = WebConsole()
                     list.appendChild(li);
                 });
             } catch (e) {
-                console.error("Failed to load tests.json", e);
+                console.error("Failed to fetch tests:", e);
+                window.log("Failed to load test list dynamically. Are you running on a web server?", "error");
             }
         }
 
@@ -224,7 +237,8 @@ sys.stderr = WebConsole()
                 
                 const safeCode = pythonCode
                     .replace(/unittest\.main\(\)/g, "pass")
-                    .replace(/unittest\.IsolatedAsyncioTestCase/g, "unittest.TestCase"); 
+                    .replace(/unittest\.IsolatedAsyncioTestCase/g, "unittest.TestCase")
+                    .replace(/.*__file__.*/g, ""); // Strip sys.path modifications which break Pyodide
                 
                 const runnerCode = `
 import unittest
@@ -232,6 +246,13 @@ import sys
 import asyncio
 import time
 import traceback
+import types
+
+__file__ = "browser_test.py"
+
+_mock = types.ModuleType('report_generator')
+_mock.run_and_report = lambda *args, **kwargs: None
+sys.modules['report_generator'] = _mock
 
 for _k, _v in list(globals().items()):
     if isinstance(_v, type) and issubclass(_v, unittest.TestCase):
