@@ -5,7 +5,7 @@ import io
 import sys
 
 # Safe stdout
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+# sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 if __name__ == '__main__':
     tests_dir = os.path.dirname(os.path.abspath(__file__))

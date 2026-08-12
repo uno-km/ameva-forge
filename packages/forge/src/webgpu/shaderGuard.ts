@@ -65,6 +65,9 @@ let ALLOWED_KERNEL_NAMES = new Set([
   "max",
   "sum_axis",
   "axpy",
+  "pad",
+  "gather",
+  "scatter",
 ]);
 
 export function registerKernelNames(names: Iterable<string>): void {

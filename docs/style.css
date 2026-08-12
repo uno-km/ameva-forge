@@ -1,0 +1,127 @@
+/* AMEVA-Forge Documentation Style (Apache-inspired) */
+body {
+    background-color: #ffffff;
+    color: #333333;
+    font-family: Arial, Helvetica, sans-serif;
+    line-height: 1.6;
+    margin: 0;
+    padding: 0;
+}
+
+header {
+    background-color: #f4f4f4;
+    border-bottom: 2px solid #003399;
+    padding: 20px 40px;
+}
+
+header h1 {
+    margin: 0;
+    color: #003399;
+    font-size: 2em;
+}
+
+.container {
+    display: flex;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+nav.sidebar {
+    width: 250px;
+    padding-right: 20px;
+    border-right: 1px solid #ccc;
+}
+
+nav.sidebar h3 {
+    margin-top: 0;
+    color: #003399;
+    font-size: 1.2em;
+    border-bottom: 1px solid #ccc;
+    padding-bottom: 5px;
+}
+
+nav.sidebar ul {
+    list-style-type: none;
+    padding: 0;
+}
+
+nav.sidebar ul li {
+    margin-bottom: 10px;
+}
+
+nav.sidebar a {
+    text-decoration: none;
+    color: #003399;
+}
+
+nav.sidebar a:hover {
+    text-decoration: underline;
+}
+
+main.content {
+    flex: 1;
+    padding-left: 30px;
+}
+
+main.content h2 {
+    color: #003399;
+    border-bottom: 1px solid #ccc;
+    padding-bottom: 5px;
+}
+
+main.content h3 {
+    color: #0055cc;
+}
+
+a {
+    color: #003399;
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+pre {
+    background-color: #f8f8f8;
+    border: 1px solid #ddd;
+    padding: 10px;
+    overflow-x: auto;
+    font-family: Consolas, monospace;
+}
+
+code {
+    background-color: #f8f8f8;
+    border: 1px solid #ddd;
+    padding: 2px 4px;
+    font-family: Consolas, monospace;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+}
+
+table, th, td {
+    border: 1px solid #ccc;
+}
+
+th, td {
+    padding: 10px;
+    text-align: left;
+}
+
+th {
+    background-color: #f4f4f4;
+}
+
+footer {
+    text-align: center;
+    padding: 20px;
+    border-top: 1px solid #ccc;
+    margin-top: 40px;
+    font-size: 0.9em;
+    color: #666;
+}

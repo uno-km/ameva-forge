@@ -71,3 +71,27 @@ class Adam(Optimizer):
             param_data = param_data - self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
             p._data = param_data.astype(np.float32)
             p.grad = None
+
+
+def clip_grad_norm(parameters: List[Tensor], max_norm: float):
+    total_norm = 0.0
+    for p in parameters:
+        if p.grad is not None:
+            g = p.grad.numpy() if hasattr(p.grad, 'numpy') else getattr(p.grad, '_data', None)
+            if g is not None:
+                total_norm += np.sum(g ** 2)
+    total_norm = float(np.sqrt(total_norm))
+    clip_coef = max_norm / (total_norm + 1e-6)
+    if clip_coef < 1.0:
+        for p in parameters:
+            if p.grad is not None:
+                g = p.grad.numpy() if hasattr(p.grad, 'numpy') else getattr(p.grad, '_data', None)
+                if g is not None:
+                    p.grad._data = (g * clip_coef).astype(np.float32)
+
+def clip_grad_value(parameters: List[Tensor], clip_value: float):
+    for p in parameters:
+        if p.grad is not None:
+            g = p.grad.numpy() if hasattr(p.grad, 'numpy') else getattr(p.grad, '_data', None)
+            if g is not None:
+                p.grad._data = np.clip(g, -clip_value, clip_value).astype(np.float32)

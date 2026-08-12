@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="AMEVA-Forge is a PyTorch-like WebGPU training framework for Python and browser environments.">
+    <meta name="keywords" content="AMEVA-Forge, PyTorch, WebGPU, Browser Training, Pyodide, Machine Learning, AI">
+    <title>AMEVA-Forge Documentation</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>AMEVA-Forge Documentation</h1>
+    </header>
+    
+    <div class="container">
+        <nav class="sidebar">
+            <h3>Navigation</h3>
+            <ul>
+                <li><a href="index.html">Home</a></li>
+                <li><a href="what-is-forge.html">What is Forge?</a></li>
+                <li><a href="forge-vs-pytorch.html">Forge vs PyTorch</a></li>
+                <li><a href="playgrounds/benchmark.html">Benchmark Playground</a></li>
+                <li><a href="playgrounds/mnist.html">MNIST Playground</a></li>
+            </ul>
+        </nav>
+        
+        <main class="content">
+            <h2>Welcome to AMEVA-Forge</h2>
+            <p><strong>AMEVA-Forge</strong> is a PyTorch-like WebGPU training framework built natively for Python and browser environments via Pyodide.</p>
+            
+            <h3>Getting Started</h3>
+            <p>You can use AMEVA-Forge in two primary environments:</p>
+            
+            <h4>1. Browser (Pyodide & WebGPU)</h4>
+            <p>Running deep learning models entirely in the browser without server-side processing.</p>
+            <pre><code>import asyncio
+from forge.device import init
+await init()
+
+import forge as fg
+x = fg.randn((32, 128))
+print(x.shape)</code></pre>
+            <p>See our <a href="playgrounds/benchmark.html">Benchmark Playground</a> for a live interactive demo that automatically fetches and runs remote Python files without user uploads.</p>
+            
+            <h4>2. Python Environment (CPU/NumPy Fallback)</h4>
+            <p>Use standard Python (3.9+) on Windows, Linux, or macOS.</p>
+            <pre><code>pip install ameva-forge</code></pre>
+            
+            <h3>Features</h3>
+            <ul>
+                <li><strong>PyTorch-like API</strong>: Familiar API including <code>Tensor</code>, <code>nn.Module</code>, and <code>optim</code>.</li>
+                <li><strong>Autograd</strong>: Fully functional reverse-mode automatic differentiation.</li>
+                <li><strong>Zero-Copy Operations</strong>: Efficient WebGPU memory management.</li>
+            </ul>
+        </main>
+    </div>
+    
+    <footer>
+        &copy; 2026 AMEVA AI. All rights reserved.
+    </footer>
+</body>
+</html>

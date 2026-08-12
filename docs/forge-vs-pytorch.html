@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Forge vs PyTorch vs TensorFlow</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>AMEVA-Forge Documentation</h1>
+    </header>
+    
+    <div class="container">
+        <nav class="sidebar">
+            <h3>Navigation</h3>
+            <ul>
+                <li><a href="index.html">Home</a></li>
+                <li><a href="what-is-forge.html">What is Forge?</a></li>
+                <li><a href="forge-vs-pytorch.html">Forge vs PyTorch</a></li>
+                <li><a href="playgrounds/benchmark.html">Benchmark Playground</a></li>
+                <li><a href="playgrounds/mnist.html">MNIST Playground</a></li>
+            </ul>
+        </nav>
+        
+        <main class="content">
+            <h2>Comparison with Other Frameworks</h2>
+            <p>How does AMEVA-Forge compare to existing titans of the industry like PyTorch and TensorFlow?</p>
+            
+            <table>
+                <thead>
+                    <tr>
+                        <th>Feature</th>
+                        <th>AMEVA-Forge</th>
+                        <th>PyTorch</th>
+                        <th>TensorFlow.js</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Primary Environment</strong></td>
+                        <td>Browser (Pyodide) & Native Python</td>
+                        <td>Native Python (Server/Desktop)</td>
+                        <td>Browser (JavaScript)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Hardware Acceleration</strong></td>
+                        <td>WebGPU</td>
+                        <td>CUDA, ROCm, MPS</td>
+                        <td>WebGL, WebGPU</td>
+                    </tr>
+                    <tr>
+                        <td><strong>API Language</strong></td>
+                        <td>Pure Python</td>
+                        <td>Pure Python</td>
+                        <td>JavaScript / TypeScript</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Training Support</strong></td>
+                        <td>Full (Forward, Backward, Optimizers)</td>
+                        <td>Full</td>
+                        <td>Limited (mostly inference focused)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Zero-Server Setup</strong></td>
+                        <td>Yes</td>
+                        <td>No (requires local setup)</td>
+                        <td>Yes</td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <h3>The PyTorch Compatibility</h3>
+            <p>If you're migrating from PyTorch, the transition is essentially zero-friction. Notice the identical API surface:</p>
+            
+            <h4>PyTorch:</h4>
+            <pre><code>import torch
+import torch.nn as nn
+import torch.optim as optim
+
+model = nn.Sequential(nn.Linear(2, 4), nn.ReLU())
+opt = optim.Adam(model.parameters(), lr=0.01)</code></pre>
+
+            <h4>AMEVA-Forge:</h4>
+            <pre><code>import forge as fg
+import forge.nn as nn
+import forge.optim as optim
+
+model = nn.Sequential(nn.Linear(2, 4), nn.ReLU())
+opt = optim.Adam(model.parameters(), lr=0.01)</code></pre>
+            
+        </main>
+    </div>
+    
+    <footer>
+        &copy; 2026 AMEVA AI. All rights reserved.
+    </footer>
+</body>
+</html>

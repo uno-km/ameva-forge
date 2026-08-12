@@ -9,7 +9,9 @@ from .device import init, is_available, current_device
 from .ops import (
     tensor, random, randn, matmul, relu, add, sub, mul, div, neg, transpose,
     ones_like, zeros_like, zeros, ones, full,  # NL-05: 공개 API에 추가
-    to_numpy, to_numpy_async, dispose
+    to_numpy, to_numpy_async, dispose,
+    unsqueeze, squeeze, flatten, permute, max_op, max_axis, var, std, sqrt,
+    cat, where, pad, gather, scatter
 )
 from .tensor import Tensor
 from .autograd import no_grad, set_max_graph_nodes
@@ -31,6 +33,7 @@ from .ops import sum_op as sum, mean_op as mean, exp_op as exp, log_op as log
 from .ops import sigmoid, tanh_op as tanh, reshape, sum_axis
 from . import nn
 from . import optim  
+from .optim import clip_grad_norm, clip_grad_value
 from . import functional as F
 from .data import DataLoader
 
@@ -72,6 +75,11 @@ __all__ = [
     "div",
     "neg",
     "transpose",
+    "cat",
+    "where",
+    "pad",
+    "gather",
+    "scatter",
     # 유틸
     "to_numpy",
     "to_numpy_async",
@@ -91,4 +99,7 @@ __all__ = [
     "set_max_graph_nodes",
     # 메타
     "__version__",
+    "unsqueeze", "squeeze", "flatten", "permute", 
+    "max_op", "max_axis", "var", "std", "sqrt", 
+    "clip_grad_norm", "clip_grad_value"
 ]

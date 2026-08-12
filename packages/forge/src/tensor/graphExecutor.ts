@@ -43,7 +43,7 @@ import { AXPY_WGSL } from "./kernels/axpy.wgsl";
 const ALLOWED_OPS = new Set([
   'upload', 'load', 'matmul', 'relu', 'add', 'mul', 'transpose', 'relu_backward',
   'sub', 'neg', 'div', 'exp', 'log', 'sigmoid', 'tanh', 'sigmoid_backward', 'tanh_backward',
-  'fill', 'sum', 'max', 'sum_axis', 'axpy'
+  'fill', 'sum', 'max', 'sum_axis', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter'
 ]);
 
 const MAX_SHAPE_DIM = 8; // NM-06: rank 0~8 허용
@@ -258,8 +258,12 @@ export function executeGraph(
       idToBuffer[inst.id] = outBuffer;
     }
 
+    let paramsSize = 32;
+    if (inst.op === 'pad') paramsSize = 144;
+    else if (inst.op === 'gather' || inst.op === 'scatter') paramsSize = 112;
+
     const paramsBuffer = device.createBuffer({
-      size: 16,
+      size: paramsSize,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     paramsBuffersToDestroy.push(paramsBuffer);
@@ -329,6 +333,32 @@ export function executeGraph(
       u32arr[0] = numElements;
       device.queue.writeBuffer(paramsBuffer, 0, u32arr);
       dispatchX = Math.ceil(numElements / 64);
+    } else if (inst.op === 'pad') {
+      const numElements = byteLength / 4;
+      wgslCode = PAD_WGSL;
+      const p = new Uint32Array(36);
+      for (let i = 0; i < inst.params!.length; i++) {
+        if (i === 2) new Float32Array(p.buffer)[2] = inst.params![2];
+        else p[i] = inst.params![i];
+      }
+      device.queue.writeBuffer(paramsBuffer, 0, p);
+      dispatchX = Math.ceil(numElements / 64);
+    } else if (inst.op === 'gather') {
+      const numElements = byteLength / 4;
+      wgslCode = GATHER_WGSL;
+      const p = new Uint32Array(28);
+      for (let i = 0; i < inst.params!.length; i++) p[i] = inst.params![i];
+      device.queue.writeBuffer(paramsBuffer, 0, p);
+      dispatchX = Math.ceil(numElements / 64);
+    } else if (inst.op === 'scatter') {
+      // For scatter, byteLength is output size, but dispatch is over index size.
+      // Assuming inst.params[0] is num_elements of index.
+      const numElements = inst.params![0];
+      wgslCode = SCATTER_WGSL;
+      const p = new Uint32Array(28);
+      for (let i = 0; i < inst.params!.length; i++) p[i] = inst.params![i];
+      device.queue.writeBuffer(paramsBuffer, 0, p);
+      dispatchX = Math.ceil(numElements / 64);
     } else if (inst.op === 'sum' || inst.op === 'max') {
       // Handled entirely dynamically below, but we need to bypass normal flow
       wgslCode = inst.op === 'sum' ? SUM_WGSL : MAX_WGSL;
@@ -346,7 +376,9 @@ export function executeGraph(
                  inst.op === 'sigmoid'       ? SIGMOID_WGSL :
                  inst.op === 'tanh'          ? TANH_WGSL :
                  inst.op === 'sigmoid_backward' ? SIGMOID_BACKWARD_WGSL :
-                 inst.op === 'tanh_backward' ? TANH_BACKWARD_WGSL : '';
+                 inst.op === 'tanh_backward' ? TANH_BACKWARD_WGSL : 
+                 inst.op === 'cat'           ? CAT_WGSL :
+                 inst.op === 'where'         ? WHERE_WGSL : '';
 
       if (!wgslCode) {
         throw new AMEVAForgeSecurityError(`Unknown op "${inst.op}"`);
@@ -362,7 +394,16 @@ export function executeGraph(
           dispatchX = Math.min(65535, Math.ceil(Math.sqrt(totalWorkgroups)));
           dispatchY = Math.min(65535, Math.ceil(totalWorkgroups / dispatchX));
       }
-      device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([numElements, dispatchX, 0, 0]));
+      device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([numElements, dispatchX, 0, 0, 0, 0, 0, 0]));
+
+      if (inst.op === 'cat') {
+        if (!inst.params || inst.params.length < 3) {
+          throw new AMEVAForgeSecurityError(`cat instruction missing params`);
+        }
+        const [a_dim, b_dim, stride] = inst.params;
+        // Overwrite the params for cat
+        device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([numElements, dispatchX, a_dim, b_dim, stride, 0, 0, 0]));
+      }
     }
 
     const { pipeline } = _globalPipelineCache.getPipeline(inst.op, wgslCode);
@@ -439,6 +480,27 @@ export function executeGraph(
         { binding: 0, resource: { buffer: paramsBuffer } },
         { binding: 1, resource: { buffer: idToBuffer[inst.in![0]] } },
         { binding: 2, resource: { buffer: idToBuffer[inst.in![1]] } },
+      ];
+    } else if (inst.op === 'pad') {
+      bindGroupEntries = [
+        { binding: 0, resource: { buffer: paramsBuffer } },
+        { binding: 1, resource: { buffer: idToBuffer[inst.in![0]] } },
+        { binding: 2, resource: { buffer: outBuffer } },
+      ];
+    } else if (inst.op === 'gather' || inst.op === 'scatter') {
+      bindGroupEntries = [
+        { binding: 0, resource: { buffer: paramsBuffer } },
+        { binding: 1, resource: { buffer: idToBuffer[inst.in![0]] } },
+        { binding: 2, resource: { buffer: idToBuffer[inst.in![1]] } },
+        { binding: 3, resource: { buffer: outBuffer } },
+      ];
+    } else if (inst.op === 'where') {
+      bindGroupEntries = [
+        { binding: 0, resource: { buffer: paramsBuffer } },
+        { binding: 1, resource: { buffer: idToBuffer[inst.in![0]] } },
+        { binding: 2, resource: { buffer: idToBuffer[inst.in![1]] } },
+        { binding: 3, resource: { buffer: idToBuffer[inst.in![2]] } },
+        { binding: 4, resource: { buffer: outBuffer } },
       ];
     } else {
       bindGroupEntries = [

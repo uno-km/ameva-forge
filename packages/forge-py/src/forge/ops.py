@@ -687,3 +687,403 @@ def randn(shape, device='cpu', dtype='float32', requires_grad=False):
         return Tensor(shape=shape, dtype=dtype, device=device, requires_grad=requires_grad, data=arr)
     else:
         return Tensor(shape=shape, dtype=dtype, device='gpu', requires_grad=requires_grad, data=arr, op='upload')
+
+def unsqueeze(x: Tensor, dim: int) -> Tensor:
+    shape = list(x.shape)
+    if dim < 0:
+        dim += len(shape) + 1
+    shape.insert(dim, 1)
+    return reshape(x, tuple(shape))
+
+def squeeze(x: Tensor, dim: Optional[int] = None) -> Tensor:
+    shape = list(x.shape)
+    if dim is not None:
+        if dim < 0:
+            dim += len(shape)
+        if shape[dim] == 1:
+            shape.pop(dim)
+    else:
+        shape = [s for s in shape if s != 1]
+    return reshape(x, tuple(shape))
+
+def flatten(x: Tensor, start_dim: int = 0, end_dim: int = -1) -> Tensor:
+    shape = list(x.shape)
+    if end_dim < 0:
+        end_dim += len(shape)
+    if start_dim < 0:
+        start_dim += len(shape)
+    if start_dim > end_dim:
+        return x
+    new_shape = shape[:start_dim]
+    flat_size = 1
+    for s in shape[start_dim:end_dim+1]:
+        flat_size *= s
+    new_shape.append(flat_size)
+    new_shape.extend(shape[end_dim+1:])
+    return reshape(x, tuple(new_shape))
+
+class PermuteFunction(Function):
+    @staticmethod
+    def forward(ctx, x, dims):
+        ctx.save_for_backward(x)
+        ctx.dims = dims
+        data = _require_cpu_data(x, "x")
+        res = np.transpose(data, dims)
+        return Tensor(shape=res.shape, dtype="float32", device="cpu", data=res)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, = ctx.saved_tensors
+        inv_dims = [0] * len(ctx.dims)
+        for i, d in enumerate(ctx.dims):
+            inv_dims[d] = i
+        return (permute(grad_output, tuple(inv_dims)),)
+
+def permute(x: Tensor, dims: tuple) -> Tensor:
+    return PermuteFunction.apply(x, dims)
+
+class MaxFunction(Function):
+    @staticmethod
+    def forward(ctx, x):
+        ctx.save_for_backward(x)
+        data = _require_cpu_data(x, "x")
+        m = np.max(data)
+        ctx.max_val = m
+        return Tensor(shape=(), dtype="float32", device="cpu", data=np.array(m, dtype=np.float32))
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, = ctx.saved_tensors
+        data = _require_cpu_data(x, "x")
+        grad = _require_cpu_data(grad_output, "grad")
+        res_grad = grad * (data == ctx.max_val).astype(np.float32)
+        return (Tensor(shape=x.shape, dtype="float32", device="cpu", data=res_grad),)
+
+def max_op(x: Tensor) -> Tensor:
+    return MaxFunction.apply(x)
+
+class MaxAxisFunction(Function):
+    @staticmethod
+    def forward(ctx, x, axis):
+        ctx.save_for_backward(x)
+        ctx.axis = axis
+        data = _require_cpu_data(x, "x")
+        m = np.max(data, axis=axis)
+        ctx.max_val = m
+        return Tensor(shape=m.shape, dtype="float32", device="cpu", data=m)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, = ctx.saved_tensors
+        data = _require_cpu_data(x, "x")
+        grad = _require_cpu_data(grad_output, "grad")
+        m_exp = np.expand_dims(ctx.max_val, axis=ctx.axis)
+        grad_exp = np.expand_dims(grad, axis=ctx.axis)
+        res_grad = grad_exp * (data == m_exp).astype(np.float32)
+        return (Tensor(shape=x.shape, dtype="float32", device="cpu", data=res_grad),)
+
+def max_axis(x: Tensor, axis: int) -> Tensor:
+    return MaxAxisFunction.apply(x, axis)
+
+def mean_axis(x: Tensor, axis: int) -> Tensor:
+    s = sum_axis(x, axis)
+    n = x.shape[axis]
+    return div(s, tensor(np.array(n, dtype=np.float32), device=x.device))
+
+def var(x: Tensor, axis=None, unbiased=True) -> Tensor:
+    if axis is None:
+        m = mean_op(x)
+        diff = sub(x, m)
+        diff_sq = mul(diff, diff)
+        s = sum_op(diff_sq)
+        n = x.numel()
+        denom = n - 1 if unbiased and n > 1 else n
+        return div(s, tensor(np.array(denom, dtype=np.float32), device=x.device))
+    else:
+        m = mean_axis(x, axis)
+        m_unsq = unsqueeze(m, axis)
+        diff = sub(x, m_unsq)
+        diff_sq = mul(diff, diff)
+        s = sum_axis(diff_sq, axis)
+        n = x.shape[axis]
+        denom = n - 1 if unbiased and n > 1 else n
+        return div(s, tensor(np.array(denom, dtype=np.float32), device=x.device))
+
+class SqrtFunction(Function):
+    @staticmethod
+    def forward(ctx, x):
+        ctx.save_for_backward(x)
+        if _should_use_gpu(x):
+            return Tensor(shape=x.shape, dtype="float32", device="gpu", op='pow', parents=(x,), op_params=[0.5])
+        else:
+            data = _require_cpu_data(x, "x")
+            res = np.sqrt(data)
+            return Tensor(shape=x.shape, dtype="float32", device="cpu", data=res)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, = ctx.saved_tensors
+        two = full(x.shape, 2.0, device=x.device)
+        return (div(grad_output, mul(two, sqrt(x))),)
+
+def sqrt(x: Tensor) -> Tensor:
+    return SqrtFunction.apply(x)
+
+def std(x: Tensor, axis=None, unbiased=True) -> Tensor:
+    return sqrt(var(x, axis=axis, unbiased=unbiased))
+
+class CatFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, a: Tensor, b: Tensor, dim: int = 0) -> Tensor:
+        ctx.save_for_backward(a, b)
+        ctx.dim = dim
+        _ensure_same_device(a, b, "cat")
+        
+        shape_a = list(a.shape)
+        shape_b = list(b.shape)
+        if dim < 0:
+            dim += len(shape_a)
+            
+        out_shape = list(shape_a)
+        out_shape[dim] += shape_b[dim]
+        out_shape = tuple(out_shape)
+        
+        if _should_use_gpu(a, b):
+            stride = 1
+            for s in shape_a[dim+1:]:
+                stride *= s
+            return Tensor(shape=out_shape, dtype="float32", device="gpu",
+                          op='cat', parents=(a, b), op_params=[int(shape_a[dim]), int(shape_b[dim]), stride])
+        else:
+            data_a = _require_cpu_data(a, "a")
+            data_b = _require_cpu_data(b, "b")
+            res = np.concatenate((data_a, data_b), axis=dim)
+            return Tensor(shape=out_shape, dtype="float32", device="cpu", data=res)
+            
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, Tensor]:
+        a, b = ctx.saved_tensors
+        dim = ctx.dim
+        
+        if grad_output.device == 'cpu':
+            g = _require_cpu_data(grad_output, 'grad_output')
+        else:
+            # Fallback to CPU for slicing
+            g = grad_output.numpy()
+            
+        slc_a = [slice(None)] * len(g.shape)
+        slc_a[dim] = slice(0, a.shape[dim])
+        slc_b = [slice(None)] * len(g.shape)
+        slc_b[dim] = slice(a.shape[dim], None)
+        
+        ga = g[tuple(slc_a)]
+        gb = g[tuple(slc_b)]
+        
+        ga = np.ascontiguousarray(ga)
+        gb = np.ascontiguousarray(gb)
+        
+        if grad_output.device == 'cpu':
+            return (Tensor(shape=a.shape, dtype="float32", device="cpu", data=ga),
+                    Tensor(shape=b.shape, dtype="float32", device="cpu", data=gb))
+        else:
+            return (tensor(ga, device="gpu"), tensor(gb, device="gpu"))
+
+def cat(tensors: list, dim: int = 0) -> Tensor:
+    if len(tensors) < 1:
+        raise ValueError("cat requires at least 1 tensor")
+    if len(tensors) == 1:
+        return tensors[0]
+    res = tensors[0]
+    for t in tensors[1:]:
+        res = CatFunction.apply(res, t, dim)
+    return res
+
+class WhereFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, condition: Tensor, x: Tensor, y: Tensor) -> Tensor:
+        ctx.save_for_backward(condition, x, y)
+        if condition.device != x.device or x.device != y.device:
+            raise AMEVAForgeDeviceError("where requires all tensors to be on the same device")
+        
+        out_shape = x.shape
+        if _should_use_gpu(x, y):
+            return Tensor(shape=out_shape, dtype="float32", device="gpu", op='where', parents=(condition, x, y))
+        else:
+            c = _require_cpu_data(condition, "condition")
+            data_x = _require_cpu_data(x, "x")
+            data_y = _require_cpu_data(y, "y")
+            res = np.where(c > 0, data_x, data_y)
+            return Tensor(shape=out_shape, dtype="float32", device="cpu", data=res)
+            
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[None, Tensor, Tensor]:
+        condition, x, y = ctx.saved_tensors
+        zero_grad = zeros_like(grad_output)
+        grad_x = where(condition, grad_output, zero_grad)
+        grad_y = where(condition, zero_grad, grad_output)
+        return (None, grad_x, grad_y)
+
+def where(condition: Tensor, x: Tensor, y: Tensor) -> Tensor:
+    return WhereFunction.apply(condition, x, y)
+
+class PadFunction(Function):
+    @staticmethod
+    def forward(ctx, x: Tensor, pad: Tuple[int, ...], mode='constant', value=0.0) -> Tensor:
+        ctx.save_for_backward(x)
+        ctx.pad = pad
+        ctx.mode = mode
+        ctx.value = value
+        
+        out_shape = list(x.shape)
+        rank = len(x.shape)
+        pad_pairs = []
+        for i in range(rank):
+            pad_before = pad[-(i * 2 + 2)] if len(pad) >= (i * 2 + 2) else 0
+            pad_after = pad[-(i * 2 + 1)] if len(pad) >= (i * 2 + 1) else 0
+            pad_pairs.insert(0, (pad_before, pad_after))
+            out_shape[i] += pad_before + pad_after
+            
+        out_shape = tuple(out_shape)
+        if _should_use_gpu(x):
+            def get_strides(s):
+                st = [1]*len(s)
+                for i in range(len(s)-2, -1, -1):
+                    st[i] = st[i+1]*s[i+1]
+                return st
+            in_strides = get_strides(x.shape)
+            out_strides = get_strides(out_shape)
+            pad_before_arr = [p[0] for p in pad_pairs]
+            
+            op_params = [
+                0, rank, value, 0,
+                *(in_strides + [0]*(8-rank)),
+                *(out_strides + [0]*(8-rank)),
+                *(pad_before_arr + [0]*(8-rank)),
+                *(list(x.shape) + [0]*(8-rank))
+            ]
+            return Tensor(shape=out_shape, dtype=x.dtype, device='gpu', op='pad', parents=(x,), op_params=op_params)
+        else:
+            data = _require_cpu_data(x, "x")
+            res = np.pad(data, pad_pairs, mode=mode, constant_values=value)
+            return Tensor(shape=out_shape, dtype=x.dtype, device='cpu', data=res)
+            
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor]:
+        x, = ctx.saved_tensors
+        slices = []
+        rank = len(x.shape)
+        for i in range(rank):
+            pad_before = ctx.pad[-(i * 2 + 2)] if len(ctx.pad) >= (i * 2 + 2) else 0
+            slc = slice(pad_before, pad_before + x.shape[i])
+            slices.append(slc)
+        return (grad_output[tuple(slices)],)
+
+def pad(x: Tensor, pad: Tuple[int, ...], mode='constant', value=0.0) -> Tensor:
+    return PadFunction.apply(x, pad, mode, value)
+
+class GatherFunction(Function):
+    @staticmethod
+    def forward(ctx, x: Tensor, dim: int, index: Tensor) -> Tensor:
+        ctx.save_for_backward(x, index)
+        ctx.dim = dim
+        _ensure_same_device(x, index, "gather")
+        if _should_use_gpu(x, index):
+            def get_strides(s):
+                st = [1]*len(s)
+                for i in range(len(s)-2, -1, -1):
+                    st[i] = st[i+1]*s[i+1]
+                return st
+            x_strides = get_strides(x.shape)
+            out_strides = get_strides(index.shape)
+            rank = len(x.shape)
+            op_params = [
+                0, dim, rank, 0,
+                *(x_strides + [0]*(8-rank)),
+                *(out_strides + [0]*(8-rank)),
+                *(list(x.shape) + [0]*(8-rank))
+            ]
+            return Tensor(shape=index.shape, dtype=x.dtype, device='gpu', op='gather', parents=(x, index), op_params=op_params)
+        else:
+            data = _require_cpu_data(x, "x")
+            idx = _require_cpu_data(index, "index").astype(int)
+            res = np.take_along_axis(data, idx, axis=dim)
+            return Tensor(shape=index.shape, dtype=x.dtype, device='cpu', data=res)
+            
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, None]:
+        x, index = ctx.saved_tensors
+        grad_x = scatter(zeros_like(x), ctx.dim, index, grad_output)
+        return (grad_x, None)
+
+def gather(x: Tensor, dim: int, index: Tensor) -> Tensor:
+    return GatherFunction.apply(x, dim, index)
+
+class ScatterFunction(Function):
+    @staticmethod
+    def forward(ctx, x: Tensor, dim: int, index: Tensor, src: Tensor) -> Tensor:
+        ctx.save_for_backward(x, index, src)
+        ctx.dim = dim
+        _ensure_same_device(x, index, "scatter")
+        _ensure_same_device(x, src, "scatter")
+        if _should_use_gpu(x, index) and src.device == 'gpu':
+            def get_strides(s):
+                st = [1]*len(s)
+                for i in range(len(s)-2, -1, -1):
+                    st[i] = st[i+1]*s[i+1]
+                return st
+            x_strides = get_strides(x.shape)
+            idx_strides = get_strides(index.shape)
+            rank = len(x.shape)
+            numel = 1
+            for d in index.shape: numel *= d
+            op_params = [
+                numel, dim, rank, 0,
+                *(x_strides + [0]*(8-rank)),
+                *(idx_strides + [0]*(8-rank))
+            ]
+            return Tensor(shape=x.shape, dtype=x.dtype, device='gpu', op='scatter', parents=(index, src, x), op_params=op_params)
+        else:
+            data = _require_cpu_data(x, "x").copy()
+            idx = _require_cpu_data(index, "index").astype(int)
+            src_data = _require_cpu_data(src, "src")
+            np.put_along_axis(data, idx, src_data, axis=dim)
+            return Tensor(shape=x.shape, dtype=x.dtype, device='cpu', data=data)
+            
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, None, Tensor]:
+        x, index, src = ctx.saved_tensors
+        grad_src = gather(grad_output, ctx.dim, index)
+        grad_x = scatter(grad_output, ctx.dim, index, zeros_like(src))
+        return (grad_x, None, grad_src)
+
+def scatter(x: Tensor, dim: int, index: Tensor, src: Tensor) -> Tensor:
+    return ScatterFunction.apply(x, dim, index, src)
+
+class SliceFunction(Function):
+    @staticmethod
+    def forward(ctx, x: Tensor, key) -> Tensor:
+        ctx.save_for_backward(x)
+        ctx.key = key
+        if x.device == 'gpu':
+            data = x.numpy()
+            res = data[key]
+            return tensor(res, device='gpu')
+        else:
+            data = _require_cpu_data(x, "x")
+            res = data[key]
+            return Tensor(shape=res.shape, dtype=x.dtype, device='cpu', data=res)
+            
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor]:
+        x, = ctx.saved_tensors
+        if x.device == 'gpu':
+            grad_x = np.zeros(x.shape, dtype=np.float32)
+            grad_x[ctx.key] = grad_output.numpy()
+            return (tensor(grad_x, device='gpu'),)
+        else:
+            grad_x = np.zeros(x.shape, dtype=np.float32)
+            grad_x[ctx.key] = _require_cpu_data(grad_output, "grad")
+            return (Tensor(shape=x.shape, dtype=x.dtype, device='cpu', data=grad_x),)
+
+def slice_op(x: Tensor, key) -> Tensor:
+    return SliceFunction.apply(x, key)

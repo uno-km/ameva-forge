@@ -46,6 +46,11 @@ import { SUM_WGSL } from "./kernels/sum.wgsl";
 import { MAX_WGSL } from "./kernels/max.wgsl";
 import { SUM_AXIS_WGSL } from "./kernels/sum_axis.wgsl";
 import { AXPY_WGSL } from "./kernels/axpy.wgsl";
+import { PAD_WGSL } from "./kernels/pad.wgsl";
+import { GATHER_WGSL } from "./kernels/gather.wgsl";
+import { SCATTER_WGSL } from "./kernels/scatter.wgsl";
+import { CAT_WGSL } from "./kernels/cat.wgsl";
+import { WHERE_WGSL } from "./kernels/where.wgsl";
 
 /**
  * 커널 레지스트리: 새 커널 추가 시 import 1줄 + 여기 1줄만 추가하면
@@ -72,6 +77,11 @@ export const KERNEL_REGISTRY: ReadonlyMap<string, string> = new Map([
   ['max', MAX_WGSL],
   ['sum_axis', SUM_AXIS_WGSL],
   ['axpy', AXPY_WGSL],
+  ['pad', PAD_WGSL],
+  ['gather', GATHER_WGSL],
+  ['scatter', SCATTER_WGSL],
+  ['cat', CAT_WGSL],
+  ['where', WHERE_WGSL],
 ]);
 
 // VUL-001 Fix: Register kernel names automatically to keep whitelist in sync

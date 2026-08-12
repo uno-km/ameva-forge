@@ -453,6 +453,51 @@ class Tensor:
         self._check_disposed()
         from .ops import tanh_op
         return tanh_op(self)
+
+    def unsqueeze(self, dim: int):
+        self._check_disposed()
+        from .ops import unsqueeze
+        return unsqueeze(self, dim)
+        
+    def squeeze(self, dim: Optional[int] = None):
+        self._check_disposed()
+        from .ops import squeeze
+        return squeeze(self, dim)
+        
+    def flatten(self, start_dim: int = 0, end_dim: int = -1):
+        self._check_disposed()
+        from .ops import flatten
+        return flatten(self, start_dim, end_dim)
+        
+    def permute(self, dims: tuple):
+        self._check_disposed()
+        from .ops import permute
+        return permute(self, dims)
+
+    def max(self, axis=None):
+        self._check_disposed()
+        if axis is None:
+            from .ops import max_op
+            return max_op(self)
+        else:
+            from .ops import max_axis
+            return max_axis(self, axis)
+
+    def var(self, axis=None, unbiased=True):
+        self._check_disposed()
+        from .ops import var
+        return var(self, axis, unbiased)
+        
+    def std(self, axis=None, unbiased=True):
+        self._check_disposed()
+        from .ops import std
+        return std(self, axis, unbiased)
+
+    def __getitem__(self, key):
+        self._check_disposed()
+        from .ops import slice_op
+        return slice_op(self, key)
+
     def __repr__(self) -> str:
         if self._disposed:
             return '<AMEVA Tensor (disposed)>'
