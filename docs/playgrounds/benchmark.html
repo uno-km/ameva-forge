@@ -169,7 +169,7 @@
                 const micropip = pyodide.pyimport("micropip");
                 
                 // Load Python package from remote or local relative path
-                await micropip.install("../../packages/forge-py/dist/ameva_tensor-0.1.0-py3-none-any.whl");
+                await micropip.install("../../packages/forge-py/dist/forge-2.0.0-py3-none-any.whl");
                 
                 document.getElementById('loadingOverlay').classList.add('hidden');
                 
@@ -192,35 +192,22 @@ sys.stderr = WebConsole()
         }
 
         async function refreshTests() {
-            // Hardcoded list of tests to simulate the API endpoint which is removed
-            const tests = [
-                'test_v3_features.py',
-                'test_activation_functions.py',
-                'test_arithmetic_ops.py',
-                'test_autograd.py',
-                'test_broadcasting.py',
-                'test_dataloader.py',
-                'test_error_handling.py',
-                'test_extreme.py',
-                'test_loss_functions.py',
-                'test_math_ops.py',
-                'test_matrix_ops.py',
-                'test_nn_module.py',
-                'test_optimizers.py',
-                'test_reduction_ops.py',
-                'test_shape_ops.py',
-                'test_tensor_creation.py'
-            ];
-            
-            const list = document.getElementById('testList');
-            list.innerHTML = '';
-            tests.forEach(f => {
-                const li = document.createElement('li');
-                li.className = 'file-item';
-                li.innerText = '📄 ' + f;
-                li.ondblclick = () => runTestFile(f);
-                list.appendChild(li);
-            });
+            try {
+                const res = await fetch('tests.json');
+                const tests = await res.json();
+                
+                const list = document.getElementById('testList');
+                list.innerHTML = '';
+                tests.forEach(f => {
+                    const li = document.createElement('li');
+                    li.className = 'file-item';
+                    li.innerText = '📄 ' + f;
+                    li.ondblclick = () => runTestFile(f);
+                    list.appendChild(li);
+                });
+            } catch (e) {
+                console.error("Failed to load tests.json", e);
+            }
         }
 
         async function runTestFile(filename) {
