@@ -95,3 +95,60 @@ def clip_grad_value(parameters: List[Tensor], clip_value: float):
             g = p.grad.numpy() if hasattr(p.grad, 'numpy') else getattr(p.grad, '_data', None)
             if g is not None:
                 p.grad._data = np.clip(g, -clip_value, clip_value).astype(np.float32)
+
+class StepLR:
+    def __init__(self, optimizer, step_size, gamma=0.1):
+        self.optimizer = optimizer
+        self.step_size = step_size
+        self.gamma = gamma
+        self.last_epoch = 0
+        
+    def step(self, metrics=None):
+        self.last_epoch += 1
+        if self.last_epoch % self.step_size == 0:
+            self.optimizer.lr *= self.gamma
+
+class CosineAnnealingLR:
+    def __init__(self, optimizer, T_max, eta_min=0):
+        self.optimizer = optimizer
+        self.T_max = T_max
+        self.eta_min = eta_min
+        self.last_epoch = 0
+        self.base_lr = optimizer.lr
+        
+    def step(self, metrics=None):
+        self.last_epoch += 1
+        import math
+        self.optimizer.lr = self.eta_min + (self.base_lr - self.eta_min) * (1 + math.cos(math.pi * self.last_epoch / self.T_max)) / 2
+
+class ReduceLROnPlateau:
+    def __init__(self, optimizer, mode='min', factor=0.1, patience=10, min_lr=0):
+        self.optimizer = optimizer
+        self.mode = mode
+        self.factor = factor
+        self.patience = patience
+        self.min_lr = min_lr
+        self.best = None
+        self.num_bad_epochs = 0
+        
+    def step(self, metrics):
+        if self.best is None:
+            self.best = metrics
+            return
+            
+        is_better = False
+        if self.mode == 'min' and metrics < self.best:
+            is_better = True
+        elif self.mode == 'max' and metrics > self.best:
+            is_better = True
+            
+        if is_better:
+            self.best = metrics
+            self.num_bad_epochs = 0
+        else:
+            self.num_bad_epochs += 1
+            
+        if self.num_bad_epochs >= self.patience:
+            self.optimizer.lr = max(self.optimizer.lr * self.factor, self.min_lr)
+            self.num_bad_epochs = 0
+

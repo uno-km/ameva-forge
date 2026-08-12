@@ -1080,6 +1080,201 @@ class SliceFunction(Function):
             grad_x = np.zeros(x.shape, dtype=np.float32)
             grad_x[ctx.key] = grad_output.numpy()
             return (tensor(grad_x, device='gpu'),)
+        ctx.padding = padding
+        
+        N, C, H, W = x.shape
+        C_out, C_in, K_h, K_w = weight.shape
+        if C != C_in:
+            raise AMEVAForgeShapeError(f"Input channels {C} does not match weight channels {C_in}")
+            
+        H_out = (H + 2 * padding - K_h) // stride + 1
+        W_out = (W + 2 * padding - K_w) // stride + 1
+        
+        if _should_use_gpu(x, weight):
+            x_col = Tensor(shape=(N * H_out * W_out, C * K_h * K_w), dtype=x.dtype, device="gpu", requires_grad=False,
+                           op="im2col", inputs=[x], params=[N, C, H, W, K_h, K_w, stride, padding, H_out, W_out])
+            weight_reshaped = weight.reshape((C_out, C * K_h * K_w))
+            weight_t = weight_reshaped.transpose(0, 1)
+            
+            out_2d = Tensor(shape=(N * H_out * W_out, C_out), dtype=x.dtype, device="gpu", requires_grad=False,
+                            op="matmul", inputs=[x_col, weight_t], params=[N * H_out * W_out, C_out, C * K_h * K_w])
+                            
+            out = out_2d.reshape((N, H_out * W_out, C_out)).transpose(1, 2).reshape((N, C_out, H_out, W_out))
+            if bias is not None:
+                bias_reshaped = bias.reshape((1, C_out, 1, 1))
+                out = out + bias_reshaped
+            return out
+        else:
+            x_data = _require_cpu_data(x)
+            weight_data = _require_cpu_data(weight)
+            
+            x_col = np.zeros((N, H_out * W_out, C * K_h * K_w), dtype=np.float32)
+            for n in range(N):
+                for h_out in range(H_out):
+                    for w_out in range(W_out):
+                        h_start = h_out * stride - padding
+                        w_start = w_out * stride - padding
+                        patch = np.zeros((C, K_h, K_w), dtype=np.float32)
+                        for c in range(C):
+                            for k_h in range(K_h):
+                                for k_w in range(K_w):
+                                    h_in = h_start + k_h
+                                    w_in = w_start + k_w
+                                    if 0 <= h_in < H and 0 <= w_in < W:
+                                        patch[c, k_h, k_w] = x_data[n, c, h_in, w_in]
+                        x_col[n, h_out * W_out + w_out, :] = patch.flatten()
+            
+            weight_reshaped = weight_data.reshape((C_out, C * K_h * K_w))
+            out_data = np.zeros((N, C_out, H_out, W_out), dtype=np.float32)
+            for n in range(N):
+                out_2d = x_col[n] @ weight_reshaped.T
+                out_data[n] = out_2d.T.reshape((C_out, H_out, W_out))
+                
+            if bias is not None:
+                bias_data = _require_cpu_data(bias)
+                out_data += bias_data.reshape((1, C_out, 1, 1))
+                
+            return Tensor(shape=(N, C_out, H_out, W_out), dtype=x.dtype, device="cpu", requires_grad=False, data=out_data)
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, ...]:
+        x, weight, bias = ctx.saved_tensors
+        stride = ctx.stride
+        padding = ctx.padding
+        
+        N, C, H, W = x.shape
+        C_out, C_in, K_h, K_w = weight.shape
+        H_out = grad_output.shape[2]
+        W_out = grad_output.shape[3]
+        
+        grad_bias = None
+        if bias is not None and bias.requires_grad:
+            grad_bias = grad_output.sum(axis=(0, 2, 3)).reshape(bias.shape)
+            
+        if _should_use_gpu(x, weight):
+            grad_out_2d = grad_output.transpose(1, 2).transpose(2, 3).reshape((N * H_out * W_out, C_out))
+            x_col = Tensor(shape=(N * H_out * W_out, C * K_h * K_w), dtype=x.dtype, device="gpu", requires_grad=False,
+                           op="im2col", inputs=[x], params=[N, C, H, W, K_h, K_w, stride, padding, H_out, W_out])
+            
+            x_col_t = x_col.transpose(0, 1)
+            grad_weight_2d = Tensor(shape=(C * K_h * K_w, C_out), dtype=x.dtype, device="gpu", requires_grad=False,
+                                    op="matmul", inputs=[x_col_t, grad_out_2d], params=[C * K_h * K_w, C_out, N * H_out * W_out])
+            grad_weight = grad_weight_2d.transpose(0, 1).reshape(weight.shape)
+            
+            weight_reshaped = weight.reshape((C_out, C * K_h * K_w))
+            grad_x_col_2d = Tensor(shape=(N * H_out * W_out, C * K_h * K_w), dtype=x.dtype, device="gpu", requires_grad=False,
+                                   op="matmul", inputs=[grad_out_2d, weight_reshaped], params=[N * H_out * W_out, C * K_h * K_w, C_out])
+            
+            grad_x = Tensor(shape=(N, C, H, W), dtype=x.dtype, device="gpu", requires_grad=False,
+                            op="col2im", inputs=[grad_x_col_2d], params=[N, C, H, W, K_h, K_w, stride, padding, H_out, W_out])
+            
+            return grad_x, grad_weight, grad_bias, None, None
+        else:
+            x_data = _require_cpu_data(x)
+            weight_data = _require_cpu_data(weight)
+            grad_out_data = _require_cpu_data(grad_output)
+            
+            x_col = np.zeros((N, H_out * W_out, C * K_h * K_w), dtype=np.float32)
+            for n in range(N):
+                for h_out in range(H_out):
+                    for w_out in range(W_out):
+                        h_start = h_out * stride - padding
+                        w_start = w_out * stride - padding
+                        patch = np.zeros((C, K_h, K_w), dtype=np.float32)
+                        for c in range(C):
+                            for k_h in range(K_h):
+                                for k_w in range(K_w):
+                                    h_in = h_start + k_h
+                                    w_in = w_start + k_w
+                                    if 0 <= h_in < H and 0 <= w_in < W:
+                                        patch[c, k_h, k_w] = x_data[n, c, h_in, w_in]
+                        x_col[n, h_out * W_out + w_out, :] = patch.flatten()
+            
+            grad_weight_data = np.zeros_like(weight_data)
+            grad_x_data = np.zeros_like(x_data)
+            weight_reshaped = weight_data.reshape((C_out, C * K_h * K_w))
+            
+            grad_out_2d = grad_out_data.transpose(0, 2, 3, 1).reshape(N, H_out * W_out, C_out)
+            
+            grad_x_col = np.zeros_like(x_col)
+            for n in range(N):
+                gw = x_col[n].T @ grad_out_2d[n]
+                grad_weight_data += gw.T.reshape(weight.shape)
+                
+                gxc = grad_out_2d[n] @ weight_reshaped
+                grad_x_col[n] = gxc
+                
+                for h_out in range(H_out):
+                    for w_out in range(W_out):
+                        patch = grad_x_col[n, h_out * W_out + w_out].reshape(C, K_h, K_w)
+                        h_start = h_out * stride - padding
+                        w_start = w_out * stride - padding
+                        for c in range(C):
+                            for k_h in range(K_h):
+                                for k_w in range(K_w):
+                                    h_in = h_start + k_h
+                                    w_in = w_start + k_w
+                                    if 0 <= h_in < H and 0 <= w_in < W:
+                                        grad_x_data[n, c, h_in, w_in] += patch[c, k_h, k_w]
+                                        
+        ctx.dim = dim
+        _ensure_same_device(x, index, "scatter")
+        _ensure_same_device(x, src, "scatter")
+        if _should_use_gpu(x, index) and src.device == 'gpu':
+            def get_strides(s):
+                st = [1]*len(s)
+                for i in range(len(s)-2, -1, -1):
+                    st[i] = st[i+1]*s[i+1]
+                return st
+            x_strides = get_strides(x.shape)
+            idx_strides = get_strides(index.shape)
+            rank = len(x.shape)
+            numel = 1
+            for d in index.shape: numel *= d
+            op_params = [
+                numel, dim, rank, 0,
+                *(x_strides + [0]*(8-rank)),
+                *(idx_strides + [0]*(8-rank))
+            ]
+            return Tensor(shape=x.shape, dtype=x.dtype, device='gpu', op='scatter', parents=(index, src, x), op_params=op_params)
+        else:
+            data = _require_cpu_data(x, "x").copy()
+            idx = _require_cpu_data(index, "index").astype(int)
+            src_data = _require_cpu_data(src, "src")
+            np.put_along_axis(data, idx, src_data, axis=dim)
+            return Tensor(shape=x.shape, dtype=x.dtype, device='cpu', data=data)
+            
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, None, Tensor]:
+        x, index, src = ctx.saved_tensors
+        grad_src = gather(grad_output, ctx.dim, index)
+        grad_x = scatter(grad_output, ctx.dim, index, zeros_like(src))
+        return (grad_x, None, grad_src)
+
+def scatter(x: Tensor, dim: int, index: Tensor, src: Tensor) -> Tensor:
+    return ScatterFunction.apply(x, dim, index, src)
+
+class SliceFunction(Function):
+    @staticmethod
+    def forward(ctx, x: Tensor, key) -> Tensor:
+        ctx.save_for_backward(x)
+        ctx.key = key
+        if x.device == 'gpu':
+            data = x.numpy()
+            res = data[key]
+            return tensor(res, device='gpu')
+        else:
+            data = _require_cpu_data(x, "x")
+            res = data[key]
+            return Tensor(shape=res.shape, dtype=x.dtype, device='cpu', data=res)
+            
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor]:
+        x, = ctx.saved_tensors
+        if x.device == 'gpu':
+            grad_x = np.zeros(x.shape, dtype=np.float32)
+            grad_x[ctx.key] = grad_output.numpy()
+            return (tensor(grad_x, device='gpu'),)
         else:
             grad_x = np.zeros(x.shape, dtype=np.float32)
             grad_x[ctx.key] = _require_cpu_data(grad_output, "grad")
@@ -1087,3 +1282,347 @@ class SliceFunction(Function):
 
 def slice_op(x: Tensor, key) -> Tensor:
     return SliceFunction.apply(x, key)
+
+class Conv2dFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, x: Tensor, weight: Tensor, bias: Optional[Tensor], stride: int, padding: int) -> Tensor:
+        ctx.save_for_backward(x, weight, bias)
+        ctx.stride = stride
+        ctx.padding = padding
+        
+        N, C, H, W = x.shape
+        C_out, C_in, K_h, K_w = weight.shape
+        if C != C_in:
+            raise AMEVAForgeShapeError(f"Input channels {C} does not match weight channels {C_in}")
+            
+        H_out = (H + 2 * padding - K_h) // stride + 1
+        W_out = (W + 2 * padding - K_w) // stride + 1
+        
+        if _should_use_gpu(x, weight):
+            x_col = Tensor(shape=(N * H_out * W_out, C * K_h * K_w), dtype=x.dtype, device="gpu", requires_grad=False,
+                           op="im2col", inputs=[x], params=[N, C, H, W, K_h, K_w, stride, padding, H_out, W_out])
+            weight_reshaped = weight.reshape((C_out, C * K_h * K_w))
+            weight_t = weight_reshaped.transpose(0, 1)
+            
+            out_2d = Tensor(shape=(N * H_out * W_out, C_out), dtype=x.dtype, device="gpu", requires_grad=False,
+                            op="matmul", inputs=[x_col, weight_t], params=[N * H_out * W_out, C_out, C * K_h * K_w])
+                            
+            out = out_2d.reshape((N, H_out * W_out, C_out)).transpose(1, 2).reshape((N, C_out, H_out, W_out))
+            if bias is not None:
+                bias_reshaped = bias.reshape((1, C_out, 1, 1))
+                out = out + bias_reshaped
+            return out
+        else:
+            x_data = _require_cpu_data(x)
+            weight_data = _require_cpu_data(weight)
+            
+            x_col = np.zeros((N, H_out * W_out, C * K_h * K_w), dtype=np.float32)
+            for n in range(N):
+                for h_out in range(H_out):
+                    for w_out in range(W_out):
+                        h_start = h_out * stride - padding
+                        w_start = w_out * stride - padding
+                        patch = np.zeros((C, K_h, K_w), dtype=np.float32)
+                        for c in range(C):
+                            for k_h in range(K_h):
+                                for k_w in range(K_w):
+                                    h_in = h_start + k_h
+                                    w_in = w_start + k_w
+                                    if 0 <= h_in < H and 0 <= w_in < W:
+                                        patch[c, k_h, k_w] = x_data[n, c, h_in, w_in]
+                        x_col[n, h_out * W_out + w_out, :] = patch.flatten()
+            
+            weight_reshaped = weight_data.reshape((C_out, C * K_h * K_w))
+            out_data = np.zeros((N, C_out, H_out, W_out), dtype=np.float32)
+            for n in range(N):
+                out_2d = x_col[n] @ weight_reshaped.T
+                out_data[n] = out_2d.T.reshape((C_out, H_out, W_out))
+                
+            if bias is not None:
+                bias_data = _require_cpu_data(bias)
+                out_data += bias_data.reshape((1, C_out, 1, 1))
+                
+            return Tensor(shape=(N, C_out, H_out, W_out), dtype=x.dtype, device="cpu", requires_grad=False, data=out_data)
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, ...]:
+        x, weight, bias = ctx.saved_tensors
+        stride = ctx.stride
+        padding = ctx.padding
+        
+        N, C, H, W = x.shape
+        C_out, C_in, K_h, K_w = weight.shape
+        H_out = grad_output.shape[2]
+        W_out = grad_output.shape[3]
+        
+        grad_bias = None
+        if bias is not None and bias.requires_grad:
+            g = sum_axis(grad_output, 3)
+            g = sum_axis(g, 2)
+            g = sum_axis(g, 0)
+            grad_bias = g.reshape(bias.shape)
+            
+        if _should_use_gpu(x, weight):
+            grad_out_2d = grad_output.transpose(1, 2).transpose(2, 3).reshape((N * H_out * W_out, C_out))
+            x_col = Tensor(shape=(N * H_out * W_out, C * K_h * K_w), dtype=x.dtype, device="gpu", requires_grad=False,
+                           op="im2col", inputs=[x], params=[N, C, H, W, K_h, K_w, stride, padding, H_out, W_out])
+            
+            x_col_t = x_col.transpose(0, 1)
+            grad_weight_2d = Tensor(shape=(C * K_h * K_w, C_out), dtype=x.dtype, device="gpu", requires_grad=False,
+                                    op="matmul", inputs=[x_col_t, grad_out_2d], params=[C * K_h * K_w, C_out, N * H_out * W_out])
+            grad_weight = grad_weight_2d.transpose(0, 1).reshape(weight.shape)
+            
+            weight_reshaped = weight.reshape((C_out, C * K_h * K_w))
+            grad_x_col_2d = Tensor(shape=(N * H_out * W_out, C * K_h * K_w), dtype=x.dtype, device="gpu", requires_grad=False,
+                                   op="matmul", inputs=[grad_out_2d, weight_reshaped], params=[N * H_out * W_out, C * K_h * K_w, C_out])
+            
+            grad_x = Tensor(shape=(N, C, H, W), dtype=x.dtype, device="gpu", requires_grad=False,
+                            op="col2im", inputs=[grad_x_col_2d], params=[N, C, H, W, K_h, K_w, stride, padding, H_out, W_out])
+            
+            return grad_x, grad_weight, grad_bias, None, None
+        else:
+            x_data = _require_cpu_data(x)
+            weight_data = _require_cpu_data(weight)
+            grad_out_data = _require_cpu_data(grad_output)
+            
+            x_col = np.zeros((N, H_out * W_out, C * K_h * K_w), dtype=np.float32)
+            for n in range(N):
+                for h_out in range(H_out):
+                    for w_out in range(W_out):
+                        h_start = h_out * stride - padding
+                        w_start = w_out * stride - padding
+                        patch = np.zeros((C, K_h, K_w), dtype=np.float32)
+                        for c in range(C):
+                            for k_h in range(K_h):
+                                for k_w in range(K_w):
+                                    h_in = h_start + k_h
+                                    w_in = w_start + k_w
+                                    if 0 <= h_in < H and 0 <= w_in < W:
+                                        patch[c, k_h, k_w] = x_data[n, c, h_in, w_in]
+                        x_col[n, h_out * W_out + w_out, :] = patch.flatten()
+            
+            grad_weight_data = np.zeros_like(weight_data)
+            grad_x_data = np.zeros_like(x_data)
+            weight_reshaped = weight_data.reshape((C_out, C * K_h * K_w))
+            
+            grad_out_2d = grad_out_data.transpose(0, 2, 3, 1).reshape(N, H_out * W_out, C_out)
+            
+            grad_x_col = np.zeros_like(x_col)
+            for n in range(N):
+                gw = x_col[n].T @ grad_out_2d[n]
+                grad_weight_data += gw.T.reshape(weight.shape)
+                
+                gxc = grad_out_2d[n] @ weight_reshaped
+                grad_x_col[n] = gxc
+                
+                for h_out in range(H_out):
+                    for w_out in range(W_out):
+                        patch = grad_x_col[n, h_out * W_out + w_out].reshape(C, K_h, K_w)
+                        h_start = h_out * stride - padding
+                        w_start = w_out * stride - padding
+                        for c in range(C):
+                            for k_h in range(K_h):
+                                for k_w in range(K_w):
+                                    h_in = h_start + k_h
+                                    w_in = w_start + k_w
+                                    if 0 <= h_in < H and 0 <= w_in < W:
+                                        grad_x_data[n, c, h_in, w_in] += patch[c, k_h, k_w]
+                                        
+            grad_x = Tensor(shape=x.shape, dtype=x.dtype, device="cpu", requires_grad=False, data=grad_x_data)
+            grad_weight = Tensor(shape=weight.shape, dtype=weight.dtype, device="cpu", requires_grad=False, data=grad_weight_data)
+            
+            return grad_x, grad_weight, grad_bias, None, None
+
+def conv2d(x: Tensor, weight: Tensor, bias: Optional[Tensor] = None, stride: int = 1, padding: int = 0) -> Tensor:
+    return Conv2dFunction.apply(x, weight, bias, stride, padding)
+
+class MaxPool2dFunction(Function):
+    @staticmethod
+    def forward(ctx, x: Tensor, kernel_size, stride=None, padding=0):
+        if stride is None: stride = kernel_size
+        ctx.save_for_backward(x)
+        ctx.kH = kernel_size[0] if isinstance(kernel_size, (list, tuple)) else kernel_size
+        ctx.kW = kernel_size[1] if isinstance(kernel_size, (list, tuple)) else kernel_size
+        ctx.sH = stride[0] if isinstance(stride, (list, tuple)) else stride
+        ctx.sW = stride[1] if isinstance(stride, (list, tuple)) else stride
+        ctx.pH = padding[0] if isinstance(padding, (list, tuple)) else padding
+        ctx.pW = padding[1] if isinstance(padding, (list, tuple)) else padding
+        
+        B, C, in_h, in_w = x.shape
+        out_h = (in_h + 2 * ctx.pH - ctx.kH) // ctx.sH + 1
+        out_w = (in_w + 2 * ctx.pW - ctx.kW) // ctx.sW + 1
+        
+        if x.device == 'gpu':
+            op_params = [B, C, in_h, in_w, out_h, out_w, ctx.kH, ctx.kW, ctx.sH, ctx.sW, ctx.pH, ctx.pW]
+            return Tensor(shape=(B, C, out_h, out_w), dtype='float32', device='gpu', op='maxpool2d', parents=(x,), op_params=op_params)
+        else:
+            data = _require_cpu_data(x, "x")
+            padded = np.pad(data, ((0,0), (0,0), (ctx.pH, ctx.pH), (ctx.pW, ctx.pW)), constant_values=-np.inf)
+            out = np.zeros((B, C, out_h, out_w), dtype=np.float32)
+            for h in range(out_h):
+                for w in range(out_w):
+                    h_start, w_start = h * ctx.sH, w * ctx.sW
+                    out[:, :, h, w] = np.max(padded[:, :, h_start:h_start+ctx.kH, w_start:w_start+ctx.kW], axis=(2, 3))
+            return Tensor(shape=(B, C, out_h, out_w), dtype='float32', device='cpu', data=out)
+            
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, None, None, None]:
+        x, = ctx.saved_tensors
+        grad_out_np = grad_output.numpy()
+        x_np = x.numpy()
+        B, C, in_h, in_w = x_np.shape
+        out_h = (in_h + 2 * ctx.pH - ctx.kH) // ctx.sH + 1
+        out_w = (in_w + 2 * ctx.pW - ctx.kW) // ctx.sW + 1
+        
+        padded = np.pad(x_np, ((0,0), (0,0), (ctx.pH, ctx.pH), (ctx.pW, ctx.pW)), constant_values=-np.inf)
+        grad_padded = np.zeros_like(padded)
+        
+        for b in range(B):
+            for c in range(C):
+                for h in range(out_h):
+                    for w in range(out_w):
+                        h_start, w_start = h * ctx.sH, w * ctx.sW
+                        window = padded[b, c, h_start:h_start+ctx.kH, w_start:w_start+ctx.kW]
+                        max_val = np.max(window)
+                        mask = (window == max_val)
+                        sum_mask = np.sum(mask)
+                        if sum_mask > 0:
+                            mask = mask / sum_mask
+                        grad_padded[b, c, h_start:h_start+ctx.kH, w_start:w_start+ctx.kW] += mask * grad_out_np[b, c, h, w]
+                        
+        if ctx.pH > 0 or ctx.pW > 0:
+            grad_x_np = grad_padded[:, :, ctx.pH:-ctx.pH if ctx.pH > 0 else None, ctx.pW:-ctx.pW if ctx.pW > 0 else None]
+        else:
+            grad_x_np = grad_padded
+            
+        if x.device == 'gpu':
+            return (tensor(grad_x_np, device='gpu'), None, None, None)
+        else:
+            return (Tensor(shape=x.shape, dtype='float32', device='cpu', data=grad_x_np), None, None, None)
+
+def max_pool2d(x: Tensor, kernel_size, stride=None, padding=0) -> Tensor:
+    return MaxPool2dFunction.apply(x, kernel_size, stride, padding)
+
+class AvgPool2dFunction(Function):
+    @staticmethod
+    def forward(ctx, x: Tensor, kernel_size, stride=None, padding=0):
+        if stride is None: stride = kernel_size
+        ctx.save_for_backward(x)
+        ctx.kH = kernel_size[0] if isinstance(kernel_size, (list, tuple)) else kernel_size
+        ctx.kW = kernel_size[1] if isinstance(kernel_size, (list, tuple)) else kernel_size
+        ctx.sH = stride[0] if isinstance(stride, (list, tuple)) else stride
+        ctx.sW = stride[1] if isinstance(stride, (list, tuple)) else stride
+        ctx.pH = padding[0] if isinstance(padding, (list, tuple)) else padding
+        ctx.pW = padding[1] if isinstance(padding, (list, tuple)) else padding
+        
+        B, C, in_h, in_w = x.shape
+        out_h = (in_h + 2 * ctx.pH - ctx.kH) // ctx.sH + 1
+        out_w = (in_w + 2 * ctx.pW - ctx.kW) // ctx.sW + 1
+        
+        if x.device == 'gpu':
+            op_params = [B, C, in_h, in_w, out_h, out_w, ctx.kH, ctx.kW, ctx.sH, ctx.sW, ctx.pH, ctx.pW]
+            return Tensor(shape=(B, C, out_h, out_w), dtype='float32', device='gpu', op='avgpool2d', parents=(x,), op_params=op_params)
+        else:
+            data = _require_cpu_data(x, "x")
+            padded = np.pad(data, ((0,0), (0,0), (ctx.pH, ctx.pH), (ctx.pW, ctx.pW)), constant_values=0)
+            out = np.zeros((B, C, out_h, out_w), dtype=np.float32)
+            for h in range(out_h):
+                for w in range(out_w):
+                    h_start, w_start = h * ctx.sH, w * ctx.sW
+                    out[:, :, h, w] = np.sum(padded[:, :, h_start:h_start+ctx.kH, w_start:w_start+ctx.kW], axis=(2, 3)) / (ctx.kH * ctx.kW)
+            return Tensor(shape=(B, C, out_h, out_w), dtype='float32', device='cpu', data=out)
+            
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, None, None, None]:
+        x, = ctx.saved_tensors
+        grad_out_np = grad_output.numpy()
+        x_np = x.numpy()
+        B, C, in_h, in_w = x_np.shape
+        out_h = (in_h + 2 * ctx.pH - ctx.kH) // ctx.sH + 1
+        out_w = (in_w + 2 * ctx.pW - ctx.kW) // ctx.sW + 1
+        
+        grad_padded = np.zeros((B, C, in_h + 2 * ctx.pH, in_w + 2 * ctx.pW), dtype=np.float32)
+        grad_per_element = grad_out_np / (ctx.kH * ctx.kW)
+        
+        for h in range(out_h):
+            for w in range(out_w):
+                h_start, w_start = h * ctx.sH, w * ctx.sW
+                grad_padded[:, :, h_start:h_start+ctx.kH, w_start:w_start+ctx.kW] += grad_per_element[:, :, h:h+1, w:w+1]
+                
+        if ctx.pH > 0 or ctx.pW > 0:
+            grad_x_np = grad_padded[:, :, ctx.pH:-ctx.pH if ctx.pH > 0 else None, ctx.pW:-ctx.pW if ctx.pW > 0 else None]
+        else:
+            grad_x_np = grad_padded
+            
+        if x.device == 'gpu':
+            return (tensor(grad_x_np, device='gpu'), None, None, None)
+        else:
+            return (Tensor(shape=x.shape, dtype='float32', device='cpu', data=grad_x_np), None, None, None)
+
+def avg_pool2d(x: Tensor, kernel_size, stride=None, padding=0) -> Tensor:
+    return AvgPool2dFunction.apply(x, kernel_size, stride, padding)
+
+def col2im(cols: Tensor, output_size: Tuple[int, int], kernel_size: int, stride: int = 1, padding: int = 0) -> Tensor:
+    return Col2ImFunction.apply(cols, output_size, kernel_size, stride, padding)
+
+class DropoutFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, x: Tensor, p: float, training: bool) -> Tensor:
+        if not training or p == 0.0:
+            ctx.save_for_backward(x)
+            ctx.mask = None
+            return x
+        
+        ctx.p = p
+        if _should_use_gpu(x):
+            seed = float(np.random.rand())
+            ctx.seed = seed
+            out = Tensor(shape=x.shape, dtype="float32", device="gpu", op="dropout", parents=(x,), op_params=[seed, float(p)])
+            return out
+        else:
+            data = _require_cpu_data(x, "x")
+            mask = np.random.binomial(1, 1 - p, size=data.shape).astype(np.float32)
+            res = data * mask * (1.0 / (1.0 - p))
+            ctx.mask = mask
+            return Tensor(shape=x.shape, dtype="float32", device="cpu", data=res)
+            
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, type(None), type(None)]:
+        if getattr(ctx, 'mask', None) is None and not hasattr(ctx, 'seed'):
+            return grad_output, None, None
+            
+        if hasattr(ctx, 'seed'):
+            seed = ctx.seed
+            p = ctx.p
+            grad_in = Tensor(shape=grad_output.shape, dtype="float32", device="gpu", op="dropout", parents=(grad_output,), op_params=[seed, float(p)])
+            return grad_in, None, None
+        else:
+            mask = ctx.mask
+            p = ctx.p
+            data = _require_cpu_data(grad_output, "grad")
+            res = data * mask * (1.0 / (1.0 - p))
+            return Tensor(shape=grad_output.shape, dtype="float32", device="cpu", data=res), None, None
+
+def dropout(x: Tensor, p: float = 0.5, training: bool = True) -> Tensor:
+    return DropoutFunction.apply(x, p, training)
+
+class EmbeddingFunction(Function):
+    @staticmethod
+    def forward(ctx, weight: Tensor, index: Tensor) -> Tensor:
+        ctx.save_for_backward(weight, index)
+        data_w = _require_cpu_data(weight, "weight")
+        data_i = _require_cpu_data(index, "index").astype(int)
+        out_data = data_w[data_i]
+        return Tensor(shape=out_data.shape, dtype="float32", device="cpu", data=out_data)
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, type(None)]:
+        weight, index = ctx.saved_tensors
+        data_i = _require_cpu_data(index, "index").astype(int)
+        data_g = _require_cpu_data(grad_output, "grad_output")
+        grad_w = np.zeros_like(_require_cpu_data(weight, "weight"))
+        np.add.at(grad_w, data_i, data_g)
+        return (Tensor(shape=weight.shape, dtype="float32", device="cpu", data=grad_w), None)
+
+def embedding(weight: Tensor, index: Tensor) -> Tensor:
+    return EmbeddingFunction.apply(weight, index)

@@ -208,3 +208,97 @@ def mse_loss(predictions, targets):
     diff = sub(predictions, targets)
     sq = mul(diff, diff)
     return mean_op(sq)
+
+def batch_norm2d(x, running_mean, running_var, weight, bias, training=False, momentum=0.1, eps=1e-5):
+    from .ops import sub, mul, div, add, reshape, mean_axis, tensor, sqrt, full
+    import numpy as np
+    
+    if training:
+        m_c = mean_axis(mean_axis(mean_axis(x, 0), 1), 1)
+        m_view = reshape(m_c, (1, x.shape[1], 1, 1))
+        
+        diff = sub(x, m_view)
+        diff_sq = mul(diff, diff)
+        v_c = mean_axis(mean_axis(mean_axis(diff_sq, 0), 1), 1)
+        v_view = reshape(v_c, (1, x.shape[1], 1, 1))
+        
+        n = x.shape[0] * x.shape[2] * x.shape[3]
+        if x.device == 'cpu':
+            unbiased_v = v_c._data * (n / (n - 1)) if n > 1 else v_c._data
+            running_mean._data = (1 - momentum) * running_mean._data + momentum * m_c._data
+            running_var._data = (1 - momentum) * running_var._data + momentum * unbiased_v
+        else:
+            new_rm = add(mul(running_mean, full(running_mean.shape, 1 - momentum, device='gpu')), mul(m_c, full(m_c.shape, momentum, device='gpu')))
+            unbiased_v = mul(v_c, full(v_c.shape, n / (n - 1) if n > 1 else 1.0, device='gpu'))
+            new_rv = add(mul(running_var, full(running_var.shape, 1 - momentum, device='gpu')), mul(unbiased_v, full(unbiased_v.shape, momentum, device='gpu')))
+            running_mean.__dict__.update(new_rm.__dict__)
+            running_var.__dict__.update(new_rv.__dict__)
+            
+        mean_use, var_use = m_view, v_view
+    else:
+        mean_use = reshape(running_mean, (1, x.shape[1], 1, 1))
+        var_use = reshape(running_var, (1, x.shape[1], 1, 1))
+        
+    eps_t = full(var_use.shape, eps, device=x.device)
+    denom = sqrt(add(var_use, eps_t))
+    x_norm = div(sub(x, mean_use), denom)
+    
+    w_view = reshape(weight, (1, x.shape[1], 1, 1))
+    b_view = reshape(bias, (1, x.shape[1], 1, 1))
+    
+    out = add(mul(x_norm, w_view), b_view)
+    return out
+
+def layer_norm(x, normalized_shape, weight=None, bias=None, eps=1e-5):
+    from .ops import sub, mul, div, add, mean_axis, full, sqrt, unsqueeze
+    dim = -1
+    
+    m = mean_axis(x, dim)
+    m_view = unsqueeze(m, dim)
+    
+    diff = sub(x, m_view)
+    diff_sq = mul(diff, diff)
+    
+    v = mean_axis(diff_sq, dim)
+    v_view = unsqueeze(v, dim)
+    
+    eps_t = full(v_view.shape, eps, device=x.device)
+    denom = sqrt(add(v_view, eps_t))
+    x_norm = div(diff, denom)
+    
+    out = x_norm
+    if weight is not None:
+        out = mul(out, weight)
+    if bias is not None:
+        out = add(out, bias)
+        
+    return out
+
+def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, training=False):
+    from .ops import bmm, transpose, div, full, reshape, dropout
+    import math
+    
+    orig_shape = query.shape
+    if len(orig_shape) == 4:
+        B, H, L, D = orig_shape
+        query = reshape(query, (B * H, L, D))
+        key = reshape(key, (B * H, key.shape[2], D))
+        value = reshape(value, (B * H, value.shape[2], value.shape[3]))
+        
+    d_k = query.shape[-1]
+    key_t = transpose(key)
+    
+    scores = bmm(query, key_t)
+    scores = div(scores, full(scores.shape, math.sqrt(d_k), device=query.device))
+    
+    attn = softmax(scores, axis=-1)
+    
+    if dropout_p > 0.0:
+        attn = dropout(attn, dropout_p, training)
+        
+    out = bmm(attn, value)
+    
+    if len(orig_shape) == 4:
+        out = reshape(out, orig_shape)
+        
+    return out

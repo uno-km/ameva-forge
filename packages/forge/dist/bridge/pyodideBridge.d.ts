@@ -1,5 +1,5 @@
 /**
- * pyodideBridge.ts — globalThis.amevaTensor API 등록자
+ * pyodideBridge.ts — globalThis.amevaForge API 등록자
  *
  * H-02 연동: 단일 실행 경로(graphExecutor.ts)로 통합.
  *   executeGraph 시그니처: (instructionsJson: string, jsInputs: unknown) => Record
@@ -22,6 +22,6 @@ export interface AmevaTensorGlobalAPI {
     disposeBatch: (handles: TensorHandle[]) => void;
 }
 declare global {
-    var amevaTensor: AmevaTensorGlobalAPI | undefined;
+    var amevaForge: AmevaTensorGlobalAPI | undefined;
 }
 export declare function registerPyodideBridge(): AmevaTensorGlobalAPI;

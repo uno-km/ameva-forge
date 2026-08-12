@@ -19,6 +19,7 @@ import { assertAllowedKernelName } from "../webgpu/shaderGuard";
 
 // kernels
 import { MATMUL_WGSL } from "./kernels/matmul.wgsl";
+import { BATCHED_MATMUL_WGSL } from "./kernels/batched_matmul.wgsl";
 import { RELU_WGSL } from "./kernels/relu.wgsl";
 import { ADD_WGSL } from "./kernels/add.wgsl";
 import { MUL_WGSL } from "./kernels/mul.wgsl";
@@ -38,12 +39,23 @@ import { SUM_WGSL } from "./kernels/sum.wgsl";
 import { MAX_WGSL } from "./kernels/max.wgsl";
 import { SUM_AXIS_WGSL } from "./kernels/sum_axis.wgsl";
 import { AXPY_WGSL } from "./kernels/axpy.wgsl";
+import { MAXPOOL2D_WGSL } from "./kernels/maxpool2d.wgsl";
+import { AVGPOOL2D_WGSL } from "./kernels/avgpool2d.wgsl";
+import { IM2COL_WGSL } from "./kernels/im2col.wgsl";
+import { COL2IM_WGSL } from "./kernels/col2im.wgsl";
+import { PAD_WGSL } from "./kernels/pad.wgsl";
+import { GATHER_WGSL } from "./kernels/gather.wgsl";
+import { SCATTER_WGSL } from "./kernels/scatter.wgsl";
+import { CAT_WGSL } from "./kernels/cat.wgsl";
+import { WHERE_WGSL } from "./kernels/where.wgsl";
+import { DROPOUT_WGSL } from "./kernels/dropout.wgsl";
 
 /** 허용된 op 화이트리스트 */
 const ALLOWED_OPS = new Set([
-  'upload', 'load', 'matmul', 'relu', 'add', 'mul', 'transpose', 'relu_backward',
+  'upload', 'load', 'matmul', 'batched_matmul', 'relu', 'add', 'mul', 'transpose', 'relu_backward',
   'sub', 'neg', 'div', 'exp', 'log', 'sigmoid', 'tanh', 'sigmoid_backward', 'tanh_backward',
-  'fill', 'sum', 'max', 'sum_axis', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter'
+  'fill', 'sum', 'max', 'sum_axis', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
+  'im2col', 'col2im', 'dropout'
 ]);
 
 const MAX_SHAPE_DIM = 8; // NM-06: rank 0~8 허용
@@ -261,6 +273,8 @@ export function executeGraph(
     let paramsSize = 32;
     if (inst.op === 'pad') paramsSize = 144;
     else if (inst.op === 'gather' || inst.op === 'scatter') paramsSize = 112;
+    else if (inst.op === 'maxpool2d' || inst.op === 'avgpool2d') paramsSize = 48;
+    else if (inst.op === 'im2col' || inst.op === 'col2im') paramsSize = 40;
 
     const paramsBuffer = device.createBuffer({
       size: paramsSize,
@@ -272,7 +286,7 @@ export function executeGraph(
     let dispatchX = 1, dispatchY = 1, dispatchZ = 1;
     
     let isMatmul = false;
-    let M = 1, N = 1, K = 1;
+    let B = 1, M = 1, N = 1, K = 1;
 
     if (inst.op === 'matmul') {
       if (!inst.params || inst.params.length < 3) {
@@ -292,15 +306,26 @@ export function executeGraph(
       const maxWorkgroupsM = Math.ceil(M / 8);
       
       dispatchY = Math.min(65535, maxWorkgroupsM);
+    } else if (inst.op === 'batched_matmul') {
+      if (!inst.params || inst.params.length < 7) {
+        throw new AMEVAForgeSecurityError(`batched_matmul instruction missing params`);
+      }
+      [B, M, N, K] = inst.params;
+      wgslCode = BATCHED_MATMUL_WGSL;
+      dispatchX = Math.ceil(N / 8);
+      dispatchY = Math.ceil(M / 8);
+      dispatchZ = B;
+      device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array(inst.params));
     } else if (inst.op === 'transpose') {
-      if (!inst.params || inst.params.length < 2) {
+      if (!inst.params || inst.params.length < 3) {
         throw new AMEVAForgeSecurityError(`transpose instruction missing params`);
       }
-      const [rM, rN] = inst.params;
+      const [rM, rN, rB] = inst.params;
       wgslCode = TRANSPOSE_WGSL;
-      device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([rM, rN, 0, 0]));
+      device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([rM, rN, rB, 0]));
       dispatchX = Math.ceil(rM / 8);
       dispatchY = Math.ceil(rN / 8);
+      dispatchZ = rB;
     } else if (inst.op === 'sum_axis') {
       if (!inst.params || inst.params.length < 2) {
         throw new AMEVAForgeSecurityError(`sum_axis instruction missing params`);
@@ -351,11 +376,33 @@ export function executeGraph(
       device.queue.writeBuffer(paramsBuffer, 0, p);
       dispatchX = Math.ceil(numElements / 64);
     } else if (inst.op === 'scatter') {
-      // For scatter, byteLength is output size, but dispatch is over index size.
-      // Assuming inst.params[0] is num_elements of index.
       const numElements = inst.params![0];
       wgslCode = SCATTER_WGSL;
       const p = new Uint32Array(28);
+      for (let i = 0; i < inst.params!.length; i++) p[i] = inst.params![i];
+      device.queue.writeBuffer(paramsBuffer, 0, p);
+      dispatchX = Math.ceil(numElements / 64);
+    } else if (inst.op === 'dropout') {
+      const numElements = byteLength / 4;
+      const seed = inst.params![0];
+      const p = inst.params![1];
+      wgslCode = DROPOUT_WGSL;
+      const f32arr = new Float32Array([0, seed, p, 0]);
+      const u32arr = new Uint32Array(f32arr.buffer);
+      u32arr[0] = numElements;
+      device.queue.writeBuffer(paramsBuffer, 0, u32arr);
+      dispatchX = Math.ceil(numElements / 64);
+    } else if (inst.op === 'maxpool2d' || inst.op === 'avgpool2d') {
+      const numElements = byteLength / 4;
+      wgslCode = inst.op === 'maxpool2d' ? MAXPOOL2D_WGSL : AVGPOOL2D_WGSL;
+      const p = new Uint32Array(12);
+      for (let i = 0; i < inst.params!.length; i++) p[i] = inst.params![i];
+      device.queue.writeBuffer(paramsBuffer, 0, p);
+      dispatchX = Math.ceil(numElements / 64);
+    } else if (inst.op === 'im2col' || inst.op === 'col2im') {
+      const numElements = byteLength / 4;
+      wgslCode = inst.op === 'im2col' ? IM2COL_WGSL : COL2IM_WGSL;
+      const p = new Uint32Array(10);
       for (let i = 0; i < inst.params!.length; i++) p[i] = inst.params![i];
       device.queue.writeBuffer(paramsBuffer, 0, p);
       dispatchX = Math.ceil(numElements / 64);
@@ -378,7 +425,8 @@ export function executeGraph(
                  inst.op === 'sigmoid_backward' ? SIGMOID_BACKWARD_WGSL :
                  inst.op === 'tanh_backward' ? TANH_BACKWARD_WGSL : 
                  inst.op === 'cat'           ? CAT_WGSL :
-                 inst.op === 'where'         ? WHERE_WGSL : '';
+                 inst.op === 'where'         ? WHERE_WGSL : 
+                 inst.op === 'dropout'       ? DROPOUT_WGSL : '';
 
       if (!wgslCode) {
         throw new AMEVAForgeSecurityError(`Unknown op "${inst.op}"`);
@@ -502,6 +550,12 @@ export function executeGraph(
         { binding: 3, resource: { buffer: idToBuffer[inst.in![2]] } },
         { binding: 4, resource: { buffer: outBuffer } },
       ];
+    } else if (inst.op === 'dropout') {
+      bindGroupEntries = [
+        { binding: 0, resource: { buffer: paramsBuffer } },
+        { binding: 1, resource: { buffer: idToBuffer[inst.in![0]] } },
+        { binding: 2, resource: { buffer: outBuffer } },
+      ];
     } else {
       bindGroupEntries = [
         { binding: 0, resource: { buffer: paramsBuffer } },
@@ -556,7 +610,7 @@ export function executeGraph(
       const passEncoder = commandEncoder.beginComputePass();
       passEncoder.setPipeline(pipeline);
       passEncoder.setBindGroup(0, bindGroup);
-      passEncoder.dispatchWorkgroups(dispatchX, dispatchY);
+      passEncoder.dispatchWorkgroups(dispatchX, dispatchY, dispatchZ);
       passEncoder.end();
 
       opsInCurrentBatch++;

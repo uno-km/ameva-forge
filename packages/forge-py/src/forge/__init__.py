@@ -11,7 +11,7 @@ from .ops import (
     ones_like, zeros_like, zeros, ones, full,  # NL-05: 공개 API에 추가
     to_numpy, to_numpy_async, dispose,
     unsqueeze, squeeze, flatten, permute, max_op, max_axis, var, std, sqrt,
-    cat, where, pad, gather, scatter
+    cat, where, pad, gather, scatter, dropout, conv2d, max_pool2d, avg_pool2d, bmm
 )
 from .tensor import Tensor
 from .autograd import no_grad, set_max_graph_nodes
@@ -32,9 +32,12 @@ __version__ = "2.0.0"
 from .ops import sum_op as sum, mean_op as mean, exp_op as exp, log_op as log
 from .ops import sigmoid, tanh_op as tanh, reshape, sum_axis
 from . import nn
+from .nn import BatchNorm2d, Dropout, LayerNorm, MultiheadAttention, TransformerEncoderLayer, PositionalEncoding, RNNCell, LSTMCell, RNN, LSTM
 from . import optim  
-from .optim import clip_grad_norm, clip_grad_value
+from .optim import clip_grad_norm, clip_grad_value, StepLR, CosineAnnealingLR, ReduceLROnPlateau
+from .serialization import save_model, load_model
 from . import functional as F
+from .functional import batch_norm2d
 from .data import DataLoader
 
 
@@ -66,6 +69,19 @@ __all__ = [
     "full",
     "Tensor",
     "no_grad",
+    "BatchNorm2d",
+    "Dropout",
+    "LayerNorm",
+    "MultiheadAttention",
+    "TransformerEncoderLayer",
+    "PositionalEncoding",
+    "RNNCell",
+    "LSTMCell",
+    "RNN",
+    "LSTM",
+    "batch_norm2d",
+    "dropout",
+    "bmm",
     # 연산
     "matmul",
     "relu",
@@ -80,6 +96,9 @@ __all__ = [
     "pad",
     "gather",
     "scatter",
+    "conv2d",
+    "max_pool2d",
+    "avg_pool2d",
     # 유틸
     "to_numpy",
     "to_numpy_async",
@@ -101,5 +120,7 @@ __all__ = [
     "__version__",
     "unsqueeze", "squeeze", "flatten", "permute", 
     "max_op", "max_axis", "var", "std", "sqrt", 
-    "clip_grad_norm", "clip_grad_value"
+    "clip_grad_norm", "clip_grad_value",
+    "StepLR", "CosineAnnealingLR", "ReduceLROnPlateau",
+    "save_model", "load_model"
 ]

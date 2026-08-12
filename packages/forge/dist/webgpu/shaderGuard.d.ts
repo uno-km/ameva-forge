@@ -14,6 +14,7 @@ export declare function assertAllowedShaderConstant(value: number): void;
  * 템플릿 리터럴 인젝션 공격을 차단한다.
  */
 export declare function assertStaticShaderSourceOnly(source: string): void;
+export declare function registerKernelNames(names: Iterable<string>): void;
 export declare function assertAllowedKernelName(name: string): void;
 /** 허용된 커널 이름 목록 반환 (외부 동기화 용도) */
 export declare function getAllowedKernelNames(): ReadonlySet<string>;

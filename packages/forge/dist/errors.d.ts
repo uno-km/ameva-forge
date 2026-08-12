@@ -1,17 +1,17 @@
-export declare class AMEVATensorError extends Error {
+export declare class AMEVAForgeError extends Error {
     constructor(message: string);
 }
-export declare class AMEVATensorShapeError extends AMEVATensorError {
+export declare class AMEVAForgeShapeError extends AMEVAForgeError {
 }
-export declare class AMEVATensorDTypeError extends AMEVATensorError {
+export declare class AMEVAForgeDTypeError extends AMEVAForgeError {
 }
-export declare class AMEVATensorDeviceError extends AMEVATensorError {
+export declare class AMEVAForgeDeviceError extends AMEVAForgeError {
 }
-export declare class AMEVATensorDisposedError extends AMEVATensorError {
+export declare class AMEVAForgeDisposedError extends AMEVAForgeError {
 }
-export declare class AMEVATensorQuotaExceededError extends AMEVATensorError {
+export declare class AMEVAForgeQuotaExceededError extends AMEVAForgeError {
 }
-export declare class AMEVATensorWebGPUUnavailableError extends AMEVATensorError {
+export declare class AMEVAForgeWebGPUUnavailableError extends AMEVAForgeError {
 }
-export declare class AMEVATensorSecurityError extends AMEVATensorError {
+export declare class AMEVAForgeSecurityError extends AMEVAForgeError {
 }

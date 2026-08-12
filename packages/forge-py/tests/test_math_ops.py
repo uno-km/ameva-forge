@@ -2,7 +2,7 @@ import sys
 import os
 import unittest
 import numpy as np
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'packages', 'forge-py', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 import forge as at
 from forge import Tensor
 

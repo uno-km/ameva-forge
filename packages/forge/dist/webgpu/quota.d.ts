@@ -17,6 +17,7 @@ export declare class QuotaManager {
     /** H-04: 런타임에 동적으로 쿼터 상한 재설정 */
     setLimits(hardLimitBytes: number, softLimitBytes: number): void;
     reserve(byteLength: number): void;
+    track(byteLength: number): void;
     /**
      * C-06: dispose() 호출 시 즉시 "해제 예정"으로 표시.
      * NH-04 Fix: 이중 dispose 방지 — allocatedBytes 기준으로 클램핑하되

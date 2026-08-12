@@ -51,6 +51,12 @@ import { GATHER_WGSL } from "./kernels/gather.wgsl";
 import { SCATTER_WGSL } from "./kernels/scatter.wgsl";
 import { CAT_WGSL } from "./kernels/cat.wgsl";
 import { WHERE_WGSL } from "./kernels/where.wgsl";
+import { DROPOUT_WGSL } from "./kernels/dropout.wgsl";
+import { MAXPOOL2D_WGSL } from "./kernels/maxpool2d.wgsl";
+import { AVGPOOL2D_WGSL } from "./kernels/avgpool2d.wgsl";
+import { IM2COL_WGSL } from "./kernels/im2col.wgsl";
+import { COL2IM_WGSL } from "./kernels/col2im.wgsl";
+import { BATCHED_MATMUL_WGSL } from "./kernels/batched_matmul.wgsl";
 
 /**
  * 커널 레지스트리: 새 커널 추가 시 import 1줄 + 여기 1줄만 추가하면
@@ -58,6 +64,7 @@ import { WHERE_WGSL } from "./kernels/where.wgsl";
  */
 export const KERNEL_REGISTRY: ReadonlyMap<string, string> = new Map([
   ['matmul', MATMUL_WGSL],
+  ['batched_matmul', BATCHED_MATMUL_WGSL],
   ['relu', RELU_WGSL],
   ['add', ADD_WGSL],
   ['mul', MUL_WGSL],
@@ -82,6 +89,11 @@ export const KERNEL_REGISTRY: ReadonlyMap<string, string> = new Map([
   ['scatter', SCATTER_WGSL],
   ['cat', CAT_WGSL],
   ['where', WHERE_WGSL],
+  ['dropout', DROPOUT_WGSL],
+  ['maxpool2d', MAXPOOL2D_WGSL],
+  ['avgpool2d', AVGPOOL2D_WGSL],
+  ['im2col', IM2COL_WGSL],
+  ['col2im', COL2IM_WGSL],
 ]);
 
 // VUL-001 Fix: Register kernel names automatically to keep whitelist in sync

@@ -1,28 +1,7 @@
 {
-  "total": 134,
-  "passed": 129,
+  "total": 150,
+  "passed": 150,
   "failed": 0,
-  "errors": 5,
-  "details": [
-    {
-      "test": "test_activation_functions (unittest.loader._FailedTest.test_activation_functions)",
-      "traceback": "ImportError: Failed to import test module: test_activation_functions\nTraceback (most recent call last):\n  File \"C:\\Users\\GAME\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\unittest\\loader.py\", line 382, in _find_test_path\n    module = self._get_module_from_name(name)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\GAME\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\unittest\\loader.py\", line 325, in _get_module_from_name\n    __import__(name)\n  File \"C:\\Users\\GAME\\Desktop\\uno-km\\dev\\AMEVA-Tensor\\packages\\forge-py\\tests\\test_activation_functions.py\", line 6, in <module>\n    import forge as at\nModuleNotFoundError: No module named 'forge'\n\n"
-    },
-    {
-      "test": "test_arithmetic_ops (unittest.loader._FailedTest.test_arithmetic_ops)",
-      "traceback": "ImportError: Failed to import test module: test_arithmetic_ops\nTraceback (most recent call last):\n  File \"C:\\Users\\GAME\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\unittest\\loader.py\", line 382, in _find_test_path\n    module = self._get_module_from_name(name)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\GAME\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\unittest\\loader.py\", line 325, in _get_module_from_name\n    __import__(name)\n  File \"C:\\Users\\GAME\\Desktop\\uno-km\\dev\\AMEVA-Tensor\\packages\\forge-py\\tests\\test_arithmetic_ops.py\", line 6, in <module>\n    import forge as at\nModuleNotFoundError: No module named 'forge'\n\n"
-    },
-    {
-      "test": "test_autograd (unittest.loader._FailedTest.test_autograd)",
-      "traceback": "ImportError: Failed to import test module: test_autograd\nTraceback (most recent call last):\n  File \"C:\\Users\\GAME\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\unittest\\loader.py\", line 382, in _find_test_path\n    module = self._get_module_from_name(name)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\GAME\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\unittest\\loader.py\", line 325, in _get_module_from_name\n    __import__(name)\n  File \"C:\\Users\\GAME\\Desktop\\uno-km\\dev\\AMEVA-Tensor\\packages\\forge-py\\tests\\test_autograd.py\", line 6, in <module>\n    import forge as at\nModuleNotFoundError: No module named 'forge'\n\n"
-    },
-    {
-      "test": "test_benchmark (unittest.loader._FailedTest.test_benchmark)",
-      "traceback": "ImportError: Failed to import test module: test_benchmark\nTraceback (most recent call last):\n  File \"C:\\Users\\GAME\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\unittest\\loader.py\", line 382, in _find_test_path\n    module = self._get_module_from_name(name)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\GAME\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\unittest\\loader.py\", line 325, in _get_module_from_name\n    __import__(name)\n  File \"C:\\Users\\GAME\\Desktop\\uno-km\\dev\\AMEVA-Tensor\\packages\\forge-py\\tests\\test_benchmark.py\", line 6, in <module>\n    import forge as at\nModuleNotFoundError: No module named 'forge'\n\n"
-    },
-    {
-      "test": "test_broadcasting (unittest.loader._FailedTest.test_broadcasting)",
-      "traceback": "ImportError: Failed to import test module: test_broadcasting\nTraceback (most recent call last):\n  File \"C:\\Users\\GAME\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\unittest\\loader.py\", line 382, in _find_test_path\n    module = self._get_module_from_name(name)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\GAME\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\unittest\\loader.py\", line 325, in _get_module_from_name\n    __import__(name)\n  File \"C:\\Users\\GAME\\Desktop\\uno-km\\dev\\AMEVA-Tensor\\packages\\forge-py\\tests\\test_broadcasting.py\", line 6, in <module>\n    import forge as at\nModuleNotFoundError: No module named 'forge'\n\n"
-    }
-  ]
+  "errors": 0,
+  "details": []
 }

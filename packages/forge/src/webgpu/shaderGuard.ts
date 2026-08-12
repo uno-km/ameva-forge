@@ -68,6 +68,11 @@ let ALLOWED_KERNEL_NAMES = new Set([
   "pad",
   "gather",
   "scatter",
+  "dropout",
+  "maxpool2d",
+  "avgpool2d",
+  "im2col",
+  "col2im",
 ]);
 
 export function registerKernelNames(names: Iterable<string>): void {

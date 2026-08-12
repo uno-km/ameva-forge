@@ -1,25 +1,25 @@
 'use strict';
 
-class AMEVATensorError extends Error {
+class AMEVAForgeError extends Error {
     constructor(message) {
         super(message);
         this.name = new.target.name;
         Object.setPrototypeOf(this, new.target.prototype);
     }
 }
-class AMEVATensorShapeError extends AMEVATensorError {
+class AMEVAForgeShapeError extends AMEVAForgeError {
 }
-class AMEVATensorDTypeError extends AMEVATensorError {
+class AMEVAForgeDTypeError extends AMEVAForgeError {
 }
-class AMEVATensorDeviceError extends AMEVATensorError {
+class AMEVAForgeDeviceError extends AMEVAForgeError {
 }
-class AMEVATensorDisposedError extends AMEVATensorError {
+class AMEVAForgeDisposedError extends AMEVAForgeError {
 }
-class AMEVATensorQuotaExceededError extends AMEVATensorError {
+class AMEVAForgeQuotaExceededError extends AMEVAForgeError {
 }
-class AMEVATensorWebGPUUnavailableError extends AMEVATensorError {
+class AMEVAForgeWebGPUUnavailableError extends AMEVAForgeError {
 }
-class AMEVATensorSecurityError extends AMEVATensorError {
+class AMEVAForgeSecurityError extends AMEVAForgeError {
 }
 
 /**
@@ -30,6 +30,18 @@ class AMEVATensorSecurityError extends AMEVATensorError {
  */
 function _safeLog$1(msg) {
     try {
+        // VUL-015 Fix: Only log in development or explicit debug modes
+        const isDev = (typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production') ||
+            (typeof globalThis.AMEVA_DEBUG !== 'undefined' && globalThis.AMEVA_DEBUG) ||
+            (typeof globalThis.__DEV__ !== 'undefined' && globalThis.__DEV__);
+        // Vite/ESBuild injects import.meta.env, wrap in try-catch to avoid syntax errors in older environments
+        let isViteDev = false;
+        try {
+            isViteDev = undefined && undefined.MODE !== 'production';
+        }
+        catch (e) { }
+        if (!isDev && !isViteDev)
+            return;
         if (typeof globalThis.log === 'function') {
             globalThis.log(msg, 'system');
         }
@@ -44,12 +56,12 @@ async function initWebGPU(options) {
     if (device)
         return;
     if (typeof navigator === "undefined" || !navigator.gpu) {
-        throw new AMEVATensorWebGPUUnavailableError("WebGPU is not available in this environment. " +
+        throw new AMEVAForgeWebGPUUnavailableError("WebGPU is not available in this environment. " +
             "Ensure you are running in a supported browser with WebGPU enabled.");
     }
     adapter = await navigator.gpu.requestAdapter(options);
     if (!adapter) {
-        throw new AMEVATensorWebGPUUnavailableError("Failed to request a WebGPU adapter. " +
+        throw new AMEVAForgeWebGPUUnavailableError("Failed to request a WebGPU adapter. " +
             "Your GPU may not support WebGPU, or the browser has disabled it.");
     }
     const requiredLimits = {};
@@ -76,8 +88,8 @@ function getDevice() {
     const globalDev = globalThis.__AMEVA_DEVICE__;
     // _safeLog(`[device.ts] getDevice called. local device=${device ? 'SET' : 'NULL'}, globalDev=${globalDev ? 'SET' : 'NULL'}`);
     if (!device) {
-        const globalExists = typeof globalThis.amevaTensor !== "undefined";
-        throw new AMEVATensorDeviceError(`WebGPU device is not initialized. (device is ${device}, __AMEVA_DEVICE__ exists: ${!!globalDev}, globalThis.amevaTensor exists: ${globalExists}). Call await init() first.`);
+        const globalExists = typeof globalThis.amevaForge !== "undefined";
+        throw new AMEVAForgeDeviceError(`WebGPU device is not initialized. (device is ${device}, __AMEVA_DEVICE__ exists: ${!!globalDev}, globalThis.amevaForge exists: ${globalExists}). Call await init() first.`);
     }
     return device;
 }
@@ -97,16 +109,16 @@ function setDeviceLostCallback(callback) {
 
 function assertWasmRange(offset, byteLength, wasmByteLength) {
     if (!Number.isSafeInteger(offset) || offset < 0) {
-        throw new AMEVATensorSecurityError("Invalid offset: must be a non-negative safe integer.");
+        throw new AMEVAForgeSecurityError("Invalid offset: must be a non-negative safe integer.");
     }
     if (!Number.isSafeInteger(byteLength) || byteLength < 0) {
-        throw new AMEVATensorSecurityError("Invalid byteLength: must be a non-negative safe integer.");
+        throw new AMEVAForgeSecurityError("Invalid byteLength: must be a non-negative safe integer.");
     }
     if (!Number.isSafeInteger(wasmByteLength) || wasmByteLength < 0) {
-        throw new AMEVATensorSecurityError("Invalid wasmByteLength: must be a non-negative safe integer.");
+        throw new AMEVAForgeSecurityError("Invalid wasmByteLength: must be a non-negative safe integer.");
     }
     if (offset > wasmByteLength || byteLength > wasmByteLength - offset) {
-        throw new AMEVATensorSecurityError("WASM memory range out of bounds");
+        throw new AMEVAForgeSecurityError("WASM memory range out of bounds");
     }
 }
 
@@ -133,24 +145,24 @@ class QuotaManager {
     /** H-04: 런타임에 동적으로 쿼터 상한 재설정 */
     setLimits(hardLimitBytes, softLimitBytes) {
         if (!Number.isSafeInteger(hardLimitBytes) || hardLimitBytes <= 0) {
-            throw new AMEVATensorQuotaExceededError(`Invalid hard limit: ${hardLimitBytes}`);
+            throw new AMEVAForgeQuotaExceededError(`Invalid hard limit: ${hardLimitBytes}`);
         }
         if (!Number.isSafeInteger(softLimitBytes) || softLimitBytes <= 0) {
-            throw new AMEVATensorQuotaExceededError(`Invalid soft limit: ${softLimitBytes}`);
+            throw new AMEVAForgeQuotaExceededError(`Invalid soft limit: ${softLimitBytes}`);
         }
         if (softLimitBytes > hardLimitBytes) {
-            throw new AMEVATensorQuotaExceededError("softLimitBytes must be <= hardLimitBytes");
+            throw new AMEVAForgeQuotaExceededError("softLimitBytes must be <= hardLimitBytes");
         }
         this.hardLimitBytes = hardLimitBytes;
         this.softLimitBytes = softLimitBytes;
     }
     reserve(byteLength) {
         if (!Number.isSafeInteger(byteLength) || byteLength <= 0) {
-            throw new AMEVATensorQuotaExceededError(`Invalid allocation size: ${byteLength}`);
+            throw new AMEVAForgeQuotaExceededError(`Invalid allocation size: ${byteLength}`);
         }
         // C-06: 여유 공간 = hardLimit - allocatedBytes (pending 포함, 보수적)
         if (byteLength > this.hardLimitBytes - this.allocatedBytes) {
-            throw new AMEVATensorQuotaExceededError(`Quota Exceeded: Cannot allocate ${byteLength} bytes. ` +
+            throw new AMEVAForgeQuotaExceededError(`Quota Exceeded: Cannot allocate ${byteLength} bytes. ` +
                 `Current: ${this.allocatedBytes} (${this.pendingReleaseBytes} pending release), ` +
                 `Limit: ${this.hardLimitBytes}`);
         }
@@ -160,6 +172,9 @@ class QuotaManager {
                 `${((this.allocatedBytes - this.pendingReleaseBytes) / 1e9).toFixed(2)}GB / ` +
                 `${(this.softLimitBytes / 1e9).toFixed(2)}GB`);
         }
+    }
+    track(byteLength) {
+        this.reserve(byteLength);
     }
     /**
      * C-06: dispose() 호출 시 즉시 "해제 예정"으로 표시.
@@ -209,13 +224,13 @@ const _globalQuotaManager = new QuotaManager();
 /** 셰이더 식별자 (함수명, 변수명 등) 유효성 검사 */
 function assertSafeShaderIdentifier(identifier) {
     if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(identifier)) {
-        throw new AMEVATensorSecurityError(`Invalid shader identifier: "${identifier}". Only alphanumeric and underscore allowed.`);
+        throw new AMEVAForgeSecurityError(`Invalid shader identifier: "${identifier}". Only alphanumeric and underscore allowed.`);
     }
 }
 /** 셰이더에 삽입되는 상수값 유효성 검사 */
 function assertAllowedShaderConstant(value) {
     if (!Number.isFinite(value)) {
-        throw new AMEVATensorSecurityError(`Invalid shader constant: ${value}. Must be a finite number.`);
+        throw new AMEVAForgeSecurityError(`Invalid shader constant: ${value}. Must be a finite number.`);
     }
 }
 /**
@@ -224,7 +239,7 @@ function assertAllowedShaderConstant(value) {
  */
 function assertStaticShaderSourceOnly(source) {
     if (source.includes("${") || source.includes("`")) {
-        throw new AMEVATensorSecurityError("Dynamic shader source interpolation is forbidden. Use uniform buffers for runtime values.");
+        throw new AMEVAForgeSecurityError("Dynamic shader source interpolation is forbidden. Use uniform buffers for runtime values.");
     }
 }
 /**
@@ -232,17 +247,43 @@ function assertStaticShaderSourceOnly(source) {
  * graphExecutor.ts의 ALLOWED_OPS와 반드시 동기화 유지.
  * 이 함수는 gpuCore.ts와 graphExecutor.ts에서 실제로 호출된다.
  */
-const ALLOWED_KERNEL_NAMES = new Set([
+let ALLOWED_KERNEL_NAMES = new Set([
     "matmul",
     "relu",
     "relu_backward",
     "add",
     "mul",
     "transpose",
+    // v2.0: 학습 기능에 필요한 커널 추가 (VUL-001 Fix)
+    "sub",
+    "neg",
+    "div",
+    "exp",
+    "log",
+    "sigmoid",
+    "tanh",
+    "sigmoid_backward",
+    "tanh_backward",
+    "fill",
+    "sum",
+    "max",
+    "sum_axis",
+    "axpy",
+    "pad",
+    "gather",
+    "scatter",
+    "dropout",
+    "maxpool2d",
+    "avgpool2d",
+    "im2col",
+    "col2im",
 ]);
+function registerKernelNames(names) {
+    ALLOWED_KERNEL_NAMES = new Set(names);
+}
 function assertAllowedKernelName(name) {
     if (!ALLOWED_KERNEL_NAMES.has(name)) {
-        throw new AMEVATensorSecurityError(`Unknown kernel name: "${name}". Allowed: ${[...ALLOWED_KERNEL_NAMES].join(", ")}`);
+        throw new AMEVAForgeSecurityError(`Unknown kernel name: "${name}". Allowed: ${[...ALLOWED_KERNEL_NAMES].join(", ")}`);
     }
 }
 /** 허용된 커널 이름 목록 반환 (외부 동기화 용도) */
@@ -267,34 +308,35 @@ const MAX_RANK = 8; // NM-06: 스칼라(rank 0) 포함하여 0~8까지 허용
  */
 function validateShape(shape, dtype, expectedByteLength) {
     if (!Array.isArray(shape)) {
-        throw new AMEVATensorShapeError("Shape must be an array.");
+        throw new AMEVAForgeShapeError("Shape must be an array.");
     }
     // NM-06 Fix: rank 0 (shape=[]) 허용 — 스칼라 텐서
     if (shape.length > MAX_RANK) {
-        throw new AMEVATensorShapeError(`Shape rank must be between 0 and ${MAX_RANK}, got ${shape.length}.`);
+        throw new AMEVAForgeShapeError(`Shape rank must be between 0 and ${MAX_RANK}, got ${shape.length}.`);
     }
     let elements = 1;
-    for (const dim of shape) {
+    for (let i = 0; i < shape.length; i++) {
+        const dim = shape[i];
         if (!Number.isSafeInteger(dim) || dim <= 0) {
-            throw new AMEVATensorShapeError(`Each shape dimension must be a positive safe integer, got: ${dim}`);
+            throw new AMEVAForgeShapeError(`shape[${i}] must be positive, got ${dim}`);
         }
         if (dim > Number.MAX_SAFE_INTEGER / elements) {
-            throw new AMEVATensorShapeError("Shape product overflows safe integer limit.");
+            throw new AMEVAForgeShapeError("Shape product overflows safe integer limit.");
         }
         elements *= dim;
     }
     if (elements > MAX_ELEMENTS$1) {
-        throw new AMEVATensorShapeError(`Tensor size exceeds max elements limit: ${elements} > ${MAX_ELEMENTS$1}`);
+        throw new AMEVAForgeShapeError(`Tensor size exceeds max elements limit: ${elements} > ${MAX_ELEMENTS$1}`);
     }
     if (expectedByteLength !== undefined) {
         const bytesPerElement = BYTES_PER_ELEMENT[dtype];
         if (bytesPerElement === undefined) {
-            throw new AMEVATensorDTypeError(`Unsupported dtype for byte size calculation: "${dtype}". ` +
+            throw new AMEVAForgeDTypeError(`Unsupported dtype for byte size calculation: "${dtype}". ` +
                 `Supported: ${Object.keys(BYTES_PER_ELEMENT).join(', ')}`);
         }
         const calculatedBytes = elements * bytesPerElement;
         if (calculatedBytes !== expectedByteLength) {
-            throw new AMEVATensorShapeError(`Shape/data size mismatch: shape ${JSON.stringify(shape)} (${dtype}) ` +
+            throw new AMEVAForgeShapeError(`Shape/data size mismatch: shape ${JSON.stringify(shape)} (${dtype}) ` +
                 `implies ${calculatedBytes} bytes, but data is ${expectedByteLength} bytes.`);
         }
     }
@@ -303,7 +345,7 @@ function validateShape(shape, dtype, expectedByteLength) {
 
 function validateDType(dtype) {
     if (dtype !== "float32") {
-        throw new AMEVATensorDTypeError(`Unsupported dtype: ${dtype}. Only float32 is supported.`);
+        throw new AMEVAForgeDTypeError(`Unsupported dtype: ${dtype}. Only float32 is supported.`);
     }
 }
 
@@ -429,10 +471,10 @@ class TensorRegistry {
     get(handle) {
         const record = this.records.get(handle);
         if (!record) {
-            throw new AMEVATensorDisposedError(`Tensor not found: ${handle}`);
+            throw new AMEVAForgeDisposedError(`Tensor not found: ${handle}`);
         }
         if (record.disposed) {
-            throw new AMEVATensorDisposedError(`Attempted to access disposed tensor: ${handle}`);
+            throw new AMEVAForgeDisposedError(`Attempted to access disposed tensor: ${handle}`);
         }
         return record;
     }
@@ -441,6 +483,9 @@ class TensorRegistry {
         return record !== undefined && !record.disposed;
     }
     dispose(handle) {
+        if (!this.records.has(handle)) {
+            return; // TS-H04: 이중 dispose 방어 — 이미 해제된 핸들 무시
+        }
         const record = this.records.get(handle);
         if (!record || record.disposed)
             return;
@@ -551,9 +596,8 @@ class PipelineCache {
      */
     async warmup(entries) {
         const device = getDevice();
-        const promises = entries
-            .filter(e => !this.cache.has(`${e.key}:${hashString(e.wgslCode)}`))
-            .map(async (e) => {
+        const pendingEntries = entries.filter(e => !this.cache.has(`${e.key}:${hashString(e.wgslCode)}`));
+        const promises = pendingEntries.map(async (e) => {
             const cacheKey = `${e.key}:${hashString(e.wgslCode)}`;
             const shader = device.createShaderModule({ code: e.wgslCode });
             const pipeline = await device.createComputePipelineAsync({
@@ -562,7 +606,12 @@ class PipelineCache {
             });
             this.cache.set(cacheKey, { shader, pipeline });
         });
-        await Promise.all(promises);
+        const results = await Promise.allSettled(promises);
+        results.forEach((res, i) => {
+            if (res.status === 'rejected') {
+                console.warn(`[AMEVA] Warmup failed for ${pendingEntries[i].key}:`, res.reason);
+            }
+        });
     }
     /**
      * L-03 Fix: WebGPU device lost 시 캐시 전체 무효화.
@@ -591,8 +640,10 @@ struct Params {
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  // global_id.z 를 X축 타일 오프셋으로 사용
+  // dispatcher가 z = ceil(N / (65535*8))만큼 dispatch
+  let col = global_id.x + global_id.z * 65535u * 8u;
   let row = global_id.y + params.offsetY;
-  let col = global_id.x;
 
   if (row >= params.M || col >= params.N) {
     return;
@@ -610,7 +661,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 const RELU_WGSL = `
 struct Params {
   size: u32,
-  pad1: u32,
+  workgroups_x: u32,
   pad2: u32,
   pad3: u32,
 };
@@ -621,8 +672,10 @@ struct Params {
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  let idx = global_id.x;
-  if (idx >= params.size) {
+  let num_elements = params.size;
+  let workgroups_x = params.workgroups_x;
+  let idx = global_id.x + global_id.y * workgroups_x * 64u;
+  if (idx >= num_elements) {
     return;
   }
   y[idx] = max(x[idx], 0.0);
@@ -632,6 +685,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 const ADD_WGSL = `
 struct Params {
   size: u32,
+  workgroups_x: u32,
+  pad2: u32,
+  pad3: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -641,8 +697,10 @@ struct Params {
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  let idx = global_id.x;
-  if (idx < params.size) {
+  let num_elements = params.size;
+  let workgroups_x = params.workgroups_x;
+  let idx = global_id.x + global_id.y * workgroups_x * 64u;
+  if (idx < num_elements) {
     out[idx] = a[idx] + b[idx];
   }
 }
@@ -652,20 +710,22 @@ const TRANSPOSE_WGSL = `
 struct Params {
   M: u32,
   N: u32,
+  B: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> input: array<f32>;
 @group(0) @binding(2) var<storage, read_write> out: array<f32>;
 
-@compute @workgroup_size(8, 8)
+@compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let row = global_id.x;
   let col = global_id.y;
+  let batch = global_id.z;
   
-  if (row < params.M && col < params.N) {
-    let in_idx = row * params.N + col;
-    let out_idx = col * params.M + row;
+  if (row < params.M && col < params.N && batch < params.B) {
+    let in_idx = batch * (params.M * params.N) + row * params.N + col;
+    let out_idx = batch * (params.M * params.N) + col * params.M + row;
     out[out_idx] = input[in_idx];
   }
 }
@@ -674,7 +734,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 const MUL_WGSL = `
 struct Params {
   size: u32,
-  pad1: u32,
+  workgroups_x: u32,
   pad2: u32,
   pad3: u32,
 }
@@ -686,8 +746,10 @@ struct Params {
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id : vec3<u32>) {
-  let index = global_id.x;
-  if (index < params.size) {
+  let num_elements = params.size;
+  let workgroups_x = params.workgroups_x;
+  let index = global_id.x + global_id.y * workgroups_x * 64u;
+  if (index < num_elements) {
     C[index] = A[index] * B[index];
   }
 }
@@ -696,7 +758,7 @@ fn main(@builtin(global_invocation_id) global_id : vec3<u32>) {
 const RELU_BACKWARD_WGSL = `
 struct Params {
   size: u32,
-  pad1: u32,
+  workgroups_x: u32,
   pad2: u32,
   pad3: u32,
 }
@@ -708,14 +770,910 @@ struct Params {
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id : vec3<u32>) {
-  let index = global_id.x;
-  if (index < params.size) {
+  let num_elements = params.size;
+  let workgroups_x = params.workgroups_x;
+  let index = global_id.x + global_id.y * workgroups_x * 64u;
+  if (index < num_elements) {
     if (X[index] > 0.0) {
       gradInput[index] = gradOutput[index];
     } else {
       gradInput[index] = 0.0;
     }
   }
+}
+`;
+
+const SUB_WGSL = `
+struct Params {
+  size: u32,
+  workgroups_x: u32,
+  pad2: u32,
+  pad3: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> a: array<f32>;
+@group(0) @binding(2) var<storage, read> b: array<f32>;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let num_elements = params.size;
+  let workgroups_x = params.workgroups_x;
+  let idx = global_id.x + global_id.y * workgroups_x * 64u;
+  if (idx < num_elements) {
+    out[idx] = a[idx] - b[idx];
+  }
+}
+`;
+
+const NEG_WGSL = `
+struct Params {
+  size: u32,
+  workgroups_x: u32,
+  pad2: u32,
+  pad3: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let num_elements = params.size;
+  let workgroups_x = params.workgroups_x;
+  let idx = global_id.x + global_id.y * workgroups_x * 64u;
+  if (idx >= num_elements) {
+    return;
+  }
+  y[idx] = -x[idx];
+}
+`;
+
+const DIV_WGSL = `
+struct Params {
+  size: u32,
+  workgroups_x: u32,
+  pad2: u32,
+  pad3: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> a: array<f32>;
+@group(0) @binding(2) var<storage, read> b: array<f32>;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let num_elements = params.size;
+  let workgroups_x = params.workgroups_x;
+  let idx = global_id.x + global_id.y * workgroups_x * 64u;
+  if (idx < num_elements) {
+    out[idx] = a[idx] / b[idx];
+  }
+}
+`;
+
+const EXP_WGSL = `
+struct Params {
+  size: u32,
+  workgroups_x: u32,
+  pad2: u32,
+  pad3: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let num_elements = params.size;
+  let workgroups_x = params.workgroups_x;
+  let idx = global_id.x + global_id.y * workgroups_x * 64u;
+  if (idx >= num_elements) {
+    return;
+  }
+  y[idx] = exp(x[idx]);
+}
+`;
+
+const LOG_WGSL = `
+struct Params {
+  size: u32,
+  workgroups_x: u32,
+  pad2: u32,
+  pad3: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let num_elements = params.size;
+  let workgroups_x = params.workgroups_x;
+  let idx = global_id.x + global_id.y * workgroups_x * 64u;
+  if (idx >= num_elements) {
+    return;
+  }
+  y[idx] = log(x[idx]);
+}
+`;
+
+const SIGMOID_WGSL = `
+struct Params {
+  size: u32,
+  workgroups_x: u32,
+  pad2: u32,
+  pad3: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let num_elements = params.size;
+  let workgroups_x = params.workgroups_x;
+  let idx = global_id.x + global_id.y * workgroups_x * 64u;
+  if (idx >= num_elements) {
+    return;
+  }
+  y[idx] = 1.0 / (1.0 + exp(-x[idx]));
+}
+`;
+
+const TANH_WGSL = `
+struct Params {
+  size: u32,
+  workgroups_x: u32,
+  pad2: u32,
+  pad3: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> y: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let num_elements = params.size;
+  let workgroups_x = params.workgroups_x;
+  let idx = global_id.x + global_id.y * workgroups_x * 64u;
+  if (idx >= num_elements) {
+    return;
+  }
+  y[idx] = tanh(x[idx]);
+}
+`;
+
+const SIGMOID_BACKWARD_WGSL = `
+struct Params {
+  size: u32,
+  workgroups_x: u32,
+  pad2: u32,
+  pad3: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> grad: array<f32>;
+@group(0) @binding(2) var<storage, read> sigmoid_output: array<f32>;
+@group(0) @binding(3) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let num_elements = params.size;
+  let workgroups_x = params.workgroups_x;
+  let idx = global_id.x + global_id.y * workgroups_x * 64u;
+  if (idx >= num_elements) {
+    return;
+  }
+  output[idx] = grad[idx] * sigmoid_output[idx] * (1.0 - sigmoid_output[idx]);
+}
+`;
+
+const TANH_BACKWARD_WGSL = `
+struct Params {
+  size: u32,
+  workgroups_x: u32,
+  pad2: u32,
+  pad3: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> grad: array<f32>;
+@group(0) @binding(2) var<storage, read> tanh_output: array<f32>;
+@group(0) @binding(3) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let num_elements = params.size;
+  let workgroups_x = params.workgroups_x;
+  let idx = global_id.x + global_id.y * workgroups_x * 64u;
+  if (idx >= num_elements) {
+    return;
+  }
+  output[idx] = grad[idx] * (1.0 - tanh_output[idx] * tanh_output[idx]);
+}
+`;
+
+const FILL_WGSL = `
+struct Params {
+  numElements: u32,
+  value: f32,
+  pad1: u32,
+  pad2: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let num_elements = params.numElements;
+  let idx = global_id.x;
+  if (idx >= num_elements) {
+    return;
+  }
+  output[idx] = params.value;
+}
+`;
+
+const SUM_WGSL = `
+struct Params {
+  numElements: u32,
+  pad1: u32,
+  pad2: u32,
+  pad3: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> input: array<f32>;
+@group(0) @binding(2) var<storage, read_write> output: array<f32>;
+
+var<workgroup> shared: array<f32, 256>;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>, @builtin(workgroup_id) workgroup_id: vec3<u32>) {
+  let gid = global_id.x;
+  let lid = local_id.x;
+  let wid = workgroup_id.x;
+  
+  if (gid < params.numElements) {
+    shared[lid] = input[gid];
+  } else {
+    shared[lid] = 0.0;
+  }
+  
+  workgroupBarrier();
+  
+  for (var s = 128u; s > 0u; s >>= 1u) {
+    if (lid < s) {
+      shared[lid] += shared[lid + s];
+    }
+    workgroupBarrier();
+  }
+  
+  if (lid == 0u) {
+    output[wid] = shared[0];
+  }
+}
+`;
+
+const MAX_WGSL = `
+struct Params {
+  numElements: u32,
+  pad1: u32,
+  pad2: u32,
+  pad3: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> input: array<f32>;
+@group(0) @binding(2) var<storage, read_write> output: array<f32>;
+
+var<workgroup> shared: array<f32, 256>;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>, @builtin(workgroup_id) workgroup_id: vec3<u32>) {
+  let gid = global_id.x;
+  let lid = local_id.x;
+  let wid = workgroup_id.x;
+  
+  if (gid < params.numElements) {
+    shared[lid] = input[gid];
+  } else {
+    shared[lid] = -3.402823e+38;
+  }
+  
+  workgroupBarrier();
+  
+  for (var s = 128u; s > 0u; s >>= 1u) {
+    if (lid < s) {
+      shared[lid] = max(shared[lid], shared[lid + s]);
+    }
+    workgroupBarrier();
+  }
+  
+  if (lid == 0u) {
+    output[wid] = shared[0];
+  }
+}
+`;
+
+const SUM_AXIS_WGSL = `
+struct Params {
+  M: u32,
+  N: u32,
+  pad1: u32,
+  pad2: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> input: array<f32>;
+@group(0) @binding(2) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let col = global_id.x;
+  if (col >= params.N) {
+    return;
+  }
+  
+  var sum = 0.0;
+  for (var row = 0u; row < params.M; row = row + 1u) {
+    sum += input[row * params.N + col];
+  }
+  
+  output[col] = sum;
+}
+`;
+
+const AXPY_WGSL = `
+struct Params {
+  numElements: u32,
+  lr: f32,
+  pad1: u32,
+  pad2: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> grad: array<f32>;
+@group(0) @binding(2) var<storage, read_write> param: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let idx = global_id.x;
+  if (idx >= params.numElements) {
+    return;
+  }
+  param[idx] = param[idx] - params.lr * grad[idx];
+}
+`;
+
+const PAD_WGSL = `
+struct Params {
+  num_elements: u32,
+  rank: u32,
+  pad_val: f32,
+  _pad: u32,
+  in_strides: array<u32, 8>,
+  out_strides: array<u32, 8>,
+  pad_before: array<u32, 8>,
+  in_shape: array<u32, 8>,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> input: array<f32>;
+@group(0) @binding(2) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let idx = global_id.x;
+  if (idx >= params.num_elements) { return; }
+
+  var temp = idx;
+  var in_idx = 0u;
+  var in_bounds = true;
+
+  for (var i = 0u; i < params.rank; i = i + 1u) {
+    let coord = temp / params.out_strides[i];
+    temp = temp % params.out_strides[i];
+    
+    if (coord < params.pad_before[i] || coord >= params.pad_before[i] + params.in_shape[i]) {
+      in_bounds = false;
+      break;
+    }
+    let in_coord = coord - params.pad_before[i];
+    in_idx = in_idx + in_coord * params.in_strides[i];
+  }
+
+  if (in_bounds) {
+    output[idx] = input[in_idx];
+  } else {
+    output[idx] = params.pad_val;
+  }
+}
+`;
+
+const GATHER_WGSL = `
+struct Params {
+  num_elements: u32,
+  dim: u32,
+  rank: u32,
+  _pad: u32,
+  x_strides: array<u32, 8>,
+  out_strides: array<u32, 8>,
+  x_shape: array<u32, 8>,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> input: array<f32>;
+@group(0) @binding(2) var<storage, read> index: array<f32>;
+@group(0) @binding(3) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let idx = global_id.x;
+  if (idx >= params.num_elements) { return; }
+
+  var temp = idx;
+  var in_idx = 0u;
+
+  for (var i = 0u; i < params.rank; i = i + 1u) {
+    let coord = temp / params.out_strides[i];
+    temp = temp % params.out_strides[i];
+    
+    if (i == params.dim) {
+      let idx_val = u32(index[idx]);
+      in_idx = in_idx + idx_val * params.x_strides[i];
+    } else {
+      in_idx = in_idx + coord * params.x_strides[i];
+    }
+  }
+
+  output[idx] = input[in_idx];
+}
+`;
+
+const SCATTER_WGSL = `
+struct Params {
+  num_elements: u32,
+  dim: u32,
+  rank: u32,
+  _pad: u32,
+  x_strides: array<u32, 8>,
+  idx_strides: array<u32, 8>,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> index: array<f32>;
+@group(0) @binding(2) var<storage, read> src: array<f32>;
+@group(0) @binding(3) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let idx = global_id.x;
+  if (idx >= params.num_elements) { return; }
+
+  var temp = idx;
+  var out_idx = 0u;
+
+  for (var i = 0u; i < params.rank; i = i + 1u) {
+    let coord = temp / params.idx_strides[i];
+    temp = temp % params.idx_strides[i];
+    
+    if (i == params.dim) {
+      let idx_val = u32(index[idx]);
+      out_idx = out_idx + idx_val * params.x_strides[i];
+    } else {
+      out_idx = out_idx + coord * params.x_strides[i];
+    }
+  }
+
+  // Not strictly atomic, but for simple scatter where indices are unique it's fine.
+  output[out_idx] = src[idx];
+}
+`;
+
+const CAT_WGSL = `
+struct Params {
+  size: u32,
+  workgroups_x: u32,
+  a_dim: u32,
+  b_dim: u32,
+  stride: u32,
+  pad1: u32,
+  pad2: u32,
+  pad3: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> a: array<f32>;
+@group(0) @binding(2) var<storage, read> b: array<f32>;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let num_elements = params.size;
+  let workgroups_x = params.workgroups_x;
+  let idx = global_id.x + global_id.y * workgroups_x * 64u;
+  
+  if (idx >= num_elements) {
+    return;
+  }
+  
+  let stride = params.stride;
+  let a_dim = params.a_dim;
+  let b_dim = params.b_dim;
+  
+  let out_dim_size = a_dim + b_dim;
+  let chunk_size = out_dim_size * stride;
+  
+  let batch_idx = idx / chunk_size;
+  let rem = idx % chunk_size;
+  let dim_idx = rem / stride;
+  let stride_idx = rem % stride;
+  
+  if (dim_idx < a_dim) {
+    let a_index = batch_idx * (a_dim * stride) + dim_idx * stride + stride_idx;
+    out[idx] = a[a_index];
+  } else {
+    let b_dim_idx = dim_idx - a_dim;
+    let b_index = batch_idx * (b_dim * stride) + b_dim_idx * stride + stride_idx;
+    out[idx] = b[b_index];
+  }
+}
+`;
+
+const WHERE_WGSL = `
+struct Params {
+  size: u32,
+  workgroups_x: u32,
+  pad2: u32,
+  pad3: u32,
+  pad4: u32,
+  pad5: u32,
+  pad6: u32,
+  pad7: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> cond: array<f32>;
+@group(0) @binding(2) var<storage, read> x: array<f32>;
+@group(0) @binding(3) var<storage, read> y: array<f32>;
+@group(0) @binding(4) var<storage, read_write> out: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let num_elements = params.size;
+  let workgroups_x = params.workgroups_x;
+  let idx = global_id.x + global_id.y * workgroups_x * 64u;
+  if (idx >= num_elements) {
+    return;
+  }
+  if (cond[idx] > 0.0) {
+    out[idx] = x[idx];
+  } else {
+    out[idx] = y[idx];
+  }
+}
+`;
+
+const DROPOUT_WGSL = `
+struct Params {
+  num_elements: u32,
+  seed: f32,
+  p: f32,
+  padding: f32,
+}
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> out: array<f32>;
+
+fn pcg_hash(input: u32) -> u32 {
+    var state = input * 747796405u + 2891336453u;
+    var word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+fn rand_f32(hash: u32) -> f32 {
+    return f32(hash) / 4294967295.0;
+}
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let index = global_id.x + global_id.y * 65535u * 64u;
+    if (index >= params.num_elements) {
+        return;
+    }
+    
+    let hash = pcg_hash(index + u32(params.seed * 10000.0));
+    let rand = rand_f32(hash);
+    
+    if (rand < params.p) {
+        out[index] = 0.0;
+    } else {
+        out[index] = x[index] * (1.0 / (1.0 - params.p));
+    }
+}
+`;
+
+const MAXPOOL2D_WGSL = `
+struct Params {
+    batch: u32,
+    channels: u32,
+    in_h: u32,
+    in_w: u32,
+    out_h: u32,
+    out_w: u32,
+    kH: u32,
+    kW: u32,
+    sH: u32,
+    sW: u32,
+    pH: u32,
+    pW: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> input: array<f32>;
+@group(0) @binding(2) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    let total = params.batch * params.channels * params.out_h * params.out_w;
+    if (idx >= total) {
+        return;
+    }
+    
+    let ow = idx % params.out_w;
+    let oh = (idx / params.out_w) % params.out_h;
+    let c = (idx / (params.out_w * params.out_h)) % params.channels;
+    let b = idx / (params.out_w * params.out_h * params.channels);
+    
+    let h_start = i32(oh * params.sH) - i32(params.pH);
+    let w_start = i32(ow * params.sW) - i32(params.pW);
+    
+    var max_val = -3.402823466e+38; // -FLT_MAX
+    
+    for (var kh = 0u; kh < params.kH; kh++) {
+        for (var kw = 0u; kw < params.kW; kw++) {
+            let h = h_start + i32(kh);
+            let w = w_start + i32(kw);
+            
+            if (h >= 0 && h < i32(params.in_h) && w >= 0 && w < i32(params.in_w)) {
+                let in_idx = ((b * params.channels + c) * params.in_h + u32(h)) * params.in_w + u32(w);
+                let val = input[in_idx];
+                if (val > max_val) {
+                    max_val = val;
+                }
+            }
+        }
+    }
+    output[idx] = max_val;
+}
+`;
+
+const AVGPOOL2D_WGSL = `
+struct Params {
+    batch: u32,
+    channels: u32,
+    in_h: u32,
+    in_w: u32,
+    out_h: u32,
+    out_w: u32,
+    kH: u32,
+    kW: u32,
+    sH: u32,
+    sW: u32,
+    pH: u32,
+    pW: u32,
+}
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> input: array<f32>;
+@group(0) @binding(2) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    let total = params.batch * params.channels * params.out_h * params.out_w;
+    if (idx >= total) {
+        return;
+    }
+    
+    let ow = idx % params.out_w;
+    let oh = (idx / params.out_w) % params.out_h;
+    let c = (idx / (params.out_w * params.out_h)) % params.channels;
+    let b = idx / (params.out_w * params.out_h * params.channels);
+    
+    let h_start = i32(oh * params.sH) - i32(params.pH);
+    let w_start = i32(ow * params.sW) - i32(params.pW);
+    
+    var sum = 0.0;
+    var count = 0.0;
+    
+    for (var kh = 0u; kh < params.kH; kh++) {
+        for (var kw = 0u; kw < params.kW; kw++) {
+            let h = h_start + i32(kh);
+            let w = w_start + i32(kw);
+            
+            if (h >= 0 && h < i32(params.in_h) && w >= 0 && w < i32(params.in_w)) {
+                let in_idx = ((b * params.channels + c) * params.in_h + u32(h)) * params.in_w + u32(w);
+                sum += input[in_idx];
+                count += 1.0;
+            }
+        }
+    }
+    
+    if (count > 0.0) {
+        output[idx] = sum / count;
+    } else {
+        output[idx] = 0.0;
+    }
+}
+`;
+
+const IM2COL_WGSL = `
+struct Params {
+  N: u32,
+  C: u32,
+  H: u32,
+  W: u32,
+  K_h: u32,
+  K_w: u32,
+  stride: u32,
+  padding: u32,
+  H_out: u32,
+  W_out: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> input: array<f32>;
+@group(0) @binding(2) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let idx = global_id.x;
+  let num_elements = params.N * params.H_out * params.W_out * params.C * params.K_h * params.K_w;
+  if (idx >= num_elements) { return; }
+
+  var temp = idx;
+  let c_kw_kh = temp % (params.C * params.K_h * params.K_w);
+  temp = temp / (params.C * params.K_h * params.K_w);
+  let h_out_w_out = temp % (params.H_out * params.W_out);
+  temp = temp / (params.H_out * params.W_out);
+  let n = temp % params.N;
+
+  let k_w = c_kw_kh % params.K_w;
+  let k_h = (c_kw_kh / params.K_w) % params.K_h;
+  let c = c_kw_kh / (params.K_w * params.K_h);
+
+  let w_out = h_out_w_out % params.W_out;
+  let h_out = h_out_w_out / params.W_out;
+
+  let h_in = i32(h_out * params.stride) - i32(params.padding) + i32(k_h);
+  let w_in = i32(w_out * params.stride) - i32(params.padding) + i32(k_w);
+
+  if (h_in >= 0 && h_in < i32(params.H) && w_in >= 0 && w_in < i32(params.W)) {
+    let in_idx = ((n * params.C + c) * params.H + u32(h_in)) * params.W + u32(w_in);
+    output[idx] = input[in_idx];
+  } else {
+    output[idx] = 0.0;
+  }
+}
+`;
+
+const COL2IM_WGSL = `
+struct Params {
+  N: u32,
+  C: u32,
+  H: u32,
+  W: u32,
+  K_h: u32,
+  K_w: u32,
+  stride: u32,
+  padding: u32,
+  H_out: u32,
+  W_out: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> grad_x_col: array<f32>;
+@group(0) @binding(2) var<storage, read_write> grad_x: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let idx = global_id.x;
+  let num_elements = params.N * params.C * params.H * params.W;
+  if (idx >= num_elements) { return; }
+
+  var temp = idx;
+  let w = temp % params.W;
+  temp = temp / params.W;
+  let h = temp % params.H;
+  temp = temp / params.H;
+  let c = temp % params.C;
+  let n = temp / params.C;
+
+  var val = 0.0;
+  
+  for (var k_h = 0u; k_h < params.K_h; k_h = k_h + 1u) {
+    let h_plus_pad = h + params.padding;
+    if (h_plus_pad >= k_h) {
+      let h_rem = h_plus_pad - k_h;
+      if (h_rem % params.stride == 0u) {
+        let h_out = h_rem / params.stride;
+        if (h_out < params.H_out) {
+          
+          for (var k_w = 0u; k_w < params.K_w; k_w = k_w + 1u) {
+            let w_plus_pad = w + params.padding;
+            if (w_plus_pad >= k_w) {
+              let w_rem = w_plus_pad - k_w;
+              if (w_rem % params.stride == 0u) {
+                let w_out = w_rem / params.stride;
+                if (w_out < params.W_out) {
+                  let n_out = n;
+                  let hw_out = h_out * params.W_out + w_out;
+                  let c_kw_kh = (c * params.K_h + k_h) * params.K_w + k_w;
+                  
+                  let col_idx = (n_out * (params.H_out * params.W_out) + hw_out) * (params.C * params.K_h * params.K_w) + c_kw_kh;
+                  val = val + grad_x_col[col_idx];
+                }
+              }
+            }
+          }
+          
+        }
+      }
+    }
+  }
+
+  grad_x[idx] = val;
+}
+`;
+
+const BATCHED_MATMUL_WGSL = `
+struct Params {
+  B: u32,
+  M: u32,
+  N: u32,
+  K: u32,
+  strideA: u32,
+  strideB: u32,
+  strideC: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> a: array<f32>;
+@group(0) @binding(2) var<storage, read> b: array<f32>;
+@group(0) @binding(3) var<storage, read_write> c: array<f32>;
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let col = global_id.x;
+  let row = global_id.y;
+  let batch = global_id.z;
+
+  if (row >= params.M || col >= params.N || batch >= params.B) {
+    return;
+  }
+
+  let a_offset = batch * params.strideA + row * params.K;
+  let b_offset = batch * params.strideB + col;
+  let c_offset = batch * params.strideC + row * params.N + col;
+
+  var sum: f32 = 0.0;
+  for (var k: u32 = 0u; k < params.K; k = k + 1u) {
+    sum = sum + a[a_offset + k] * b[b_offset + k * params.N];
+  }
+
+  c[c_offset] = sum;
 }
 `;
 
@@ -735,12 +1693,39 @@ fn main(@builtin(global_invocation_id) global_id : vec3<u32>) {
  */
 const KERNEL_REGISTRY = new Map([
     ['matmul', MATMUL_WGSL],
+    ['batched_matmul', BATCHED_MATMUL_WGSL],
     ['relu', RELU_WGSL],
     ['add', ADD_WGSL],
     ['mul', MUL_WGSL],
     ['transpose', TRANSPOSE_WGSL],
     ['relu_backward', RELU_BACKWARD_WGSL],
+    ['sub', SUB_WGSL],
+    ['neg', NEG_WGSL],
+    ['div', DIV_WGSL],
+    ['exp', EXP_WGSL],
+    ['log', LOG_WGSL],
+    ['sigmoid', SIGMOID_WGSL],
+    ['tanh', TANH_WGSL],
+    ['sigmoid_backward', SIGMOID_BACKWARD_WGSL],
+    ['tanh_backward', TANH_BACKWARD_WGSL],
+    ['fill', FILL_WGSL],
+    ['sum', SUM_WGSL],
+    ['max', MAX_WGSL],
+    ['sum_axis', SUM_AXIS_WGSL],
+    ['axpy', AXPY_WGSL],
+    ['pad', PAD_WGSL],
+    ['gather', GATHER_WGSL],
+    ['scatter', SCATTER_WGSL],
+    ['cat', CAT_WGSL],
+    ['where', WHERE_WGSL],
+    ['dropout', DROPOUT_WGSL],
+    ['maxpool2d', MAXPOOL2D_WGSL],
+    ['avgpool2d', AVGPOOL2D_WGSL],
+    ['im2col', IM2COL_WGSL],
+    ['col2im', COL2IM_WGSL],
 ]);
+// VUL-001 Fix: Register kernel names automatically to keep whitelist in sync
+registerKernelNames(KERNEL_REGISTRY.keys());
 // ── 핸들별 staging buffer 관리 (C-05) ──
 const _pendingStagingBuffers = new Map();
 function resetRuntimeMemory() {
@@ -792,6 +1777,9 @@ async function init(options) {
     const adapter = getAdapter();
     if (adapter) {
         const limits = adapter.limits;
+        if (limits.maxComputeWorkgroupSizeX < 64) {
+            console.warn(`[AMEVA] Warning: Device maxComputeWorkgroupSizeX (${limits.maxComputeWorkgroupSizeX}) is less than 64. Kernels are optimized for 64.`);
+        }
         // maxStorageBufferBindingSize: 단일 storage 버퍼 바인딩 최대 크기 (VRAM 상한 근사)
         // 통상 256MB~2GB. maxBufferSize는 단일 GPUBuffer 최대 크기 (≠ VRAM 총량)
         const maxBinding = limits.maxStorageBufferBindingSize ?? 256 * 1024 * 1024;
@@ -837,6 +1825,7 @@ function read(handle) {
 async function mapBufferAsync(handle) {
     const record = _globalRegistry.get(handle);
     const stagingBuffer = await mapBufferAsync$1(record.buffer, record.byteLength);
+    _globalQuotaManager.track(stagingBuffer.size);
     _pendingStagingBuffers.set(handle, stagingBuffer);
 }
 /**
@@ -861,6 +1850,7 @@ function readMappedInto(handle, outArray) {
         readMappedInto$1(stagingBuffer, actualData);
     }
     finally {
+        _globalQuotaManager.release(stagingBuffer.size);
         // H-NEW-06: bufProxy.release() 실패 시에도 리소스 정리 보장
         if (bufProxy) {
             try {
@@ -943,12 +1933,12 @@ function matmul(handleA, handleB) {
     const a = _globalRegistry.get(handleA);
     const b = _globalRegistry.get(handleB);
     if (a.shape.length !== 2 || b.shape.length !== 2)
-        throw new AMEVATensorShapeError("Matmul requires 2D tensors");
+        throw new AMEVAForgeShapeError("Matmul requires 2D tensors");
     if (a.dtype !== "float32" || b.dtype !== "float32")
-        throw new AMEVATensorDTypeError("Matmul requires float32 tensors");
+        throw new AMEVAForgeDTypeError("Matmul requires float32 tensors");
     const M = a.shape[0], K = a.shape[1], K2 = b.shape[0], N = b.shape[1];
     if (K !== K2)
-        throw new AMEVATensorShapeError(`Inner dim mismatch: ${K} != ${K2}`);
+        throw new AMEVAForgeShapeError(`Inner dim mismatch: ${K} != ${K2}`);
     const byteLength = M * N * 4;
     const cBuffer = allocateBuffer(byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     dispatchKernel({
@@ -966,7 +1956,7 @@ function matmul(handleA, handleB) {
 function relu(handle) {
     const x = _globalRegistry.get(handle);
     if (x.dtype !== "float32")
-        throw new AMEVATensorDTypeError("ReLU requires float32");
+        throw new AMEVAForgeDTypeError("ReLU requires float32");
     const numElements = x.byteLength / 4;
     const outBuffer = allocateBuffer(x.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     dispatchKernel({
@@ -983,9 +1973,9 @@ function add(handleA, handleB) {
     const a = _globalRegistry.get(handleA);
     const b = _globalRegistry.get(handleB);
     if (a.byteLength !== b.byteLength)
-        throw new AMEVATensorShapeError("Add requires tensors of the same shape");
+        throw new AMEVAForgeShapeError("Add requires tensors of the same shape");
     if (a.dtype !== "float32" || b.dtype !== "float32")
-        throw new AMEVATensorDTypeError("Add requires float32");
+        throw new AMEVAForgeDTypeError("Add requires float32");
     const numElements = a.byteLength / 4;
     const outBuffer = allocateBuffer(a.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     dispatchKernel({
@@ -1002,9 +1992,9 @@ function mul(handleA, handleB) {
     const a = _globalRegistry.get(handleA);
     const b = _globalRegistry.get(handleB);
     if (a.byteLength !== b.byteLength)
-        throw new AMEVATensorShapeError("Mul requires tensors of the same shape");
+        throw new AMEVAForgeShapeError("Mul requires tensors of the same shape");
     if (a.dtype !== "float32" || b.dtype !== "float32")
-        throw new AMEVATensorDTypeError("Mul requires float32");
+        throw new AMEVAForgeDTypeError("Mul requires float32");
     const numElements = a.byteLength / 4;
     const outBuffer = allocateBuffer(a.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     dispatchKernel({
@@ -1020,9 +2010,9 @@ function mul(handleA, handleB) {
 function transpose(handle) {
     const x = _globalRegistry.get(handle);
     if (x.shape.length !== 2)
-        throw new AMEVATensorShapeError("Transpose requires 2D tensors");
+        throw new AMEVAForgeShapeError("Transpose requires 2D tensors");
     if (x.dtype !== "float32")
-        throw new AMEVATensorDTypeError("Transpose requires float32");
+        throw new AMEVAForgeDTypeError("Transpose requires float32");
     const M = x.shape[0], N = x.shape[1];
     const outBuffer = allocateBuffer(x.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     dispatchKernel({
@@ -1041,7 +2031,7 @@ function relu_backward(handleX, handleGrad) {
     const x = _globalRegistry.get(handleX);
     const grad = _globalRegistry.get(handleGrad);
     if (x.byteLength !== grad.byteLength)
-        throw new AMEVATensorShapeError("ReLU backward: shape mismatch");
+        throw new AMEVAForgeShapeError("ReLU backward: shape mismatch");
     const numElements = x.byteLength / 4;
     const outBuffer = allocateBuffer(x.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     dispatchKernel({
@@ -1067,7 +2057,10 @@ function relu_backward(handleX, handleGrad) {
  */
 /** 허용된 op 화이트리스트 */
 const ALLOWED_OPS = new Set([
-    'upload', 'load', 'matmul', 'relu', 'add', 'mul', 'transpose', 'relu_backward'
+    'upload', 'load', 'matmul', 'batched_matmul', 'relu', 'add', 'mul', 'transpose', 'relu_backward',
+    'sub', 'neg', 'div', 'exp', 'log', 'sigmoid', 'tanh', 'sigmoid_backward', 'tanh_backward',
+    'fill', 'sum', 'max', 'sum_axis', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
+    'im2col', 'col2im', 'dropout'
 ]);
 const MAX_SHAPE_DIM = 8; // NM-06: rank 0~8 허용
 const MAX_ELEMENTS = 256 * 1024 * 1024; // 1GB (float32)
@@ -1087,41 +2080,41 @@ const MAX_OPS_PER_SUBMIT = 256; // 안전장치: element 수 관계없이 256 op
  */
 function validateInstruction(inst, idx) {
     if (typeof inst !== 'object' || inst === null) {
-        throw new AMEVATensorSecurityError(`Instruction[${idx}]: must be an object`);
+        throw new AMEVAForgeSecurityError(`Instruction[${idx}]: must be an object`);
     }
     const i = inst;
     if (typeof i.op !== 'string') {
-        throw new AMEVATensorSecurityError(`Instruction[${idx}]: op must be a string`);
+        throw new AMEVAForgeSecurityError(`Instruction[${idx}]: op must be a string`);
     }
     if (!ALLOWED_OPS.has(i.op)) {
-        throw new AMEVATensorSecurityError(`Instruction[${idx}]: unknown op "${i.op}"`);
+        throw new AMEVAForgeSecurityError(`Instruction[${idx}]: unknown op "${i.op}"`);
     }
     if (!Number.isSafeInteger(i.id) || i.id < 1) {
-        throw new AMEVATensorSecurityError(`Instruction[${idx}]: id must be a positive safe integer`);
+        throw new AMEVAForgeSecurityError(`Instruction[${idx}]: id must be a positive safe integer`);
     }
     if (!Array.isArray(i.shape)) {
-        throw new AMEVATensorShapeError(`Instruction[${idx}]: shape must be an array`);
+        throw new AMEVAForgeShapeError(`Instruction[${idx}]: shape must be an array`);
     }
     // NM-06: rank 0 허용 (스칼라)
     if (i.shape.length > MAX_SHAPE_DIM) {
-        throw new AMEVATensorShapeError(`Instruction[${idx}]: shape rank must be 0–${MAX_SHAPE_DIM}, got ${i.shape.length}`);
+        throw new AMEVAForgeShapeError(`Instruction[${idx}]: shape rank must be 0–${MAX_SHAPE_DIM}, got ${i.shape.length}`);
     }
     let elements = 1;
     for (const dim of i.shape) {
         if (!Number.isSafeInteger(dim) || dim <= 0) {
-            throw new AMEVATensorShapeError(`Instruction[${idx}]: shape dim must be a positive safe integer, got ${dim}`);
+            throw new AMEVAForgeShapeError(`Instruction[${idx}]: shape dim must be a positive safe integer, got ${dim}`);
         }
         if (dim > Number.MAX_SAFE_INTEGER / elements) {
-            throw new AMEVATensorShapeError(`Instruction[${idx}]: shape product integer overflow`);
+            throw new AMEVAForgeShapeError(`Instruction[${idx}]: shape product integer overflow`);
         }
         elements *= dim;
     }
     if (elements > MAX_ELEMENTS) {
-        throw new AMEVATensorShapeError(`Instruction[${idx}]: tensor too large (${elements} elements > ${MAX_ELEMENTS})`);
+        throw new AMEVAForgeShapeError(`Instruction[${idx}]: tensor too large (${elements} elements > ${MAX_ELEMENTS})`);
     }
     // NC-06: in 필드가 있으면 배열인지 확인
     if (i.in !== undefined && !Array.isArray(i.in)) {
-        throw new AMEVATensorSecurityError(`Instruction[${idx}]: 'in' field must be an array`);
+        throw new AMEVAForgeSecurityError(`Instruction[${idx}]: 'in' field must be an array`);
     }
     return i;
 }
@@ -1135,13 +2128,13 @@ function executeGraph(instructionsJson, jsInputs) {
         rawInstructions = JSON.parse(instructionsJson);
     }
     catch {
-        throw new AMEVATensorSecurityError("executeGraph: invalid JSON in instructionsJson");
+        throw new AMEVAForgeSecurityError("executeGraph: invalid JSON in instructionsJson");
     }
     if (!Array.isArray(rawInstructions)) {
-        throw new AMEVATensorSecurityError("executeGraph: instructionsJson must be a JSON array");
+        throw new AMEVAForgeSecurityError("executeGraph: instructionsJson must be a JSON array");
     }
     if (rawInstructions.length > MAX_INSTRUCTIONS) {
-        throw new AMEVATensorSecurityError(`executeGraph: too many instructions (${rawInstructions.length} > ${MAX_INSTRUCTIONS})`);
+        throw new AMEVAForgeSecurityError(`executeGraph: too many instructions (${rawInstructions.length} > ${MAX_INSTRUCTIONS})`);
     }
     const instructions = rawInstructions.map(validateInstruction);
     // inputs 배열 추출 (Pyodide PyProxy 또는 JS 배열)
@@ -1172,7 +2165,7 @@ function executeGraph(instructionsJson, jsInputs) {
         if (inst.op === 'load') {
             const handle = inst.handle;
             if (typeof handle !== 'string') {
-                throw new AMEVATensorSecurityError(`load instruction missing handle`);
+                throw new AMEVAForgeSecurityError(`load instruction missing handle`);
             }
             idToHandle[inst.id] = handle;
             idToBuffer[inst.id] = _globalRegistry.get(handle).buffer;
@@ -1195,7 +2188,7 @@ function executeGraph(instructionsJson, jsInputs) {
                 actualData = converted instanceof Float32Array ? converted : new Float32Array(converted);
             }
             else {
-                throw new AMEVATensorSecurityError(`upload input[${inputIdx - 1}] is not a Float32Array or convertible type`);
+                throw new AMEVAForgeSecurityError(`upload input[${inputIdx - 1}] is not a Float32Array or convertible type`);
             }
             const buffer = allocateBuffer(byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST);
             writeFloat32Array(buffer, actualData);
@@ -1214,69 +2207,336 @@ function executeGraph(instructionsJson, jsInputs) {
         // ── 연산 op: GPU 커널 디스패치 ──
         // NH-07 Fix: shaderGuard에서 커널 이름 검증
         assertAllowedKernelName(inst.op);
-        const outBuffer = allocateBuffer(byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-        const handle = _globalRegistry.register({
-            buffer: outBuffer,
-            shape: inst.shape,
-            dtype: "float32",
-            byteLength
-        });
-        idToHandle[inst.id] = handle;
-        idToBuffer[inst.id] = outBuffer;
+        let outBuffer;
+        if (inst.op === 'axpy') {
+            if (!inst.in || inst.in.length < 2) {
+                throw new AMEVAForgeSecurityError(`Instruction axpy is missing 'in' fields.`);
+            }
+            outBuffer = idToBuffer[inst.in[1]];
+            idToHandle[inst.id] = idToHandle[inst.in[1]];
+            idToBuffer[inst.id] = outBuffer;
+        }
+        else {
+            outBuffer = allocateBuffer(byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+            const handle = _globalRegistry.register({
+                buffer: outBuffer,
+                shape: inst.shape,
+                dtype: "float32",
+                byteLength
+            });
+            idToHandle[inst.id] = handle;
+            idToBuffer[inst.id] = outBuffer;
+        }
+        let paramsSize = 32;
+        if (inst.op === 'pad')
+            paramsSize = 144;
+        else if (inst.op === 'gather' || inst.op === 'scatter')
+            paramsSize = 112;
+        else if (inst.op === 'maxpool2d' || inst.op === 'avgpool2d')
+            paramsSize = 48;
+        else if (inst.op === 'im2col' || inst.op === 'col2im')
+            paramsSize = 40;
         const paramsBuffer = device.createBuffer({
-            size: 16,
+            size: paramsSize,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
         paramsBuffersToDestroy.push(paramsBuffer);
         let wgslCode = "";
-        let dispatchX = 1, dispatchY = 1;
+        let dispatchX = 1, dispatchY = 1, dispatchZ = 1;
         let isMatmul = false;
-        let M = 1, N = 1, K = 1;
+        let B = 1, M = 1, N = 1, K = 1;
         if (inst.op === 'matmul') {
             if (!inst.params || inst.params.length < 3) {
-                throw new AMEVATensorSecurityError(`matmul instruction missing params`);
+                throw new AMEVAForgeSecurityError(`matmul instruction missing params`);
             }
             [M, N, K] = inst.params;
             wgslCode = MATMUL_WGSL;
             isMatmul = true;
+            // TS-H01 Fix: matmul X축도 65535 클램핑 — 초과분은 Z 차원으로 분산
+            const rawDispatchX = Math.ceil(N / 8);
+            if (rawDispatchX <= 65535) {
+                dispatchX = rawDispatchX;
+            }
+            else {
+                dispatchX = 65535;
+                dispatchZ = Math.ceil(rawDispatchX / 65535);
+            }
+            const maxWorkgroupsM = Math.ceil(M / 8);
+            dispatchY = Math.min(65535, maxWorkgroupsM);
+        }
+        else if (inst.op === 'batched_matmul') {
+            if (!inst.params || inst.params.length < 7) {
+                throw new AMEVAForgeSecurityError(`batched_matmul instruction missing params`);
+            }
+            [B, M, N, K] = inst.params;
+            wgslCode = BATCHED_MATMUL_WGSL;
             dispatchX = Math.ceil(N / 8);
+            dispatchY = Math.ceil(M / 8);
+            dispatchZ = B;
+            device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array(inst.params));
         }
         else if (inst.op === 'transpose') {
-            if (!inst.params || inst.params.length < 2) {
-                throw new AMEVATensorSecurityError(`transpose instruction missing params`);
+            if (!inst.params || inst.params.length < 3) {
+                throw new AMEVAForgeSecurityError(`transpose instruction missing params`);
             }
-            const [rM, rN] = inst.params;
+            const [rM, rN, rB] = inst.params;
             wgslCode = TRANSPOSE_WGSL;
-            device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([rM, rN, 0, 0]));
+            device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([rM, rN, rB, 0]));
             dispatchX = Math.ceil(rM / 8);
             dispatchY = Math.ceil(rN / 8);
+            dispatchZ = rB;
+        }
+        else if (inst.op === 'sum_axis') {
+            if (!inst.params || inst.params.length < 2) {
+                throw new AMEVAForgeSecurityError(`sum_axis instruction missing params`);
+            }
+            const [M, N] = inst.params;
+            wgslCode = SUM_AXIS_WGSL;
+            device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([M, N, 0, 0]));
+            dispatchX = Math.ceil(N / 64);
+        }
+        else if (inst.op === 'fill') {
+            if (!inst.params || inst.params.length < 2) {
+                throw new AMEVAForgeSecurityError(`fill instruction missing params`);
+            }
+            const numElements = inst.params[0];
+            const fillValue = inst.params[1];
+            wgslCode = FILL_WGSL;
+            const f32arr = new Float32Array([0, fillValue, 0, 0]);
+            const u32arr = new Uint32Array(f32arr.buffer);
+            u32arr[0] = numElements;
+            device.queue.writeBuffer(paramsBuffer, 0, u32arr);
+            dispatchX = Math.ceil(numElements / 64);
+        }
+        else if (inst.op === 'axpy') {
+            if (!inst.params || inst.params.length < 2) {
+                throw new AMEVAForgeSecurityError(`axpy instruction missing params`);
+            }
+            const numElements = inst.params[0];
+            const lr = inst.params[1];
+            wgslCode = AXPY_WGSL;
+            const f32arr = new Float32Array([0, lr, 0, 0]);
+            const u32arr = new Uint32Array(f32arr.buffer);
+            u32arr[0] = numElements;
+            device.queue.writeBuffer(paramsBuffer, 0, u32arr);
+            dispatchX = Math.ceil(numElements / 64);
+        }
+        else if (inst.op === 'pad') {
+            const numElements = byteLength / 4;
+            wgslCode = PAD_WGSL;
+            const p = new Uint32Array(36);
+            for (let i = 0; i < inst.params.length; i++) {
+                if (i === 2)
+                    new Float32Array(p.buffer)[2] = inst.params[2];
+                else
+                    p[i] = inst.params[i];
+            }
+            device.queue.writeBuffer(paramsBuffer, 0, p);
+            dispatchX = Math.ceil(numElements / 64);
+        }
+        else if (inst.op === 'gather') {
+            const numElements = byteLength / 4;
+            wgslCode = GATHER_WGSL;
+            const p = new Uint32Array(28);
+            for (let i = 0; i < inst.params.length; i++)
+                p[i] = inst.params[i];
+            device.queue.writeBuffer(paramsBuffer, 0, p);
+            dispatchX = Math.ceil(numElements / 64);
+        }
+        else if (inst.op === 'scatter') {
+            const numElements = inst.params[0];
+            wgslCode = SCATTER_WGSL;
+            const p = new Uint32Array(28);
+            for (let i = 0; i < inst.params.length; i++)
+                p[i] = inst.params[i];
+            device.queue.writeBuffer(paramsBuffer, 0, p);
+            dispatchX = Math.ceil(numElements / 64);
+        }
+        else if (inst.op === 'dropout') {
+            const numElements = byteLength / 4;
+            const seed = inst.params[0];
+            const p = inst.params[1];
+            wgslCode = DROPOUT_WGSL;
+            const f32arr = new Float32Array([0, seed, p, 0]);
+            const u32arr = new Uint32Array(f32arr.buffer);
+            u32arr[0] = numElements;
+            device.queue.writeBuffer(paramsBuffer, 0, u32arr);
+            dispatchX = Math.ceil(numElements / 64);
+        }
+        else if (inst.op === 'maxpool2d' || inst.op === 'avgpool2d') {
+            const numElements = byteLength / 4;
+            wgslCode = inst.op === 'maxpool2d' ? MAXPOOL2D_WGSL : AVGPOOL2D_WGSL;
+            const p = new Uint32Array(12);
+            for (let i = 0; i < inst.params.length; i++)
+                p[i] = inst.params[i];
+            device.queue.writeBuffer(paramsBuffer, 0, p);
+            dispatchX = Math.ceil(numElements / 64);
+        }
+        else if (inst.op === 'im2col' || inst.op === 'col2im') {
+            const numElements = byteLength / 4;
+            wgslCode = inst.op === 'im2col' ? IM2COL_WGSL : COL2IM_WGSL;
+            const p = new Uint32Array(10);
+            for (let i = 0; i < inst.params.length; i++)
+                p[i] = inst.params[i];
+            device.queue.writeBuffer(paramsBuffer, 0, p);
+            dispatchX = Math.ceil(numElements / 64);
+        }
+        else if (inst.op === 'sum' || inst.op === 'max') {
+            // Handled entirely dynamically below, but we need to bypass normal flow
+            wgslCode = inst.op === 'sum' ? SUM_WGSL : MAX_WGSL;
         }
         else {
             const numElements = byteLength / 4;
             wgslCode = inst.op === 'relu' ? RELU_WGSL :
                 inst.op === 'add' ? ADD_WGSL :
                     inst.op === 'mul' ? MUL_WGSL :
-                        inst.op === 'relu_backward' ? RELU_BACKWARD_WGSL : '';
+                        inst.op === 'sub' ? SUB_WGSL :
+                            inst.op === 'neg' ? NEG_WGSL :
+                                inst.op === 'div' ? DIV_WGSL :
+                                    inst.op === 'relu_backward' ? RELU_BACKWARD_WGSL :
+                                        inst.op === 'exp' ? EXP_WGSL :
+                                            inst.op === 'log' ? LOG_WGSL :
+                                                inst.op === 'sigmoid' ? SIGMOID_WGSL :
+                                                    inst.op === 'tanh' ? TANH_WGSL :
+                                                        inst.op === 'sigmoid_backward' ? SIGMOID_BACKWARD_WGSL :
+                                                            inst.op === 'tanh_backward' ? TANH_BACKWARD_WGSL :
+                                                                inst.op === 'cat' ? CAT_WGSL :
+                                                                    inst.op === 'where' ? WHERE_WGSL :
+                                                                        inst.op === 'dropout' ? DROPOUT_WGSL : '';
             if (!wgslCode) {
-                throw new AMEVATensorSecurityError(`Unknown op "${inst.op}"`);
+                throw new AMEVAForgeSecurityError(`Unknown op "${inst.op}"`);
             }
-            device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([numElements, 0, 0, 0]));
-            dispatchX = Math.ceil(numElements / 64);
+            const totalWorkgroups = Math.ceil(numElements / 64);
+            // TS-C01 Fix: 65535 초과 시 2D 그리드로 분산
+            if (totalWorkgroups <= 65535) {
+                dispatchX = totalWorkgroups;
+                dispatchY = 1;
+            }
+            else {
+                // 2D 분산: sqrt로 균등 분할
+                dispatchX = Math.min(65535, Math.ceil(Math.sqrt(totalWorkgroups)));
+                dispatchY = Math.min(65535, Math.ceil(totalWorkgroups / dispatchX));
+            }
+            device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([numElements, dispatchX, 0, 0, 0, 0, 0, 0]));
+            if (inst.op === 'cat') {
+                if (!inst.params || inst.params.length < 3) {
+                    throw new AMEVAForgeSecurityError(`cat instruction missing params`);
+                }
+                const [a_dim, b_dim, stride] = inst.params;
+                // Overwrite the params for cat
+                device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([numElements, dispatchX, a_dim, b_dim, stride, 0, 0, 0]));
+            }
         }
         const { pipeline } = _globalPipelineCache.getPipeline(inst.op, wgslCode);
-        if (!inst.in || inst.in.length === 0) {
-            throw new AMEVATensorSecurityError(`Instruction op="${inst.op}" is missing 'in' field.`);
+        if (inst.op === 'sum' || inst.op === 'max') {
+            if (!inst.in || inst.in.length === 0) {
+                throw new AMEVAForgeSecurityError(`Instruction op="${inst.op}" is missing 'in' field.`);
+            }
+            const REDUCTION_WG_SIZE = 256;
+            let currentSize = byteLength / 4;
+            let currentInputBuf = idToBuffer[inst.in[0]];
+            const intermediateBuffers = [];
+            // Use a SINGLE command encoder for ALL passes
+            while (currentSize > 1) {
+                const numWGs = Math.ceil(currentSize / REDUCTION_WG_SIZE);
+                const passBuf = device.createBuffer({
+                    size: Math.max(4, numWGs * 4),
+                    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+                });
+                intermediateBuffers.push(passBuf);
+                // To ensure correct params per pass inside the same command encoder, we allocate a new uniform buffer per pass.
+                // (If we rewrite paramsBuffer before submit, it might apply universally)
+                const passParamsBuf = device.createBuffer({
+                    size: 16,
+                    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                });
+                intermediateBuffers.push(passParamsBuf);
+                device.queue.writeBuffer(passParamsBuf, 0, new Uint32Array([currentSize, 0, 0, 0]));
+                const wgsl = inst.op === 'sum' ? SUM_WGSL : MAX_WGSL;
+                const { pipeline: reducePipeline } = _globalPipelineCache.getPipeline(inst.op + '_pass', wgsl);
+                const passEncoder = commandEncoder.beginComputePass();
+                passEncoder.setPipeline(reducePipeline);
+                passEncoder.setBindGroup(0, device.createBindGroup({
+                    layout: reducePipeline.getBindGroupLayout(0),
+                    entries: [
+                        { binding: 0, resource: { buffer: passParamsBuf } },
+                        { binding: 1, resource: { buffer: currentInputBuf } },
+                        { binding: 2, resource: { buffer: passBuf } },
+                    ],
+                }));
+                passEncoder.dispatchWorkgroups(numWGs);
+                passEncoder.end();
+                currentInputBuf = passBuf;
+                currentSize = numWGs;
+            }
+            // Copy final scalar to output buffer
+            commandEncoder.copyBufferToBuffer(currentInputBuf, 0, outBuffer, 0, 4);
+            // Clean up intermediate buffers AFTER submit
+            for (const buf of intermediateBuffers) {
+                paramsBuffersToDestroy.push(buf);
+            }
+            continue; // skip normal dispatch
         }
-        const bindGroupEntries = [
-            { binding: 0, resource: { buffer: paramsBuffer } },
-            { binding: 1, resource: { buffer: idToBuffer[inst.in[0]] } },
-        ];
-        if (inst.in.length > 1) {
-            bindGroupEntries.push({ binding: 2, resource: { buffer: idToBuffer[inst.in[1]] } });
-            bindGroupEntries.push({ binding: 3, resource: { buffer: outBuffer } });
+        if (inst.op !== 'fill' && (!inst.in || inst.in.length === 0)) {
+            throw new AMEVAForgeSecurityError(`Instruction op="${inst.op}" is missing 'in' field.`);
+        }
+        let bindGroupEntries = [];
+        if (inst.op === 'fill') {
+            bindGroupEntries = [
+                { binding: 0, resource: { buffer: paramsBuffer } },
+                { binding: 1, resource: { buffer: outBuffer } },
+            ];
+        }
+        else if (inst.op === 'axpy') {
+            bindGroupEntries = [
+                { binding: 0, resource: { buffer: paramsBuffer } },
+                { binding: 1, resource: { buffer: idToBuffer[inst.in[0]] } },
+                { binding: 2, resource: { buffer: idToBuffer[inst.in[1]] } },
+            ];
+        }
+        else if (inst.op === 'pad') {
+            bindGroupEntries = [
+                { binding: 0, resource: { buffer: paramsBuffer } },
+                { binding: 1, resource: { buffer: idToBuffer[inst.in[0]] } },
+                { binding: 2, resource: { buffer: outBuffer } },
+            ];
+        }
+        else if (inst.op === 'gather' || inst.op === 'scatter') {
+            bindGroupEntries = [
+                { binding: 0, resource: { buffer: paramsBuffer } },
+                { binding: 1, resource: { buffer: idToBuffer[inst.in[0]] } },
+                { binding: 2, resource: { buffer: idToBuffer[inst.in[1]] } },
+                { binding: 3, resource: { buffer: outBuffer } },
+            ];
+        }
+        else if (inst.op === 'where') {
+            bindGroupEntries = [
+                { binding: 0, resource: { buffer: paramsBuffer } },
+                { binding: 1, resource: { buffer: idToBuffer[inst.in[0]] } },
+                { binding: 2, resource: { buffer: idToBuffer[inst.in[1]] } },
+                { binding: 3, resource: { buffer: idToBuffer[inst.in[2]] } },
+                { binding: 4, resource: { buffer: outBuffer } },
+            ];
+        }
+        else if (inst.op === 'dropout') {
+            bindGroupEntries = [
+                { binding: 0, resource: { buffer: paramsBuffer } },
+                { binding: 1, resource: { buffer: idToBuffer[inst.in[0]] } },
+                { binding: 2, resource: { buffer: outBuffer } },
+            ];
         }
         else {
-            bindGroupEntries.push({ binding: 2, resource: { buffer: outBuffer } });
+            bindGroupEntries = [
+                { binding: 0, resource: { buffer: paramsBuffer } },
+                { binding: 1, resource: { buffer: idToBuffer[inst.in[0]] } },
+            ];
+            if (inst.in.length > 1) {
+                bindGroupEntries.push({ binding: 2, resource: { buffer: idToBuffer[inst.in[1]] } });
+                bindGroupEntries.push({ binding: 3, resource: { buffer: outBuffer } });
+            }
+            else {
+                bindGroupEntries.push({ binding: 2, resource: { buffer: outBuffer } });
+            }
         }
         const bindGroup = device.createBindGroup({
             layout: pipeline.getBindGroupLayout(0),
@@ -1288,6 +2548,8 @@ function executeGraph(instructionsJson, jsInputs) {
             const MACS_PER_CHUNK = 2_000_000_000;
             const macsPerRow = N * K;
             let chunkY = Math.max(1, Math.floor(MACS_PER_CHUNK / macsPerRow));
+            // TS-H01 Fix: Ensure Y dispatch does not exceed 65535 workgroups
+            chunkY = Math.min(chunkY, 65535 * 8);
             chunkY = Math.min(M, chunkY);
             for (let offsetY = 0; offsetY < M; offsetY += chunkY) {
                 const currentChunkY = Math.min(chunkY, M - offsetY);
@@ -1295,7 +2557,7 @@ function executeGraph(instructionsJson, jsInputs) {
                 const passEncoder = commandEncoder.beginComputePass();
                 passEncoder.setPipeline(pipeline);
                 passEncoder.setBindGroup(0, bindGroup);
-                passEncoder.dispatchWorkgroups(dispatchX, Math.ceil(currentChunkY / 8));
+                passEncoder.dispatchWorkgroups(dispatchX, Math.ceil(currentChunkY / 8), dispatchZ);
                 passEncoder.end();
                 opsInCurrentBatch++;
                 workloadElements += (dispatchX * currentChunkY * 8 * 8);
@@ -1311,7 +2573,7 @@ function executeGraph(instructionsJson, jsInputs) {
             const passEncoder = commandEncoder.beginComputePass();
             passEncoder.setPipeline(pipeline);
             passEncoder.setBindGroup(0, bindGroup);
-            passEncoder.dispatchWorkgroups(dispatchX, dispatchY);
+            passEncoder.dispatchWorkgroups(dispatchX, dispatchY, dispatchZ);
             passEncoder.end();
             opsInCurrentBatch++;
             workloadElements += byteLength / 4;
@@ -1387,7 +2649,7 @@ function cloneToFloat32Array(input) {
 }
 
 /**
- * pyodideBridge.ts — globalThis.amevaTensor API 등록자
+ * pyodideBridge.ts — globalThis.amevaForge API 등록자
  *
  * H-02 연동: 단일 실행 경로(graphExecutor.ts)로 통합.
  *   executeGraph 시그니처: (instructionsJson: string, jsInputs: unknown) => Record
@@ -1416,18 +2678,18 @@ function registerPyodideBridge() {
         warmupKernels,
         disposeBatch,
     };
-    globalThis.amevaTensor = api;
+    globalThis.amevaForge = api;
     return api;
 }
 
-exports.AMEVATensorDTypeError = AMEVATensorDTypeError;
-exports.AMEVATensorDeviceError = AMEVATensorDeviceError;
-exports.AMEVATensorDisposedError = AMEVATensorDisposedError;
-exports.AMEVATensorError = AMEVATensorError;
-exports.AMEVATensorQuotaExceededError = AMEVATensorQuotaExceededError;
-exports.AMEVATensorSecurityError = AMEVATensorSecurityError;
-exports.AMEVATensorShapeError = AMEVATensorShapeError;
-exports.AMEVATensorWebGPUUnavailableError = AMEVATensorWebGPUUnavailableError;
+exports.AMEVAForgeDTypeError = AMEVAForgeDTypeError;
+exports.AMEVAForgeDeviceError = AMEVAForgeDeviceError;
+exports.AMEVAForgeDisposedError = AMEVAForgeDisposedError;
+exports.AMEVAForgeError = AMEVAForgeError;
+exports.AMEVAForgeQuotaExceededError = AMEVAForgeQuotaExceededError;
+exports.AMEVAForgeSecurityError = AMEVAForgeSecurityError;
+exports.AMEVAForgeShapeError = AMEVAForgeShapeError;
+exports.AMEVAForgeWebGPUUnavailableError = AMEVAForgeWebGPUUnavailableError;
 exports.KERNEL_REGISTRY = KERNEL_REGISTRY;
 exports.QuotaManager = QuotaManager;
 exports.add = add;
@@ -1454,6 +2716,7 @@ exports.mul = mul;
 exports.random = random;
 exports.read = read;
 exports.readMappedInto = readMappedInto;
+exports.registerKernelNames = registerKernelNames;
 exports.registerPyodideBridge = registerPyodideBridge;
 exports.relu = relu;
 exports.relu_backward = relu_backward;
