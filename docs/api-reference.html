@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AMEVA-Forge: API Reference</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>AMEVA-Forge v2.0 Documentation</h1>
+    </header>
+    
+    <div class="container">
+        <nav class="sidebar">
+            <h3>Documentation</h3>
+            <ul>
+                <li><a href="index.html">Home</a></li>
+                <li><a href="installation.html">Installation</a></li>
+                <li><a href="quickstart.html">Quickstart</a></li>
+                <li><a href="api-reference.html"><strong>API Reference</strong></a></li>
+            </ul>
+            <h3>Concepts</h3>
+            <ul>
+                <li><a href="what-is-forge.html">What is Forge?</a></li>
+                <li><a href="forge-vs-pytorch.html">Forge vs PyTorch</a></li>
+            </ul>
+            <h3>Playgrounds</h3>
+            <ul>
+                <li><a href="playgrounds/benchmark.html">Benchmark Playground</a></li>
+                <li><a href="playgrounds/mnist.html">MNIST Playground</a></li>
+            </ul>
+        </nav>
+        
+        <main class="content">
+            <h2>API Reference</h2>
+            <p>This document details the primary public interfaces exposed by AMEVA-Forge v2.0.</p>
+            
+            <h3>Module: <code>forge</code></h3>
+            
+            <h4><code>forge.tensor(data, requires_grad=False, dtype=None)</code></h4>
+            <p>Constructs a Tensor from a Python list or NumPy array.</p>
+            <ul>
+                <li><strong>data</strong>: Array-like object containing numerical data.</li>
+                <li><strong>requires_grad</strong> (bool): If True, operations on this tensor are tracked by the Autograd engine.</li>
+                <li><strong>dtype</strong>: Data type configuration (default: <code>forge.float32</code>).</li>
+            </ul>
+            
+            <h4><code>forge.randn(shape, requires_grad=False)</code></h4>
+            <p>Generates a Tensor populated with values from a standard normal distribution (mean=0, variance=1).</p>
+            
+            <h4><code>forge.zeros(shape)</code> / <code>forge.ones(shape)</code></h4>
+            <p>Generates a Tensor populated exclusively with scalar 0.0 or 1.0 values, respectively.</p>
+
+            <hr>
+
+            <h3>Module: <code>forge.nn</code></h3>
+            <p>Contains layers and loss functions for building neural network architectures.</p>
+            
+            <h4><code>nn.Module</code></h4>
+            <p>Base class for all neural network modules. Custom architectures should inherit from this class and implement the <code>forward()</code> method.</p>
+            
+            <h4><code>nn.Linear(in_features, out_features, bias=True)</code></h4>
+            <p>Applies a linear transformation to the incoming data: <code>y = xA^T + b</code>.</p>
+            
+            <h4><code>nn.ReLU()</code> / <code>nn.Sigmoid()</code> / <code>nn.Tanh()</code></h4>
+            <p>Standard non-linear activation functions.</p>
+
+            <h4><code>nn.MSELoss()</code></h4>
+            <p>Computes the mean squared error between network outputs and empirical targets.</p>
+
+            <hr>
+
+            <h3>Module: <code>forge.optim</code></h3>
+            <p>Implements standard optimization algorithms for gradient descent.</p>
+            
+            <h4><code>optim.SGD(params, lr=0.01)</code></h4>
+            <p>Standard Stochastic Gradient Descent optimization.</p>
+            
+            <h4><code>optim.Adam(params, lr=0.001, betas=(0.9, 0.999))</code></h4>
+            <p>Adaptive Moment Estimation (Adam) optimizer. Recommended for standard deep learning workflows.</p>
+
+        </main>
+    </div>
+    
+    <footer>
+        &copy; 2026 AMEVA AI. All rights reserved. Version 2.0.0.
+    </footer>
+</body>
+</html>

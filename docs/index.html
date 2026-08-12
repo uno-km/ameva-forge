@@ -3,23 +3,31 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="AMEVA-Forge is a PyTorch-like WebGPU training framework for Python and browser environments.">
-    <meta name="keywords" content="AMEVA-Forge, PyTorch, WebGPU, Browser Training, Pyodide, Machine Learning, AI">
+    <meta name="description" content="AMEVA-Forge is a PyTorch-compatible WebGPU deep learning framework.">
     <title>AMEVA-Forge Documentation</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <header>
-        <h1>AMEVA-Forge Documentation</h1>
+        <h1>AMEVA-Forge v2.0 Documentation</h1>
     </header>
     
     <div class="container">
         <nav class="sidebar">
-            <h3>Navigation</h3>
+            <h3>Documentation</h3>
             <ul>
-                <li><a href="index.html">Home</a></li>
+                <li><a href="index.html"><strong>Home</strong></a></li>
+                <li><a href="installation.html">Installation</a></li>
+                <li><a href="quickstart.html">Quickstart</a></li>
+                <li><a href="api-reference.html">API Reference</a></li>
+            </ul>
+            <h3>Concepts</h3>
+            <ul>
                 <li><a href="what-is-forge.html">What is Forge?</a></li>
                 <li><a href="forge-vs-pytorch.html">Forge vs PyTorch</a></li>
+            </ul>
+            <h3>Playgrounds</h3>
+            <ul>
                 <li><a href="playgrounds/benchmark.html">Benchmark Playground</a></li>
                 <li><a href="playgrounds/mnist.html">MNIST Playground</a></li>
             </ul>
@@ -27,37 +35,24 @@
         
         <main class="content">
             <h2>Welcome to AMEVA-Forge</h2>
-            <p><strong>AMEVA-Forge</strong> is a PyTorch-like WebGPU training framework built natively for Python and browser environments via Pyodide.</p>
+            <p><strong>AMEVA-Forge v2.0</strong> is an enterprise-grade deep learning framework engineered for high-performance tensor operations across both native Python environments and modern web browsers via WebGPU.</p>
             
-            <h3>Getting Started</h3>
-            <p>You can use AMEVA-Forge in two primary environments:</p>
-            
-            <h4>1. Browser (Pyodide & WebGPU)</h4>
-            <p>Running deep learning models entirely in the browser without server-side processing.</p>
-            <pre><code>import asyncio
-from forge.device import init
-await init()
-
-import forge as fg
-x = fg.randn((32, 128))
-print(x.shape)</code></pre>
-            <p>See our <a href="playgrounds/benchmark.html">Benchmark Playground</a> for a live interactive demo that automatically fetches and runs remote Python files without user uploads.</p>
-            
-            <h4>2. Python Environment (CPU/NumPy Fallback)</h4>
-            <p>Use standard Python (3.9+) on Windows, Linux, or macOS.</p>
-            <pre><code>pip install ameva-forge</code></pre>
-            
-            <h3>Features</h3>
+            <h3>Core Capabilities</h3>
             <ul>
-                <li><strong>PyTorch-like API</strong>: Familiar API including <code>Tensor</code>, <code>nn.Module</code>, and <code>optim</code>.</li>
-                <li><strong>Autograd</strong>: Fully functional reverse-mode automatic differentiation.</li>
-                <li><strong>Zero-Copy Operations</strong>: Efficient WebGPU memory management.</li>
+                <li><strong>Native PyTorch Compatibility:</strong> Provides a 1:1 identical API surface to PyTorch, enabling zero-friction migration of existing models.</li>
+                <li><strong>Browser Execution:</strong> Empowers deep learning models to run purely client-side utilizing Pyodide and WebGPU without server latency.</li>
+                <li><strong>Autograd Engine:</strong> Implements robust, graph-based automatic differentiation for arbitrary network topologies.</li>
             </ul>
+
+            <h3>Getting Started</h3>
+            <p>Proceed to our <a href="installation.html">Installation Guide</a> to set up AMEVA-Forge in your environment, or explore the <a href="quickstart.html">Quickstart Guide</a> to begin defining computation graphs immediately.</p>
+            
+            <p>To experience the WebGPU integration without local setup, visit the <a href="playgrounds/benchmark.html">Benchmark Playground</a>.</p>
         </main>
     </div>
     
     <footer>
-        &copy; 2026 AMEVA AI. All rights reserved.
+        &copy; 2026 AMEVA AI. All rights reserved. Version 2.0.0.
     </footer>
 </body>
 </html>
