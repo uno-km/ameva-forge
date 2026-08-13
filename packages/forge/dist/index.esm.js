@@ -4028,10 +4028,8 @@ function dispatchKernel(opts) {
      * WHY: GPU 셰이더 내에서 텐서 크기 등의 동적인 파라미터를 읽을 수 있어야 연산이 가능하기 때문입니다.
      * HOW: 최소 16바이트 정렬 크기를 만족하도록 디바이스에서 UNIFORM 용도로 할당합니다.
      */
-    const paramsBuffer = device.createBuffer({
-        size: Math.max(16, opts.paramsData.byteLength), // 최소 16바이트 (WebGPU uniform 정렬)
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
+    const { buffer: paramsBuffer, token: paramsToken } = allocateBuffer(Math.max(16, opts.paramsData.byteLength), // 최소 16바이트 (WebGPU uniform 정렬)
+    GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, 'uniform', `dispatchKernel_${opts.opKey}`);
     device.queue.writeBuffer(paramsBuffer, 0, opts.paramsData.buffer);
     // H-01: 파이프라인 캐시에서 조회 (없으면 컴파일 후 캐시)
     /**
@@ -4079,8 +4077,13 @@ function dispatchKernel(opts) {
     passEncoder.dispatchWorkgroups(opts.dispatchX, opts.dispatchY ?? 1);
     passEncoder.end();
     device.queue.submit([commandEncoder.finish()]);
-    // params 버퍼는 GPU 제출 완료 후 즉시 소각
-    void device.queue.onSubmittedWorkDone().then(() => paramsBuffer.destroy());
+    // params 버퍼는 GPU 제출 완료 후 중앙 allocator를 통해 해제
+    void device.queue.onSubmittedWorkDone().then(() => {
+        try {
+            freeBuffer(paramsBuffer, paramsToken);
+        }
+        catch { }
+    });
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // 개별 op 함수들 (내부 사용, pyodideBridge에서는 executeGraph를 통해서만 접근)
