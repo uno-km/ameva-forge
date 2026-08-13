@@ -1,0 +1,181 @@
+epics:
+  - key: EPIC-R1-01
+    summary: "Release 1 Scope and Governance"
+    description: "Definition of R1 scope, features, and overall readiness."
+  - key: EPIC-R1-02
+    summary: "Critical Security and Runtime Integrity"
+    description: "Address all P0 critical bugs related to WGSL runtime and memory leaks."
+  - key: EPIC-R1-03
+    summary: "Core Tensor Semantics"
+    description: "Core tensor operations, memory upload/readback, shapes, and arithmetic."
+  - key: EPIC-R1-04
+    summary: "Autograd Correctness"
+    description: "Correctness of backpropagation, DAG building, and gradients."
+  - key: EPIC-R1-05
+    summary: "WebGPU Backend Correctness"
+    description: "Correctness of WGSL kernels and GraphExecutor."
+  - key: EPIC-R1-06
+    summary: "GPU Memory Lifecycle and Quota"
+    description: "Track tensor allocations, staging buffers, and release."
+  - key: EPIC-R1-07
+    summary: "Graph Validation and Error Propagation"
+    description: "Ensure invalid graphs fail fast and bubble up to Python."
+  - key: EPIC-R1-08
+    summary: "CPU/GPU Parity and Numerical Testing"
+    description: "Parity between CPU reference and WebGPU."
+  - key: EPIC-R1-09
+    summary: "Browser E2E and CI/CD"
+    description: "E2E testing in browser, playwright integration."
+  - key: EPIC-R1-10
+    summary: "Packaging and Release Engineering"
+    description: "NPM and PyPI packages, build systems."
+  - key: EPIC-R1-11
+    summary: "README and Developer Documentation"
+    description: "Core project documentation for R1."
+  - key: EPIC-R1-12
+    summary: "GitHub Pages and Public Demo"
+    description: "Live playground and technical preview deployment."
+  - key: EPIC-R1-13
+    summary: "Security Documentation and Supply Chain"
+    description: "Supply chain security, CSP, and SECURITY.md."
+  - key: EPIC-R1-14
+    summary: "Performance and Benchmarking"
+    description: "Performance metrics and limitations."
+  - key: EPIC-R1-15
+    summary: "Release 1 Final Verification"
+    description: "Release gate and final acceptance testing."
+
+issues:
+  - id: ameva-r1-p0-001
+    type: Bug
+    epic: EPIC-R1-02
+    summary: "ops.py 코드 오염 및 중복 정의 회귀 방지"
+    labels: ["release-1", "release-blocker", "p0", "area-python", "severity-critical", "security"]
+    description: |
+      h1. 개요
+      ops.py에 존재하는 SliceFunction, ScatterFunction 중복 정의와 회귀 오염 제거 확인
+
+      h1. 사용자 영향
+      예기치 않은 CPU backward NameError 및 잘못된 gradient 발생.
+
+      h1. 현재 동작
+      ops.py에 중복 클래스가 존재했음.
+
+      h1. 기대 동작
+      중복 없는 단일 정의 및 정상 슬라이스 지원.
+
+      h1. 근거
+      ops.py 코드
+
+      h1. 영향 파일 및 symbol
+      ops.py, SliceFunction, ScatterFunction
+
+      h1. 재현 절차
+      1. x = at.tensor([[1,2,3],[4,5,6]], requires_grad=True)
+      2. y = x[0]
+      3. y.sum().backward()
+
+      h1. 기술 원인
+      과거 merge 과정에서의 코드 오염.
+
+      h1. 수정 범위
+      ops.py의 중복 클래스 및 함수 제거.
+
+      h1. 구현 제약
+      GPU Slice는 명시적 거부 처리 유지.
+
+      h1. 보안 고려사항
+      잘못된 메모리 참조 방지.
+
+      h1. 테스트 요구사항
+      AST duplicate symbol 검사 및 CPU slice backward 재현.
+
+      h1. Acceptance Criteria
+      - 중복 심볼 없음
+      - x[0] backward 성공
+
+      h1. Definition of Done
+      - [x] 원인이 제거됨
+      - [x] Unit test 통과
+      - [x] PR Review
+
+      h1. 선행 작업
+      없음
+
+      h1. 종속 작업
+      없음
+
+      h1. Release 1 영향
+      Blocker
+
+      h1. 제외 사항
+      GPU Slice 커널 작성은 이번 이슈에서 제외.
+
+      h1. 위험 및 rollback
+      ops.py rollback
+
+      h1. Evidence 링크
+      N/A
+
+  - id: ameva-r1-p0-002
+    type: Bug
+    epic: EPIC-R1-02
+    summary: "GPU reshape graph contract 확정 및 수정"
+    labels: ["release-1", "release-blocker", "p0", "area-webgpu", "severity-critical"]
+    description: |
+      h1. 개요
+      GPU 상에서 reshape 시 tensor handle 소유권 및 dispose 로직 확정.
+
+      h1. 사용자 영향
+      메모리 누수 또는 런타임 OOM.
+
+      h1. 현재 동작
+      reshape 시 metadata-only인지 실제 복사인지 모호.
+
+      h1. 기대 동작
+      별도 metadata를 통해 view로 관리되거나 완벽한 복사가 이루어짐.
+      
+      (기타 필수 항목 생략 - 스크립트에서 자동 보완)
+      
+  - id: ameva-r1-p0-003
+    type: Bug
+    epic: EPIC-R1-02
+    summary: "sum 다단계 reduction 구현"
+    labels: ["release-1", "release-blocker", "p0", "area-wgsl", "severity-critical"]
+    description: |
+      h1. 개요
+      다단계 WGSL reduction 커널 적용.
+      
+  - id: ameva-r1-doc-001
+    type: Task
+    epic: EPIC-R1-11
+    summary: "프로젝트 한 문장 정의 및 대상 사용자 명확화"
+    labels: ["release-1", "area-documentation", "p1"]
+    description: |
+      h1. 개요
+      README 상단의 프로젝트 정의 문구 확립.
+      
+  - id: ameva-r1-gate-001
+    type: Story
+    epic: EPIC-R1-15
+    summary: "[RELEASE GATE] AMEVA-Forge Release 1 Public Technical Preview"
+    labels: ["release-1", "release-blocker", "p0", "area-testing"]
+    description: |
+      h1. 개요
+      Release 1 배포 여부를 결정하는 최종 Gate.
+      
+      h1. Acceptance Criteria
+      - P0 Open 0건
+      - Critical Open 0건
+      - High release-blocker Open 0건
+      - Core CPU tests 100% 통과
+      - Browser MLP acceptance 통과
+      
+  - id: ameva-r1-mlp-001
+    type: Story
+    epic: EPIC-R1-15
+    summary: "[R1 Acceptance] Browser Pyodide WebGPU 2-Layer MLP Training"
+    labels: ["release-1", "release-blocker", "p0", "browser-e2e-required"]
+    description: |
+      h1. 개요
+      브라우저 환경에서 2-Layer MLP 훈련 E2E 성공 여부 확인.

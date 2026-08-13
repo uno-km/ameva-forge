@@ -1,6 +1,7 @@
 import { _globalRegistry } from "../src/tensor/tensorRegistry";
 import { AMEVAForgeDisposedError } from "../src/errors";
 import * as buffers from "../src/webgpu/buffers";
+import { AllocationToken } from "../src/webgpu/quota";
 
 // Mock the webgpu buffers freeBuffer so we don't try to access navigator.gpu in tests
 jest.mock("../src/webgpu/buffers", () => ({
@@ -13,12 +14,15 @@ describe("TensorRegistry", () => {
     jest.clearAllMocks();
   });
 
+  const dummyToken = new AllocationToken("test", 16, "tensor", null, 0);
+
   it("register and get normally", () => {
     const handle = _globalRegistry.register({
       shape: [2, 2],
       dtype: "float32",
       byteLength: 16,
-      buffer: {} as GPUBuffer
+      buffer: {} as GPUBuffer,
+      token: dummyToken
     });
     const record = _globalRegistry.get(handle);
     expect(record.handle).toBe(handle);
@@ -34,7 +38,8 @@ describe("TensorRegistry", () => {
       shape: [2, 2],
       dtype: "float32",
       byteLength: 16,
-      buffer: {} as GPUBuffer
+      buffer: {} as GPUBuffer,
+      token: dummyToken
     });
     _globalRegistry.dispose(handle);
     expect(() => _globalRegistry.get(handle)).toThrow(AMEVAForgeDisposedError);
@@ -45,7 +50,8 @@ describe("TensorRegistry", () => {
       shape: [2, 2],
       dtype: "float32",
       byteLength: 16,
-      buffer: {} as GPUBuffer
+      buffer: {} as GPUBuffer,
+      token: dummyToken
     });
     _globalRegistry.dispose(handle);
     // Disposing twice should not throw
@@ -53,13 +59,16 @@ describe("TensorRegistry", () => {
   });
 
   it("clear normally", () => {
+    const destroyMock = jest.fn();
     _globalRegistry.register({
       shape: [2, 2],
       dtype: "float32",
       byteLength: 16,
-      buffer: {} as GPUBuffer
+      buffer: { destroy: destroyMock } as unknown as GPUBuffer,
+      token: dummyToken
     });
     _globalRegistry.clear();
-    expect(buffers.freeBuffer).toHaveBeenCalledTimes(1);
+    // When device is not present, it calls _safeDestroyBuffer which calls buffer.destroy()
+    expect(destroyMock).toHaveBeenCalledTimes(1);
   });
 });

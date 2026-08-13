@@ -26,6 +26,7 @@ export function allocateBuffer(
   kind: AllocationKind = 'tensor',
   ownerGraph: string | null = null
 ): { buffer: GPUBuffer, token: AllocationToken } {
+  console.log("allocateBuffer called with byteLength:", byteLength, "kind:", kind);
   const token = _globalQuotaManager.reserveToken(byteLength, kind, ownerGraph);
   try {
     const buffer = getDevice().createBuffer({ size: byteLength, usage });

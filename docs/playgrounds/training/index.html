@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AMEVA-Forge: Training Demo</title>
+    <link rel="stylesheet" href="../../style.css">
+    <style>
+
+        button { padding: 5px 15px; border: 1px solid #003399; background: #f4f4f4; cursor: pointer; margin-right: 10px; font-weight: bold;}
+        button.extreme { border-color: #d32f2f; color: #d32f2f; }
+        button:hover { background: #e0e0e0; }
+        .log-box { background: #f8f8f8; border: 1px solid #ddd; padding: 15px; min-height: 400px; overflow-y: auto; font-family: Consolas, monospace; font-size: 0.9em; margin-top:20px; }
+        #loadingOverlay {
+            position: fixed; top:0; left:0; right:0; bottom:0;
+            background: rgba(255, 255, 255, 0.95);
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 1000;
+        }
+        .hidden { display: none !important; }
+
+    </style>
+</head>
+<body>
+    <header>
+        <h1>AMEVA-Forge: Training Demo</h1>
+    </header>
+    
+    <div class="container">
+<nav class="sidebar">
+    <h3>Navigation</h3>
+    <ul>
+        <li><a href="../../index.html">Home</a></li>
+        <li><a href="../../what-is-forge.html">What is Forge?</a></li>
+        <li><a href="../../forge-vs-pytorch.html">Forge vs PyTorch</a></li>
+        <li><a href="../mnist/index.html">1. MNIST Inference</a></li>
+        <li><a href="../benchmark/index.html">2. Benchmark Test</a></li>
+        <li><a href="../training/index.html"><strong>3. Training Demo</strong></a></li>
+        <li><a href="../vision/index.html">4. Vision Center</a></li>
+    </ul>
+</nav>
+        
+        <main class="content">
+
+            <h2>3. WebGPU Real-time Training Demo</h2>
+            <p>Select a scale to train entirely within your browser utilizing WebGPU acceleration. No server processing is involved.</p>
+            <div style="margin-bottom: 20px;">
+                <button onclick="runTraining('low')">Low Capacity (XOR)</button>
+                <button onclick="runTraining('medium')">Medium Capacity (MLP)</button>
+                <button class="extreme" onclick="runTraining('extreme')">Extreme Capacity (VRAM Crusher)</button>
+            </div>
+            <h3>Training Log Console</h3>
+            <div class="log-box" id="logBox">System idle. Waiting for task...</div>
+            
+            <div id="loadingOverlay">
+                <h1 style="color: #003399;">Loading WebGPU Training Environment...</h1>
+                <h2 id="loadingText">Initializing Pyodide...</h2>
+            </div>
+
+        </main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+    <script>var exports = {};</script>
+    <script src="../../../packages/forge/dist/index.js"></script>
+    <script>
+        if (exports.registerPyodideBridge) {
+            exports.registerPyodideBridge();
+        } else if (typeof registerPyodideBridge !== 'undefined') {
+            registerPyodideBridge();
+        }
+
+        let pyodide = null;
+        let isTraining = false;
+        
+        window.log = function(msg) {
+            const box = document.getElementById('logBox');
+            box.innerText += "\n" + msg;
+            box.scrollTop = box.scrollHeight;
+        };
+
+        async function initDashboard() {
+            try {
+                const adapter = await navigator.gpu.requestAdapter();
+                if (!adapter) throw new Error("No WebGPU adapter found");
+
+                pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.0/full/" });
+                await pyodide.loadPackage("micropip");
+                const micropip = pyodide.pyimport("micropip");
+                
+                await micropip.install("../../../packages/forge-py/dist/forge-2.0.0-py3-none-any.whl");
+                
+                await pyodide.runPythonAsync(`
+import sys
+from js import log
+class WebConsole:
+    def write(self, msg): 
+        if msg.strip(): log(msg.strip())
+    def flush(self): pass
+sys.stdout = WebConsole()
+import forge as fg
+import forge.nn as nn
+import time
+import asyncio
+log("Pyodide Engine Ready!")
+                `);
+                
+                document.getElementById('loadingOverlay').classList.add('hidden');
+            } catch (e) {
+                document.getElementById('loadingText').innerText = "FATAL ERROR: " + e.message;
+            }
+        }
+
+        async function runTraining(mode) {
+            if(!pyodide) return;
+            if(isTraining) return;
+            isTraining = true;
+            document.getElementById('logBox').innerText = "--- Starting " + mode.toUpperCase() + " Training ---";
+            
+            let code = "";
+            if (mode === 'low') {
+                code = `
+async def train():
+    log("Initializing XOR Dataset...")
+    import numpy as np
+    x = fg.tensor(np.array([[0,0],[0,1],[1,0],[1,1]], dtype=np.float32))
+    y = fg.tensor(np.array([[0],[1],[1],[0]], dtype=np.float32))
+    model = nn.Sequential(nn.Linear(2, 4), nn.ReLU(), nn.Linear(4, 1), nn.Sigmoid())
+    opt = fg.optim.SGD(model.parameters(), lr=0.1)
+
+    for epoch in range(1, 51):
+        opt.zero_grad()
+        pred = model(x)
+        loss = fg.F.mse_loss(pred, y)
+        loss.backward()
+        opt.step()
+        if epoch % 10 == 0:
+            log(f"Epoch {epoch}/50 | Loss: {loss.numpy().item():.4f}")
+        await asyncio.sleep(0.01)
+    log("XOR Training Complete!")
+await train()
+`;
+            } else if (mode === 'medium') {
+                code = `
+async def train():
+    log("Generating Synthetic 1000x20 Dataset...")
+    import numpy as np
+    x = fg.tensor(np.random.randn(1000, 20).astype(np.float32))
+    y = fg.tensor(np.random.randn(1000, 1).astype(np.float32))
+    model = nn.Sequential(nn.Linear(20, 64), nn.ReLU(), nn.Linear(64, 32), nn.ReLU(), nn.Linear(32, 1))
+    opt = fg.optim.SGD(model.parameters(), lr=0.01)
+
+    t0 = time.time()
+    for epoch in range(1, 101):
+        opt.zero_grad()
+        pred = model(x)
+        loss = fg.F.mse_loss(pred, y)
+        loss.backward()
+        opt.step()
+        if epoch % 20 == 0:
+            log(f"Epoch {epoch}/100 | Loss: {loss.numpy().item():.4f} | Time: {time.time()-t0:.2f}s")
+        await asyncio.sleep(0.01)
+    log("Medium MLP Training Complete!")
+await train()
+`;
+            } else if (mode === 'extreme') {
+                code = `
+async def train():
+    log("WARNING: EXTREME VRAM CRUSHER INITIATED")
+    log("Allocating 4096x4096x3 tensors on GPU...")
+    import numpy as np
+    try:
+        for i in range(1, 6):
+            t0 = time.time()
+            a = fg.tensor(np.random.randn(4096, 4096).astype(np.float32))
+            b = fg.tensor(np.random.randn(4096, 4096).astype(np.float32))
+            c = fg.tensor(np.random.randn(4096, 4096).astype(np.float32))
+            res = (a @ b) + c
+            val = res.mean().numpy()
+            log(f"Iteration {i}/5 | Matrix size: 16M params | Time: {time.time()-t0:.2f}s | Checksum: {val.item():.2f}")
+            await asyncio.sleep(0.01)
+        log("Extreme VRAM benchmark survived!")
+    except Exception as e:
+        log(f"CRASH: {str(e)}")
+await train()
+`;
+            }
+            
+            try {
+                await pyodide.runPythonAsync(code);
+            } catch(e) {
+                window.log("ERROR: " + e.message);
+            }
+            isTraining = false;
+        }
+        initDashboard();
+
+    </script>
+</body>
+</html>

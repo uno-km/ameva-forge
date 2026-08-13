@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AMEVA-Forge: Benchmark Dashboard</title>
+    <link rel="stylesheet" href="../../style.css">
+    <style>
+        .dashboard-container { display: flex; flex-direction: row; gap: 20px; margin-top: 20px; }
+        .panel { border: 1px solid #ccc; background: #fff; padding: 15px; border-radius: 4px; flex: 1; }
+        .panel-header { font-weight: bold; color: #003399; margin-top: 0; border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 15px; }
+        .file-list { list-style: none; padding: 0; margin: 0; max-height: 65vh; overflow-y: auto; }
+        .file-item { padding: 8px 10px; border-bottom: 1px solid #eee; cursor: pointer; color: #333; }
+        .file-item:hover { background-color: #f4f4f4; color: #003399; font-weight: bold; }
+        
+        .center-stage { flex: 2; display: flex; flex-direction: column; gap: 15px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
+        .stat-box { background: #f9f9f9; border: 1px solid #ddd; padding: 15px; text-align: center; border-radius: 4px; }
+        .stat-value { font-size: 1.5em; font-weight: bold; color: #333; }
+        .stat-label { font-size: 0.85em; color: #666; margin-top: 5px; text-transform: uppercase; }
+        
+        .console { background: #f8f8f8; border: 1px solid #ddd; padding: 15px; flex: 1; min-height: 60vh; overflow-y: auto; font-family: Consolas, monospace; font-size: 0.9em; outline: none; }
+        .console:focus { border-color: #003399; box-shadow: 0 0 5px rgba(0,51,153,0.3); }
+        .log-entry { margin: 2px 0; white-space: pre-wrap; line-height: 1.4; color: #333; }
+        .log-entry.error { color: #d32f2f; }
+        .log-entry.success { color: #2e7d32; }
+        .log-entry.system { color: #003399; font-weight: bold; }
+        .timestamp { color: #888; font-size: 0.85em; margin-right: 8px; }
+
+        #loadingOverlay {
+            position: fixed; top:0; left:0; right:0; bottom:0;
+            background: rgba(255, 255, 255, 0.95);
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 1000; color: #333; font-family: Arial, sans-serif;
+        }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <div id="loadingOverlay">
+        <h1 style="color: #003399;">AMEVA-Forge Environment</h1>
+        <h2 id="loadingText">Initializing Pyodide and WebGPU...</h2>
+    </div>
+
+    <header>
+        <h1>AMEVA-Forge: Benchmark Dashboard</h1>
+    </header>
+    
+    <div class="container">
+        <nav class="sidebar">
+            <h3>Navigation</h3>
+            <ul>
+                <li><a href="../../index.html">Home</a></li>
+                <li><a href="../../what-is-forge.html">What is Forge?</a></li>
+                <li><a href="../../forge-vs-pytorch.html">Forge vs PyTorch</a></li>
+                <li><a href="../mnist/index.html">1. MNIST Inference</a></li>
+                <li><a href="../benchmark/index.html"><strong>2. Benchmark Test</strong></a></li>
+                <li><a href="../training/index.html">3. Training Demo</a></li>
+                <li><a href="../vision/index.html">4. Vision Center</a></li>
+            </ul>
+        </nav>
+        
+        <main class="content">
+            <h2>Browser Execution Environment</h2>
+            <p>Select a test file from the left to execute Python validation scripts entirely in the browser using Pyodide and WebGPU.</p>
+
+            <div class="dashboard-container">
+                <div class="panel">
+                    <h3 class="panel-header">Test Suite</h3>
+                    <ul class="file-list" id="testList"></ul>
+                </div>
+
+                <div class="center-stage">
+                    <div class="stats-grid">
+                        <div class="stat-box">
+                            <div class="stat-value" id="valStatus">IDLE</div>
+                            <div class="stat-label">System Status</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-value" id="valTime">0.000s</div>
+                            <div class="stat-label">Execution Time</div>
+                        </div>
+                        <div class="stat-box">
+                            <div class="stat-value" id="valMem">--</div>
+                            <div class="stat-label">Peak Memory (Est.)</div>
+                        </div>
+                    </div>
+                    <div class="panel" style="display:flex; flex-direction:column; flex:1;">
+                        <h3 class="panel-header" id="arenaTitle">Console Output</h3>
+                        <div class="console" id="reportBoard" tabindex="0"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+    <script>var exports = {};</script>
+    <script src="../../../packages/forge/dist/index.js"></script>
+    <script>
+        // Use global API if registered
+        if (exports.registerPyodideBridge) {
+            exports.registerPyodideBridge();
+        } else if (typeof registerPyodideBridge !== 'undefined') {
+            registerPyodideBridge();
+        }
+
+        let pyodide = null;
+        let currentLogs = [];
+
+        function setStat(id, val, color) {
+            const el = document.getElementById(id);
+            el.innerText = val;
+            if(color) el.style.color = color;
+        }
+
+        window.log = function(msg, type='info') {
+            const ts = new Date().toISOString().split('T')[1].slice(0, -1);
+            const rawLog = `[${ts}] ${msg}`;
+            currentLogs.push(rawLog);
+
+            const p = document.createElement('div');
+            p.className = `log-entry ${type}`;
+            
+            const span = document.createElement('span');
+            span.className = 'timestamp';
+            span.textContent = `[${ts}]`;
+            
+            p.appendChild(span);
+            p.appendChild(document.createTextNode(` ${msg}`));
+            
+            const board = document.getElementById('reportBoard');
+            board.appendChild(p);
+            board.scrollTop = board.scrollHeight;
+
+            if(msg.includes("Zero-Copy readback time")) {
+                const parts = msg.split(': ');
+                if(parts.length > 1) setStat('valTime', parts[1].replace('s', '') + 's', '#2e7d32');
+            }
+            if(msg.includes("MB")) {
+                const match = msg.match(/~?(\d+ MB)/);
+                if(match) setStat('valMem', match[1], '#003399');
+            }
+        }
+
+        function clearConsole() {
+            document.getElementById('reportBoard').innerHTML = '';
+            currentLogs = [];
+            setStat('valTime', '0.000s', '#333');
+            setStat('valMem', '--', '#333');
+        }
+
+        document.getElementById('reportBoard').addEventListener('keydown', function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+                e.preventDefault();
+                const range = document.createRange();
+                range.selectNodeContents(this);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+        });
+
+        async function initDashboard() {
+            try {
+                if (!navigator.gpu) {
+                    document.getElementById('loadingText').innerText = "FATAL: WebGPU is not supported in this browser. Use Chrome 113+ or Edge 113+.";
+                    return;
+                }
+                const adapter = await navigator.gpu.requestAdapter();
+                if (!adapter) {
+                    document.getElementById('loadingText').innerText = "FATAL: No WebGPU adapter found.";
+                    return;
+                }
+                window.log(`WebGPU adapter ready: ${adapter.info?.device || 'unknown'}`, 'info');
+
+                if (!globalThis.amevaForge) {
+                    document.getElementById('loadingText').innerText = "FATAL: amevaForge bridge not registered. Check script paths.";
+                    return;
+                }
+
+                pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.0/full/" });
+                await pyodide.loadPackage("micropip");
+                const micropip = pyodide.pyimport("micropip");
+                
+                // Load Python package from remote or local relative path
+                await micropip.install("../../../packages/forge-py/dist/forge-2.0.0-py3-none-any.whl");
+                
+                document.getElementById('loadingOverlay').classList.add('hidden');
+                
+                pyodide.runPython(`
+import sys
+from js import log
+class WebConsole:
+    def write(self, msg):
+        if msg.strip(): log(msg.strip(), 'info')
+    def flush(self): pass
+sys.stdout = WebConsole()
+sys.stderr = WebConsole()
+                `);
+
+                refreshTests();
+            } catch (e) {
+                document.getElementById('loadingText').innerText = "FATAL ERROR: " + e.message;
+                console.error(e);
+            }
+        }
+
+        async function refreshTests() {
+            try {
+                // Fetch the list of tests from GitHub API
+                const repoApi = "https://api.github.com/repos/uno-km/ameva-forge/contents/packages/forge-py/tests";
+                const res = await fetch(repoApi);
+                if (!res.ok) throw new Error("GitHub API failed: " + res.statusText);
+                
+                const files = await res.json();
+                const tests = files.map(f => f.name).filter(n => n.startsWith("test_") && n.endsWith(".py"));
+                
+                // Fetch report_generator.py from GitHub and write to Pyodide FS
+                const rgUrl = "https://raw.githubusercontent.com/uno-km/ameva-forge/main/packages/forge-py/tests/report_generator.py";
+                const rgRes = await fetch(rgUrl);
+                if (rgRes.ok) {
+                    const rgCode = await rgRes.text();
+                    pyodide.FS.writeFile("/home/pyodide/report_generator.py", rgCode);
+                }
+                
+                const list = document.getElementById('testList');
+                list.innerHTML = '';
+                tests.forEach(f => {
+                    const li = document.createElement('li');
+                    li.className = 'file-item';
+                    li.innerText = '📄 ' + f;
+                    li.ondblclick = () => runTestFile(f);
+                    list.appendChild(li);
+                });
+            } catch (e) {
+                console.error("Failed to dynamically load tests from GitHub:", e);
+                window.log("Failed to load test list from GitHub API.", "error");
+            }
+        }
+
+        async function runTestFile(filename) {
+            if(!pyodide) return;
+            clearConsole();
+            setStat('valStatus', 'RUNNING', '#d32f2f');
+            window.log(`--- Executing: ${filename} (from GitHub) ---`, 'system');
+
+            try {
+                // Download the specific test file from GitHub
+                const rawUrl = \`https://raw.githubusercontent.com/uno-km/ameva-forge/main/packages/forge-py/tests/\${filename}\`;
+                const codeRes = await fetch(rawUrl);
+                if (!codeRes.ok) throw new Error("Failed to load test file from GitHub: " + codeRes.status);
+                const pythonCode = await codeRes.text();
+                
+                // Strip __file__ usage which breaks Pyodide
+                const safeCode = pythonCode
+                    .replace(/unittest\.main\(\)/g, "pass")
+                    .replace(/unittest\.IsolatedAsyncioTestCase/g, "unittest.TestCase")
+                    .replace(/.*__file__.*/g, ""); 
+                
+                const runnerCode = \`
+import unittest
+import sys
+import asyncio
+import time
+import traceback
+import types
+
+__file__ = "browser_test.py"
+
+for _k, _v in list(globals().items()):
+    if isinstance(_v, type) and issubclass(_v, unittest.TestCase):
+        del globals()[_k]
+
+\${safeCode}
+
+async def _run_tests_in_browser():
+    test_classes = [v for k, v in globals().items() if k.startswith('Test') and isinstance(v, type) and issubclass(v, unittest.TestCase)]
+    total = passed = 0
+    
+    for cls in test_classes:
+        print(f"\\nExecuting: {cls.__name__}")
+        for attr in dir(cls):
+            if attr.startswith('test_') and callable(getattr(cls, attr)):
+                total += 1
+                instance = cls(methodName=attr)
+                
+                if hasattr(instance, 'asyncSetUp'):
+                    res = getattr(instance, 'asyncSetUp')()
+                    if asyncio.iscoroutine(res): await res
+                elif hasattr(instance, 'setUp'):
+                    instance.setUp()
+                    
+                func = getattr(instance, attr)
+                t0 = time.time()
+                try:
+                    res = func()
+                    if asyncio.iscoroutine(res): await res
+                    print(f"✅ {attr} passed in {time.time()-t0:.3f}s")
+                    passed += 1
+                except Exception as e:
+                    print(f"❌ {attr} FAILED\\n")
+                    traceback.print_exc()
+                    
+                if hasattr(instance, 'asyncTearDown'):
+                    res = getattr(instance, 'asyncTearDown')()
+                    if asyncio.iscoroutine(res): await res
+                elif hasattr(instance, 'tearDown'):
+                    instance.tearDown()
+
+    print(f"\\nRan {total} tests. Passed: {passed}, Failed: {total - passed}")
+
+await _run_tests_in_browser()
+\`;
+                await pyodide.runPythonAsync(runnerCode);
+                window.log(\`--- Execution Complete ---\`, 'success');
+            } catch(e) {
+                window.log(\`FATAL ERROR: \${e.message}\`, 'error');
+            }
+            
+            setStat('valStatus', 'IDLE', '#333');
+        }
+
+        initDashboard();
+    </script>
+</body>
+</html>

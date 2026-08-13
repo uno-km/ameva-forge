@@ -1,4 +1,4 @@
-# Node.js
+﻿# Node.js
 node_modules/
 npm-debug.log*
 yarn-debug.log*
@@ -42,7 +42,16 @@ mnist_weights.json
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
+*.class
 venv/
 scripts/venv/
 .pytest_cache/
+
+# Benchmark Reports & Dev Scripts
+docs/tests/results/
+scripts/
+
+# Temporary Logs and Exports
+.temp_logs/
+scripts/codes/
+packages/forge/test-results/

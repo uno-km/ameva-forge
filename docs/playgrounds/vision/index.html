@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AMEVA-Forge: Vision Center</title>
+    <link rel="stylesheet" href="../../style.css">
+    <style>
+
+        .vision-container { display: flex; gap: 20px; margin-top: 20px; }
+        .canvas-box { border: 1px solid #ccc; padding: 10px; background: #f9f9f9; text-align: center; }
+        canvas { border: 1px solid #000; width: 300px; height: 300px; }
+        .controls { display: flex; flex-direction: column; gap: 10px; justify-content: center; }
+        button { padding: 10px; border: 1px solid #003399; background: #f4f4f4; cursor: pointer; font-weight: bold;}
+        button:hover { background: #e0e0e0; }
+        #loadingOverlay {
+            position: fixed; top:0; left:0; right:0; bottom:0;
+            background: rgba(255, 255, 255, 0.95);
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 1000;
+        }
+        .hidden { display: none !important; }
+
+    </style>
+</head>
+<body>
+    <header>
+        <h1>AMEVA-Forge: Vision Center</h1>
+    </header>
+    
+    <div class="container">
+<nav class="sidebar">
+    <h3>Navigation</h3>
+    <ul>
+        <li><a href="../../index.html">Home</a></li>
+        <li><a href="../../what-is-forge.html">What is Forge?</a></li>
+        <li><a href="../../forge-vs-pytorch.html">Forge vs PyTorch</a></li>
+        <li><a href="../mnist/index.html">1. MNIST Inference</a></li>
+        <li><a href="../benchmark/index.html">2. Benchmark Test</a></li>
+        <li><a href="../training/index.html">3. Training Demo</a></li>
+        <li><a href="../vision/index.html"><strong>4. Vision Center</strong></a></li>
+    </ul>
+</nav>
+        
+        <main class="content">
+
+            <h2>4. Vision Center (WebGPU Image Filter)</h2>
+            <p>Demonstrates true matrix convolution (<code>at.conv2d</code>) processing on raw image pixels using AMEVA-Forge.</p>
+            
+            <div class="vision-container">
+                <div class="canvas-box">
+                    <h3>Input Image</h3>
+                    <canvas id="canvasIn" width="300" height="300"></canvas>
+                </div>
+                <div class="controls">
+                    <button onclick="applyFilter('invert')">Apply Color Invert (WebGPU)</button>
+                    <button onclick="applyFilter('edge')">Apply Edge Detection (Conv2d)</button>
+                    <button onclick="alert('Stable Diffusion Model weights (1.5B) missing. Need external hosting to load.')">Generate Image (1.5B)</button>
+                </div>
+                <div class="canvas-box">
+                    <h3>WebGPU Output</h3>
+                    <canvas id="canvasOut" width="300" height="300"></canvas>
+                </div>
+            </div>
+            
+            <div id="loadingOverlay">
+                <h1 style="color: #003399;">Loading Vision Environment...</h1>
+                <h2 id="loadingText">Initializing Pyodide...</h2>
+            </div>
+
+        </main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+    <script>var exports = {};</script>
+    <script src="../../../packages/forge/dist/index.js"></script>
+    <script>
+        if (exports.registerPyodideBridge) {
+            exports.registerPyodideBridge();
+        } else if (typeof registerPyodideBridge !== 'undefined') {
+            registerPyodideBridge();
+        }
+
+        let pyodide = null;
+        const ctxIn = document.getElementById('canvasIn').getContext('2d');
+        const ctxOut = document.getElementById('canvasOut').getContext('2d');
+
+        // Draw a dummy shape for vision test
+        ctxIn.fillStyle = "#ffffff";
+        ctxIn.fillRect(0,0,300,300);
+        ctxIn.fillStyle = "#003399";
+        ctxIn.fillRect(50,50,200,200);
+        ctxIn.fillStyle = "#ff0000";
+        ctxIn.beginPath();
+        ctxIn.arc(150, 150, 80, 0, 2*Math.PI);
+        ctxIn.fill();
+
+        async function initDashboard() {
+            try {
+                const adapter = await navigator.gpu.requestAdapter();
+                if (!adapter) throw new Error("No WebGPU adapter found");
+
+                pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.0/full/" });
+                await pyodide.loadPackage("micropip");
+                const micropip = pyodide.pyimport("micropip");
+                
+                await micropip.install("../../../packages/forge-py/dist/forge-2.0.0-py3-none-any.whl");
+                
+                await pyodide.runPythonAsync(`
+import sys
+class WebConsole:
+    def write(self, msg): pass
+    def flush(self): pass
+sys.stdout = WebConsole()
+sys.stderr = WebConsole()
+
+import forge as fg
+import numpy as np
+                `);
+                
+                document.getElementById('loadingOverlay').classList.add('hidden');
+            } catch (e) {
+                document.getElementById('loadingText').innerText = "FATAL ERROR: " + e.message;
+            }
+        }
+
+        async function applyFilter(type) {
+            if(!pyodide) return;
+            const imgData = ctxIn.getImageData(0,0,300,300);
+            
+            // Send raw RGB data to Python (skip alpha)
+            const arr = new Float32Array(300*300*3);
+            for(let i=0; i<300*300; i++) {
+                arr[i*3] = imgData.data[i*4] / 255.0;
+                arr[i*3+1] = imgData.data[i*4+1] / 255.0;
+                arr[i*3+2] = imgData.data[i*4+2] / 255.0;
+            }
+            
+            pyodide.globals.set("img_data", Array.from(arr));
+            pyodide.globals.set("f_type", type);
+            
+            await pyodide.runPythonAsync(`
+import forge as fg
+import forge.nn as nn
+import numpy as np
+
+# Convert raw RGB pixels to (N, C, H, W) format (1, 3, 300, 300)
+rgb_pixels = fg.tensor(np.array(img_data, dtype=np.float32).reshape(1, 3, 300, 300))
+
+# WebGPU Grayscale Conversion: Average across the color channel (C=3)
+# We can do this via channel averaging or 1x1 convolution
+# A simple way is to average the 3 channels manually if mean_axis isn't ready
+r = rgb_pixels[:, 0:1, :, :]
+g = rgb_pixels[:, 1:2, :, :]
+b = rgb_pixels[:, 2:3, :, :]
+pixels = (r + g + b) / 3.0  # Resulting shape: (1, 1, 300, 300)
+
+if f_type == 'invert':
+    # True WebGPU matrix mathematics using 1x1 Conv2d to invert
+    conv = nn.Conv2d(1, 1, kernel_size=1, padding=0, bias=True)
+    conv.weight = fg.tensor(np.array([-1.0], dtype=np.float32).reshape(1, 1, 1, 1))
+    conv.bias = fg.tensor(np.array([1.0], dtype=np.float32))
+    out_pixels = conv(pixels)
+else:
+    # True WebGPU Edge Detection (Laplacian Filter) using 3x3 Conv2d
+    kernel = np.array([
+        [-1, -1, -1],
+        [-1,  8, -1],
+        [-1, -1, -1]
+    ], dtype=np.float32).reshape(1, 1, 3, 3)
+    
+    conv = nn.Conv2d(1, 1, kernel_size=3, padding=1, bias=False)
+    conv.weight = fg.tensor(kernel)
+    out_pixels = conv(pixels)
+
+res_flat = out_pixels.reshape(90000).numpy()
+            `);
+            
+            const res = pyodide.globals.get("res_flat");
+            const outImg = ctxOut.createImageData(300,300);
+            for(let i=0; i<300*300; i++) {
+                let val = res[i] * 255;
+                if (val < 0) val = 0;
+                if (val > 255) val = 255;
+                outImg.data[i*4] = val;
+                outImg.data[i*4+1] = val;
+                outImg.data[i*4+2] = val;
+                outImg.data[i*4+3] = 255;
+            }
+            ctxOut.putImageData(outImg, 0, 0);
+        }
+        initDashboard();
+
+    </script>
+</body>
+</html>

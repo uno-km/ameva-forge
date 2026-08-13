@@ -1,7 +1,12 @@
 {
-  "total": 150,
-  "passed": 150,
+  "total": 153,
+  "passed": 152,
   "failed": 0,
-  "errors": 0,
-  "details": []
+  "errors": 1,
+  "details": [
+    {
+      "test": "test_transformer_forward (test_v3_features.TestV3Features.test_transformer_forward)",
+      "traceback": "Traceback (most recent call last):\n  File \"C:\\Users\\GAME\\Desktop\\uno-km\\dev\\AMEVA-Tensor\\packages\\forge-py\\tests\\test_v3_features.py\", line 59, in test_transformer_forward\n    out = layer(x)\n          ^^^^^^^^\n  File \"C:\\Users\\GAME\\Desktop\\uno-km\\dev\\AMEVA-Tensor\\packages\\forge-py\\tests\\..\\src\\forge\\nn.py\", line 26, in __call__\n    return self.forward(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\GAME\\Desktop\\uno-km\\dev\\AMEVA-Tensor\\packages\\forge-py\\tests\\..\\src\\forge\\nn.py\", line 296, in forward\n    src2 = self.self_attn(src, src, src, attn_mask=src_mask, is_causal=is_causal)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\GAME\\Desktop\\uno-km\\dev\\AMEVA-Tensor\\packages\\forge-py\\tests\\..\\src\\forge\\nn.py\", line 26, in __call__\n    return self.forward(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\GAME\\Desktop\\uno-km\\dev\\AMEVA-Tensor\\packages\\forge-py\\tests\\..\\src\\forge\\nn.py\", line 263, in forward\n    q = self.q_proj(query)\n        ^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\GAME\\Desktop\\uno-km\\dev\\AMEVA-Tensor\\packages\\forge-py\\tests\\..\\src\\forge\\nn.py\", line 26, in __call__\n    return self.forward(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\GAME\\Desktop\\uno-km\\dev\\AMEVA-Tensor\\packages\\forge-py\\tests\\..\\src\\forge\\nn.py\", line 85, in forward\n    out = matmul(x, transpose(self.weight))\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\GAME\\Desktop\\uno-km\\dev\\AMEVA-Tensor\\packages\\forge-py\\tests\\..\\src\\forge\\ops.py\", line 285, in matmul\n    return MatmulFunction.apply(a, b)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\GAME\\Desktop\\uno-km\\dev\\AMEVA-Tensor\\packages\\forge-py\\tests\\..\\src\\forge\\autograd.py\", line 35, in apply\n    result = cls.forward(ctx, *args, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\GAME\\Desktop\\uno-km\\dev\\AMEVA-Tensor\\packages\\forge-py\\tests\\..\\src\\forge\\ops.py\", line 256, in forward\n    raise AMEVAForgeShapeError(\nforge.errors.AMEVAForgeShapeError: Matmul requires 2D tensors, got shapes (2, 10, 64) and (64, 64)\n"
+    }
+  ]
 }

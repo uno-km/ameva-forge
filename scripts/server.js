@@ -6,7 +6,7 @@ const app = express();
 app.use(express.text({ limit: '50mb' })); 
 app.use(express.static(path.join(__dirname, '..')));
 
-const REPORTS_DIR = path.join(__dirname, 'reports');
+const REPORTS_DIR = path.join(__dirname, 'docs', 'tests', 'results');
 const TESTS_DIR = path.join(__dirname, 'packages', 'forge-py', 'tests');
 
 if (!fs.existsSync(REPORTS_DIR)) fs.mkdirSync(REPORTS_DIR);
@@ -26,7 +26,7 @@ app.get('/api/reports', (req, res) => {
 
 // Save report
 app.post('/api/reports/:filename', (req, res) => {
-    // FE-C01 Fix: Path traversal 방지
+    // FE-C01 Fix: Path traversal 방�?
     const safeName = path.basename(req.params.filename);
     const filepath = path.join(REPORTS_DIR, safeName);
     // Verify the resolved path is still within REPORTS_DIR
@@ -39,3 +39,4 @@ app.post('/api/reports/:filename', (req, res) => {
 
 const PORT = 8000;
 app.listen(PORT, () => console.log(`Gladiator Backend running on http://localhost:${PORT}`));
+

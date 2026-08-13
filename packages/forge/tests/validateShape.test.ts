@@ -6,12 +6,12 @@ describe("validateShape", () => {
     expect(validateShape([256, 256], "float32")).toBe(65536);
   });
   
-  it("fails on empty shape", () => {
-    expect(() => validateShape([], "float32")).toThrow(AMEVAForgeShapeError);
+  it("passes scalar empty shape", () => {
+    expect(validateShape([], "float32")).toBe(1);
   });
 
-  it("fails on 5D shape", () => {
-    expect(() => validateShape([1, 2, 3, 4, 5], "float32")).toThrow(AMEVAForgeShapeError);
+  it("fails on 9D shape", () => {
+    expect(() => validateShape([1, 2, 3, 4, 5, 6, 7, 8, 9], "float32")).toThrow(AMEVAForgeShapeError);
   });
 
   it("fails on negative dimension", () => {
