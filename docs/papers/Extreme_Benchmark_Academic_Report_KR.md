@@ -1,3 +1,6 @@
+> [!WARNING]
+> **검증되지 않은 벤치마크 / 이론적 시뮬레이션 초안 (UNVERIFIED)** — 이 문서의 성능 수치는 이론적 추정치이며, 실제 하드웨어에서 독립적으로 검증되지 않았습니다.
+
 # AMEVA WebGPU-Python Bridge: A Deep Dive into Extreme GPU Acceleration in the Browser
 
 ## 1. 문제점 발의 (Problem Statement)

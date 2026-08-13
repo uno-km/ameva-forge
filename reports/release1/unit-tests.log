@@ -1,0 +1,120 @@
+﻿node.exe : PASS tests/errorPropagation.test.ts
+위치 줄:1 문자:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (PASS tests/errorPropagation.test.ts:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  Error Type Hierarchy
+    ??AMEVAForgeShapeError extends AMEVAForgeError (3 ms)
+    ??AMEVAForgeDTypeError extends AMEVAForgeError (1 ms)
+    ??AMEVAForgeDeviceError extends AMEVAForgeError (1 ms)
+    ??AMEVAForgeDisposedError extends AMEVAForgeError
+    ??AMEVAForgeQuotaExceededError extends AMEVAForgeError (1 ms)
+    ??AMEVAForgeWebGPUUnavailableError extends AMEVAForgeError
+    ??AMEVAForgeSecurityError extends AMEVAForgeError (1 ms)
+    ??AMEVAForgeUnsupportedOpError extends AMEVAForgeError
+    ??AMEVAForgeValidationError extends AMEVAForgeError (19 ms)
+    ??AMEVAForgeOutOfMemoryError extends AMEVAForgeError
+    ??AMEVAForgeInternalGPUError extends AMEVAForgeError (1 ms)
+    ??AMEVAForgeDeviceLostError extends AMEVAForgeError
+    ??AMEVAForgeStaleHandleError extends AMEVAForgeError
+    ??AMEVAForgeError extends Error (7 ms)
+    GPU error scope types
+      ??AMEVAForgeValidationError preserves message
+      ??AMEVAForgeOutOfMemoryError preserves message
+      ??AMEVAForgeInternalGPUError preserves message
+
+PASS tests/graphTransaction.test.ts
+  executeGraph Transaction
+    Return type
+      ??should return a Promise (1 ms)
+      ??should be declared as async
+    Input validation (pre-GPU)
+      ??should reject malformed JSON (30 ms)
+      ??should reject non-array JSON (1 ms)
+      ??should reject empty string
+      ??should reject duplicate instruction IDs (35 ms)
+    Error handling
+      ??should not set globalThis.__ameva_last_gpu_error (1 ms)
+
+PASS tests/stress.test.ts
+  Stress and Security Test (F-039)
+    ??handles boundary values correctly (9 ms)
+    ??prevents async race conditions on allocation (7 ms)
+    ??defends against negative allocations (1 ms)
+    ??OOM safety when allocating extremely large tensors
+
+PASS tests/validateWasmRange.test.ts
+  validateWasmRange
+    ??passes normal range
+    ??fails on negative offset (7 ms)
+    ??fails on negative byteLength (1 ms)
+    ??fails on unsafe integer
+    ??fails on out-of-bounds (1 ms)
+    ??boundary test for byteLength > wasmByteLength - offset
+
+PASS tests/tensorRegistry.test.ts
+  TensorRegistry
+    ??register and get normally (2 ms)
+    ??fails on missing handle (8 ms)
+    ??fails on disposed handle access (1 ms)
+    ??dispose idempotency (1 ms)
+    ??clear normally (1 ms)
+
+PASS tests/validateShape.test.ts
+  validateShape
+    ??passes valid shape (1 ms)
+    ??passes scalar empty shape
+    ??fails on 9D shape (6 ms)
+    ??fails on negative dimension
+    ??fails on non-integer dimension (1 ms)
+    ??fails on byteLength mismatch
+    ??fails on MAX_ELEMENTS exceeded (1 ms)
+
+PASS tests/validateDType.test.ts
+  validateDType
+    ??passes float32 (1 ms)
+    ??fails on float16 (4 ms)
+    ??fails on int32
+    ??fails on unknown dtype (2 ms)
+
+PASS tests/quota.test.ts
+  QuotaManager
+    ??tracks quota correctly
+    ??throws error when exceeding limits (10 ms)
+    ??rejects invalid allocation sizes (1 ms)
+    ??prevents underflow
+    ??warns when exceeding soft limit (1 ms)
+
+PASS tests/shaderGuard.test.ts
+  shaderGuard
+    ??allowed kernel name passes
+    ??unknown kernel name fails (5 ms)
+    ??safe identifier passes
+    ??unsafe identifier fails (1 ms)
+    ??dynamic shader source interpolation is detected (1 ms)
+
+PASS tests/resourceLifecycle.test.ts
+  Resource Lifecycle - Source Contract
+    Allocator integration
+      ??should not have direct device.createBuffer in graph execution path
+      ??should use allocateBuffer for all allocations
+    Global error channel removal
+      ??should not set __ameva_last_gpu_error
+    Async contract
+      ??should declare executeGraph as async (1 ms)
+      ??should await error scope pops
+    Token cleanup
+      ??should use freeBuffer for params cleanup
+
+PASS tests/sourceContract.test.ts
+  R1 source contracts
+    ??reduction uses input size (1 ms)
+    ??duplicate readback is rejected (1 ms)
+
+Test Suites: 11 passed, 11 total
+Tests:       68 passed, 68 total
+Snapshots:   0 total
+Time:        2.782 s, estimated 3 s
+Ran all test suites.

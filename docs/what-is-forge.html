@@ -36,10 +36,10 @@
             <p>Through Pyodide (CPython compiled to WebAssembly), AMEVA-Forge can run pure Python code directly in the browser. You do not need to rewrite your training logic in JavaScript or TypeScript. Just import the library and run.</p>
             
             <h4>3. PyTorch-like API</h4>
-            <p>If you know PyTorch, you already know AMEVA-Forge. The API for <code>Tensor</code>, <code>nn.Linear</code>, <code>optim.Adam</code>, and backward propagation perfectly mirrors PyTorch.</p>
+            <p>If you know PyTorch, you already know AMEVA-Forge. The API for <code>Tensor</code>, <code>nn.Linear</code>, <code>optim.SGD</code>, and backward propagation provides a PyTorch-like interface for basic MLP training.</p>
             
             <h4>4. Autograd Engine</h4>
-            <p>AMEVA-Forge includes a robust, iterative automatic differentiation engine capable of processing deep computation graphs without recursion errors, supporting everything from matrix multiplications to cross-entropy loss gradients.</p>
+            <p>AMEVA-Forge includes a robust, iterative automatic differentiation engine capable of processing deep computation graphs without recursion errors, supporting 2D matrix multiplications, ReLU activation, and MSE loss gradients for small MLP models.</p>
             
             <h3>Why build a browser framework?</h3>
             <p>Running models in the browser means zero server-side compute costs for inference and fine-tuning. It guarantees data privacy since user data never leaves their local machine, while still providing GPU acceleration.</p>

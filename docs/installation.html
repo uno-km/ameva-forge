@@ -8,7 +8,7 @@
 </head>
 <body>
     <header>
-        <h1>AMEVA-Forge v2.0 Documentation</h1>
+        <h1>AMEVA-Forge Release 1 Documentation</h1>
     </header>
     
     <div class="container">
@@ -34,7 +34,7 @@
         
         <main class="content">
             <h2>Installation Guide</h2>
-            <p>AMEVA-Forge v2.0 introduces fully supported deep learning workflows bridging standard Python and Browser environments. We outline installation procedures for both architectures below.</p>
+            <p>AMEVA-Forge Release 1 introduces basic MLP training workflows bridging standard Python and Browser environments. We outline installation procedures for both architectures below.</p>
             
             <h3>1. Standard Python Environment (CPU/NumPy Backend)</h3>
             <p>For server-side or desktop environments, AMEVA-Forge operates via its robust CPU backend, optimizing operations leveraging native NumPy kernels.</p>
@@ -52,7 +52,7 @@
             <p>Verify the installation via Python interactive shell:</p>
             <pre><code>import forge as fg
 print(f"AMEVA-Forge Version: {fg.__version__}")
-# Output: AMEVA-Forge Version: 2.0.0</code></pre>
+# Output: AMEVA-Forge Version: 0.1.0</code></pre>
 
             <h3>2. Browser Environment (Pyodide & WebGPU)</h3>
             <p>To execute operations in a browser context leveraging local GPU acceleration, AMEVA-Forge utilizes Pyodide (WASM) alongside our WebGPU bridge.</p>
@@ -70,7 +70,7 @@ print(f"AMEVA-Forge Version: {fg.__version__}")
 
 &lt;!-- 2. Load AMEVA-Forge WebGPU Bridge --&gt;
 &lt;script&gt;var exports = {};&lt;/script&gt;
-&lt;script src="https://cdn.jsdelivr.net/npm/@ameva/forge@2.0.0/dist/index.js"&gt;&lt;/script&gt;
+&lt;script src="https://cdn.jsdelivr.net/npm/@ameva/forge@0.1.0/dist/index.js"&gt;&lt;/script&gt;
 
 &lt;!-- 3. Initialize Environment --&gt;
 &lt;script&gt;
@@ -84,7 +84,7 @@ print(f"AMEVA-Forge Version: {fg.__version__}")
         const micropip = pyodide.pyimport("micropip");
         
         // Install the Python wheel
-        await micropip.install("ameva-forge==2.0.0");
+        await micropip.install("ameva-forge==0.1.0");
         
         // Execute Python
         await pyodide.runPythonAsync(`
@@ -101,7 +101,7 @@ print(f"AMEVA-Forge Version: {fg.__version__}")
     </div>
     
     <footer>
-        &copy; 2026 AMEVA AI. All rights reserved. Version 2.0.0.
+        &copy; 2026 AMEVA AI. All rights reserved. Release 1 (v0.1.0).
     </footer>
 </body>
 </html>

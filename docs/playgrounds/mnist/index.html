@@ -116,7 +116,7 @@
                 await pyodide.loadPackage("micropip");
                 const micropip = pyodide.pyimport("micropip");
                 
-                await micropip.install("../../../packages/forge-py/dist/forge-2.0.0-py3-none-any.whl");
+                await micropip.install("../../../packages/forge-py/dist/forge-0.1.0-py3-none-any.whl");
                 
                 await pyodide.runPythonAsync(`
 import sys

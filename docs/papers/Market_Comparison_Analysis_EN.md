@@ -1,3 +1,6 @@
+> [!NOTE]
+> **Preliminary Analysis** — This competitive analysis is based on publicly available information and has not been independently verified.
+
 # AMEVA WebGPU-Python Bridge vs. Market WebGPU Projects (Comparative Analysis)
 
 This document provides a highly rigorous and objective comparative analysis between existing commercial/open-source WebGPU projects in browser and Python environments and our custom-developed **`AMEVA WebGPU-Python Bridge (ameva_tensor)`**.

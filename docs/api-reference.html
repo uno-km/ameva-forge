@@ -8,7 +8,7 @@
 </head>
 <body>
     <header>
-        <h1>AMEVA-Forge v2.0 Documentation</h1>
+        <h1>AMEVA-Forge Release 1 Documentation</h1>
     </header>
     
     <div class="container">
@@ -34,7 +34,7 @@
         
         <main class="content">
             <h2>API Reference</h2>
-            <p>This document details the primary public interfaces exposed by AMEVA-Forge v2.0.</p>
+            <p>This document details the primary public interfaces exposed by AMEVA-Forge Release 1.</p>
             
             <h3>Module: <code>forge</code></h3>
             
@@ -63,8 +63,8 @@
             <h4><code>nn.Linear(in_features, out_features, bias=True)</code></h4>
             <p>Applies a linear transformation to the incoming data: <code>y = xA^T + b</code>.</p>
             
-            <h4><code>nn.ReLU()</code> / <code>nn.Sigmoid()</code> / <code>nn.Tanh()</code></h4>
-            <p>Standard non-linear activation functions.</p>
+            <h4><code>nn.ReLU()</code></h4>
+            <p>Standard non-linear activation functions. Note: <code>nn.Sigmoid()</code> and <code>nn.Tanh()</code> are planned for future releases.</p>
 
             <h4><code>nn.MSELoss()</code></h4>
             <p>Computes the mean squared error between network outputs and empirical targets.</p>
@@ -79,12 +79,13 @@
             
             <h4><code>optim.Adam(params, lr=0.001, betas=(0.9, 0.999))</code></h4>
             <p>Adaptive Moment Estimation (Adam) optimizer. Recommended for standard deep learning workflows.</p>
+            <!-- Note: optim.Adam is planned. Release 1 supports optim.SGD only. -->
 
         </main>
     </div>
     
     <footer>
-        &copy; 2026 AMEVA AI. All rights reserved. Version 2.0.0.
+        &copy; 2026 AMEVA AI. All rights reserved. Release 1 (v0.1.0).
     </footer>
 </body>
 </html>

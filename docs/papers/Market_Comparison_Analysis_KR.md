@@ -1,3 +1,6 @@
+> [!NOTE]
+> **예비 분석 (Preliminary)** — 이 경쟁 분석은 공개 정보를 기반으로 작성되었으며, 독립적으로 검증되지 않았습니다.
+
 # AMEVA WebGPU-Python Bridge vs. 시중 WebGPU 프로젝트 비교 분석서
 
 본 문서는 브라우저 및 파이썬 환경에서 WebGPU를 활용하는 기존 상용/오픈소스 프로젝트들과 우리가 자체 개발한 **`AMEVA WebGPU-Python Bridge (ameva_tensor)`**를 매우 엄격하고 객관적인 시각으로 비교 분석한 문서입니다.

@@ -1,3 +1,6 @@
+> [!WARNING]
+> **UNVERIFIED BENCHMARK DATA — Theoretical Baseline Target** — Performance figures are simulation estimates, not independently verified measurements.
+
 # AMEVA OS WebGPU-Python Bridge: Architecture and Performance Benchmarks
 **Date:** 2026-08-11
 **Author:** AMEVA OS Research & Development Team

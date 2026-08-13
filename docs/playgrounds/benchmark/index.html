@@ -183,7 +183,7 @@
                 const micropip = pyodide.pyimport("micropip");
                 
                 // Load Python package from remote or local relative path
-                await micropip.install("../../../packages/forge-py/dist/forge-2.0.0-py3-none-any.whl");
+                await micropip.install("../../../packages/forge-py/dist/forge-0.1.0-py3-none-any.whl");
                 
                 document.getElementById('loadingOverlay').classList.add('hidden');
                 
@@ -228,7 +228,7 @@ sys.stderr = WebConsole()
                 tests.forEach(f => {
                     const li = document.createElement('li');
                     li.className = 'file-item';
-                    li.innerText = 'üìÑ ' + f;
+                    li.innerText = '?ìÑ ' + f;
                     li.ondblclick = () => runTestFile(f);
                     list.appendChild(li);
                 });
@@ -295,10 +295,10 @@ async def _run_tests_in_browser():
                 try:
                     res = func()
                     if asyncio.iscoroutine(res): await res
-                    print(f"‚úÖ {attr} passed in {time.time()-t0:.3f}s")
+                    print(f"??{attr} passed in {time.time()-t0:.3f}s")
                     passed += 1
                 except Exception as e:
-                    print(f"‚ùå {attr} FAILED\\n")
+                    print(f"??{attr} FAILED\\n")
                     traceback.print_exc()
                     
                 if hasattr(instance, 'asyncTearDown'):

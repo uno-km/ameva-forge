@@ -8,7 +8,7 @@
 </head>
 <body>
     <header>
-        <h1>AMEVA-Forge v2.0 Documentation</h1>
+        <h1>AMEVA-Forge Release 1 Documentation</h1>
     </header>
     
     <div class="container">
@@ -34,7 +34,7 @@
         
         <main class="content">
             <h2>Quickstart Guide</h2>
-            <p>This guide provides a rapid introduction to defining a neural network, performing forward passes, backpropagation, and updating weights using AMEVA-Forge v2.0.</p>
+            <p>This guide provides a rapid introduction to defining a neural network, performing forward passes, backpropagation, and updating weights using AMEVA-Forge Release 1.</p>
 
             <h3>1. Tensor Creation and Operations</h3>
             <p>AMEVA-Forge's fundamental data structure is the <code>Tensor</code>. Tensor operations are recorded dynamically for automatic differentiation.</p>
@@ -49,7 +49,7 @@ z = x @ y
 print("Forward Result:", z.data)</code></pre>
 
             <h3>2. Automatic Differentiation (Autograd)</h3>
-            <p>AMEVA-Forge v2.0 implements a highly optimized reverse-mode automatic differentiation engine. Calling <code>.backward()</code> computes gradients for all descendant tensors where <code>requires_grad=True</code>.</p>
+            <p>AMEVA-Forge Release 1 implements a reverse-mode automatic differentiation engine. Calling <code>.backward()</code> computes gradients for all descendant tensors where <code>requires_grad=True</code>.</p>
             <pre><code># Compute a scalar loss
 loss = z.sum()
 
@@ -86,7 +86,7 @@ inputs = fg.randn((10, 2))
 targets = fg.ones((10, 1))
 
 # Initialize Optimizer and Loss Function
-optimizer = optim.Adam(model.parameters(), lr=0.01)
+optimizer = optim.SGD(model.parameters(), lr=0.01)
 criterion = nn.MSELoss()
 
 # Single training step
@@ -104,7 +104,7 @@ print(f"Step Loss: {loss.item()}")</code></pre>
     </div>
     
     <footer>
-        &copy; 2026 AMEVA AI. All rights reserved. Version 2.0.0.
+        &copy; 2026 AMEVA AI. All rights reserved. Release 1 (v0.1.0).
     </footer>
 </body>
 </html>

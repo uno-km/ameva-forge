@@ -57,7 +57,7 @@
                     </tr>
                     <tr>
                         <td><strong>Training Support</strong></td>
-                        <td>Full (Forward, Backward, Optimizers)</td>
+                        <td>Basic (2-Layer MLP, SGD, MSELoss)</td>
                         <td>Full</td>
                         <td>Limited (mostly inference focused)</td>
                     </tr>
@@ -71,7 +71,7 @@
             </table>
             
             <h3>The PyTorch Compatibility</h3>
-            <p>If you're migrating from PyTorch, the transition is essentially zero-friction. Notice the identical API surface:</p>
+            <p>If you're migrating from PyTorch, AMEVA-Forge adopts PyTorch-like naming conventions for basic operations:</p>
             
             <h4>PyTorch:</h4>
             <pre><code>import torch
@@ -87,7 +87,7 @@ import forge.nn as nn
 import forge.optim as optim
 
 model = nn.Sequential(nn.Linear(2, 4), nn.ReLU())
-opt = optim.Adam(model.parameters(), lr=0.01)</code></pre>
+opt = optim.SGD(model.parameters(), lr=0.01)</code></pre>
             
         </main>
     </div>
