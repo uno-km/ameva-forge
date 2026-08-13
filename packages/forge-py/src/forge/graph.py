@@ -1,19 +1,58 @@
+"""
+graph.py - WebGPU 연산 그래프 빌더
+
+[역사적 메타데이터]
+- Created: Wed Aug 12 12:14:52 2026 +0900 (초기 커밋)
+- Modified:
+  - Wed Aug 12 12:14:52 2026 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
+"""
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
 
 class GraphBuilder:
+    """
+    무엇을: 연산 노드들을 순서대로 기록하여 JSON 형태의 연산 그래프로 빌드해주는 클래스이다.
+    왜: WebGPU 브릿지(JS)로 전송할 때 복잡한 텐서 연산을 하나의 배치(배치 연산)로 최적화하여 넘기기 위함이다.
+    어떻게: 각 노드를 딕셔너리 형태로 nodes 리스트에 추가하고, 고유한 ID를 부여하여 그래프로 연결한다.
+    """
     def __init__(self):
+        """
+        무엇을: GraphBuilder 인스턴스를 초기화한다.
+        왜: 그래프를 담을 리스트와 노드 ID 발급 상태를 리셋하기 위함이다.
+        어떻게: 빈 노드 리스트(nodes), 입력 리스트(inputs), 그리고 시작 ID를 1로 설정한다.
+        """
+        # 무엇을: 그래프를 구성하는 연산 노드들의 정보를 담은 딕셔너리 리스트.
+        # 왜: 나중에 JSON으로 직렬화하기 위함이다.
+        # 어떻게: add_op 등의 메서드가 호출될 때마다 새로운 노드가 추가된다.
         self.nodes: List[Dict[str, Any]] = []
+        
+        # 무엇을: 연산 그래프에서 사용하는 초기 입력 데이터 리스트.
+        # 왜: 업로드 시 전달할 실제 데이터를 저장하기 위함이다.
+        # 어떻게: add_upload를 통해 외부 데이터가 주입될 때마다 순서대로 추가된다.
         self.inputs: List[Any] = []
+        
+        # 무엇을: 다음 노드에 부여할 고유 식별자 번호.
+        # 왜: 그래프 내 각 노드 간의 의존성을 ID 기반으로 연결하기 위함이다.
+        # 어떻게: alloc_id 호출 시마다 1씩 증가한다.
         self.next_id = 1
 
     def alloc_id(self) -> int:
+        """
+        무엇을: 새로운 노드용 고유 ID를 할당하여 반환한다.
+        왜: 연산 그래프 내 노드 간 입출력 관계(dependency)를 추적하기 위한 식별자가 필요하기 때문이다.
+        어떻게: 현재 next_id 값을 리턴하고, next_id 자체는 1 증가시킨다.
+        """
         idx = self.next_id
         self.next_id += 1
         return idx
 
     def add_upload(self, shape: Tuple[int, ...], data: Any = None) -> int:
+        """
+        무엇을: 외부 데이터를 GPU 메모리로 업로드하는 'upload' 노드를 그래프에 추가한다.
+        왜: CPU 데이터를 초기 텐서 노드로 변환하기 위함이다.
+        어떻게: 새 ID를 받고, shape의 각 차원을 int로 변환해 JSON 직렬화 가능하게 만들며, 데이터가 있으면 inputs 리스트에 추가한다.
+        """
         node_id = self.alloc_id()
         # NM-01 Fix: shape dim을 int()로 변환하여 numpy.intp → JSON-safe Python int
         self.nodes.append({"op": "upload", "id": node_id, "shape": [int(d) for d in shape]})
@@ -22,6 +61,11 @@ class GraphBuilder:
         return node_id
 
     def add_load(self, shape: Tuple[int, ...], handle: str) -> int:
+        """
+        무엇을: 이미 GPU에 존재하는 데이터를 로드하는 'load' 노드를 추가한다.
+        왜: 기존 캐싱된 메모리나 다른 파이프라인에서 생성된 리소스를 그래프 안으로 끌어오기 위함이다.
+        어떻게: 새 ID를 발급받고 노드 정보(핸들 포함)를 기록한 뒤 해당 ID를 리턴한다.
+        """
         node_id = self.alloc_id()
         # NM-01 Fix: shape dim int() 변환
         self.nodes.append({
@@ -39,6 +83,11 @@ class GraphBuilder:
         in_ids: List[int],
         params: Optional[List[Any]] = None
     ) -> int:
+        """
+        무엇을: 일반적인 텐서 연산(op) 노드를 그래프에 추가한다.
+        왜: 사용자가 호출한 수학적 연산(add, mul 등)을 그래프에 기록하여 연산 순서를 정하기 위함이다.
+        어떻게: 입력 노드 ID 리스트(in_ids)를 의존성으로 기록하고, 추가 파라미터가 있다면 JSON 포맷에 맞게 형변환하여 딕셔너리에 추가한다.
+        """
         node_id = self.alloc_id()
         node: Dict[str, Any] = {
             "op": op_name,
@@ -54,4 +103,9 @@ class GraphBuilder:
         return node_id
 
     def compile(self) -> Tuple[str, List[Any]]:
+        """
+        무엇을: 현재까지 모인 노드 정보를 JSON 문자열과 입력 데이터 리스트로 묶어 반환한다.
+        왜: 생성된 그래프를 JS 브릿지(WebGPU 백엔드) 측에 통신 가능한 형태로 전달하기 위함이다.
+        어떻게: 내장 json 모듈을 이용해 nodes 리스트를 직렬화(dumps)하고, 입력 데이터(inputs)와 함께 튜플로 리턴한다.
+        """
         return json.dumps(self.nodes), self.inputs

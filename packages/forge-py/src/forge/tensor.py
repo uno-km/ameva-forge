@@ -1,77 +1,192 @@
+"""
+================================================================================
+파일 이력 (Historical Metadata)
+Created: 2026-08-12 12:14:52 +0900 (첫 커밋 기준)
+Modified:
+  - 2026-08-12 12:23:09 +0900: Docs: Build Apache-style docs and unify tests
+  - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
+================================================================================
+이 파일은 핵심 텐서 자료구조와 지연 평가(Lazy Evaluation), 자동 미분(Autograd)을 위한 그래프 구성 기능을 구현합니다.
+"""
+# 타입 힌트를 위한 타이핑 모듈 임포트
 from typing import Any, Tuple, Optional, List
+# 넘파이 배열 조작을 위한 임포트
 import numpy as np
+# 패키지 내부 커스텀 에러 클래스 임포트
 from .errors import AMEVAForgeDisposedError, AMEVAForgeShapeError, AMEVAForgeDeviceError
 
 
 def build_lazy_topo(root: 'Tensor') -> List['Tensor']:
     """
-    위상 정렬: 레이지 그래프에서 루트까지의 노드를 의존성 순서로 반환.
-    Iterative DFS — 재귀 제거 (RecursionError 방지).
-    Python 기본 재귀 한도 1000을 초과하는 깊은 모델(Transformer 등)에서도 안전.
+    WHAT: 레이지 텐서 연산 그래프의 위상 정렬(Topological Sort)을 수행하여 루트부터 리프 노드까지의 순서를 반환하는 함수입니다.
+    WHY: 연산을 실행(Realize)할 때 의존성이 있는 부모 텐서들이 먼저 계산되어야 하므로 올바른 실행 순서를 보장하기 위함입니다.
+    HOW: 재귀 호출로 인한 스택 오버플로우를 막기 위해 반복적 깊이 우선 탐색(Iterative DFS) 방식으로 구현되었습니다.
     """
+    # WHAT: 최종 위상 정렬 결과를 담을 텐서 리스트입니다.
+    # WHY: 부모 노드 방문이 모두 완료된 후(Post-order) 텐서를 순차적으로 담아 반환하기 위해서입니다.
+    # HOW: 노드의 부모들을 모두 방문하고 나면 리스트의 끝에(append) 추가합니다.
     topo: List['Tensor'] = []
+    
+    # WHAT: 이미 방문한 노드의 메모리 주소(ID)를 기록하는 집합(Set)입니다.
+    # WHY: 그래프 내에서 동일한 노드를 중복으로 방문하거나 무한 루프에 빠지는 것을 방지하기 위함입니다.
+    # HOW: 각 노드를 스택에 넣을 때 그 ID를 이 집합에 추가하고 확인합니다.
     visited: set = set()
+    
     # (node, parent_index) 스택: 현재 노드와 다음에 방문할 부모의 인덱스
+    # WHAT: 순회를 제어하기 위한 명시적인 작업 스택입니다.
+    # WHY: 시스템 재귀 호출 한도 초과 문제를 우회하고 더 깊은 모델도 처리할 수 있게 하기 위해 반복문 기반 스택을 씁니다.
+    # HOW: 시작 노드(root)와 첫 부모 인덱스(0)를 튜플로 묶어 리스트에 넣습니다.
     stack: list = [(root, 0)]
     visited.add(id(root))
 
+    # WHAT: 스택에 남아있는 작업이 없을 때까지 반복하는 메인 루프입니다.
+    # WHY: 그래프에 연결된 모든 노드를 순회하여 빠짐없이 정렬된 리스트를 만들기 위해서입니다.
+    # HOW: 스택이 비어있지 않으면 계속 루프를 실행합니다.
     while stack:
+        # WHAT: 스택의 가장 위(마지막)에 있는 현재 텐서 노드와 방문할 부모 인덱스를 가져옵니다.
+        # WHY: DFS 방식이므로 가장 최근에 추가된(깊이가 깊은) 노드부터 처리하기 위함입니다.
+        # HOW: 스택 리스트의 마지막 요소([-1])를 튜플 언패킹합니다.
         node, idx = stack[-1]
         
+        # WHAT: 현재 텐서의 부모 노드 튜플입니다.
+        # WHY: 이 노드를 계산하기 위해 필요한 이전 계산 결과들을 확인하기 위함입니다.
+        # HOW: getattr를 사용해 '_parents' 속성을 안전하게 가져옵니다.
         parents = getattr(node, '_parents', ())
 
+        # WHAT: 아직 방문하지 않은 부모 노드가 남아있는지 검사하는 조건문입니다.
+        # WHY: 모든 부모 노드를 먼저 처리한 뒤에야 현재 노드를 처리(위상 정렬 리스트 추가)할 수 있기 때문입니다.
+        # HOW: 현재 인덱스(idx)가 전체 부모 개수보다 작은지 비교합니다.
         if idx < len(parents):
             # 다음 부모로 진행
+            # WHAT: 현재 노드의 인덱스를 1 증가시켜 스택 상단에 갱신합니다.
+            # WHY: 현재 부모 탐색을 마치고 돌아왔을 때 다음 부모를 이어서 탐색할 수 있게 상태를 저장합니다.
+            # HOW: 스택의 마지막 요소를 새로운 튜플로 교체합니다.
             stack[-1] = (node, idx + 1)
+            
+            # WHAT: 현재 인덱스가 가리키는 부모 노드 객체입니다.
+            # WHY: 이 부모 노드부터 다시 깊이 우선 탐색을 이어나가기 위해서입니다.
+            # HOW: parents 튜플에서 idx로 접근합니다.
             p = parents[idx]
+            
+            # WHAT: 부모 노드의 고유 식별자(메모리 주소)입니다.
+            # WHY: 해당 부모 노드가 이전에 이미 방문된 노드인지 중복 검사를 하기 위함입니다.
+            # HOW: 내장 함수 id()를 사용합니다.
             pid = id(p)
+            
             if pid not in visited:
+                # WHAT: 부모 노드의 ID를 방문 완료 집합에 추가합니다.
+                # WHY: 나중에 다른 경로를 통해 이 부모 노드에 도달하더라도 다시 처리하지 않기 위해서입니다.
+                # HOW: set.add() 메서드를 사용합니다.
                 visited.add(pid)
+                
+                # WHAT: 부모 노드를 스택에 추가하여 다음 반복 시에 처리되도록 합니다.
+                # WHY: DFS 특성상 방금 발견한 새로운 노드를 가장 먼저 탐색해야 하기 때문입니다.
+                # HOW: 부모 노드와 초기 인덱스 0을 스택에 푸시(append)합니다.
                 stack.append((p, 0))
         else:
             # 모든 부모 방문 완료 → post-order 추가
+            # WHAT: 부모를 모두 탐색 완료한 노드를 스택에서 제거합니다.
+            # WHY: 이 노드에 대한 처리(위상 정렬 순서 확정)가 끝났기 때문입니다.
+            # HOW: list.pop()을 호출합니다.
             stack.pop()
+            
+            # WHAT: 탐색을 마친 노드를 결과 리스트에 추가합니다.
+            # WHY: 의존성이 없는 리프 노드부터 순서대로 추가되므로 위상 정렬 순서가 보장됩니다.
+            # HOW: topo.append()를 사용합니다.
             topo.append(node)
 
+    # WHAT: 완성된 위상 정렬 리스트를 반환합니다.
+    # WHY: 이 리스트 순서대로 텐서 연산을 GPU/CPU에 제출하여 실행하기 위함입니다.
+    # HOW: topo 리스트를 리턴합니다.
     return topo
 
 
+# WHAT: GPU 리소스 해제가 필요한 텐서 핸들(문자열 등)을 임시로 모아두는 큐(집합)입니다.
+# WHY: 단일 텐서마다 즉각적으로 리소스를 해제(dispose)하면 오버헤드가 크므로, 모아서 일괄 처리(Batch GC)하기 위함입니다.
+# HOW: Python의 set 객체를 전역으로 생성해 중복 핸들 등록을 방지합니다.
 _gc_queue: set = set()
 
 
+# WHAT: 가비지 컬렉션(GC) 시도가 연속적으로 실패한 횟수를 추적하는 변수입니다.
+# WHY: 브릿지 통신 오류나 치명적 버그로 인해 무한히 실패할 경우 큐를 비워 악순환을 끊기 위함입니다.
+# HOW: 정수 0으로 초기화하고, 예외 발생 시마다 1씩 증가시킵니다.
 _gc_fail_count: int = 0
 
 def flush_gc() -> None:
+    """
+    WHAT: 보류 중인(큐에 쌓인) 리소스 해제 요청들을 모아 JS/WebGPU 브릿지로 일괄 전달하여 처리하는 함수입니다.
+    WHY: 성능 최적화를 위해 개별 해제 대신 Batch Dispose를 수행하여 C-FFI/JS 호출 오버헤드를 줄이기 위함입니다.
+    HOW: 큐에 항목이 있으면 리스트로 변환한 뒤 JS 브릿지 함수(js_dispose_batch)를 호출합니다.
+    """
+    # WHAT: 전역으로 관리되는 GC 실패 카운터를 함수 내부에서 수정할 수 있도록 선언합니다.
+    # WHY: 실패 시 카운터를 증가시키고 성공 시 0으로 리셋하기 위해서입니다.
+    # HOW: global 키워드를 사용합니다.
     global _gc_fail_count
+    
+    # WHAT: 큐가 비어있는지 확인하는 조건문입니다.
+    # WHY: 처리할 객체가 없으면 불필요한 브릿지 호출을 방지하고 빠르게 반환(return)하기 위함입니다.
+    # HOW: 파이썬에서 빈 set 객체는 False로 평가되는 특성을 이용합니다.
     if not _gc_queue:
         return
+        
+    # WHAT: 큐(집합) 안의 핸들 문자열들을 리스트로 변환하여 복사합니다.
+    # WHY: 순회가 가능한 안정적인 형태의 컬렉션으로 만들어 C/JS 인터페이스에 전달하기 위함입니다.
+    # HOW: list() 생성자를 사용해 집합을 감쌉니다.
     handles = list(_gc_queue)
     try:
         from .bridge import js_dispose_batch
+        # WHAT: 모아둔 핸들 목록을 브릿지 함수로 넘겨 실제 해제 연산을 수행합니다.
+        # WHY: 백엔드(WebGPU/JS) 단에 메모리를 해제하라고 지시하기 위함입니다.
+        # HOW: C/WASM 인터페이스 함수를 동기적으로 호출합니다.
         js_dispose_batch(handles)
+        
+        # WHAT: 성공적으로 해제된 핸들들을 전역 큐에서 제거합니다.
+        # WHY: 다음 flush 호출 시에 이미 해제된 자원을 다시 해제하려 시도하는 것을 막기 위함입니다.
+        # HOW: set.difference_update() 메서드를 사용하여 일괄 삭제합니다.
         _gc_queue.difference_update(handles)
+        
+        # WHAT: 해제 성공 시 실패 카운터를 초기화합니다.
+        # WHY: 일시적인 오류가 아니라면 정상 궤도에 올랐음을 표시하기 위해서입니다.
+        # HOW: 변수에 0을 대입합니다.
         _gc_fail_count = 0
     except Exception:
+        # WHAT: 자원 해제 중 예외가 발생할 경우 실패 카운터를 1 증가시킵니다.
+        # WHY: JS 호출 환경이나 브릿지 상태가 불안정해 오류가 발생했음을 추적하기 위해서입니다.
+        # HOW: += 연산자로 변수 값을 증가시킵니다.
         _gc_fail_count += 1
         if _gc_fail_count >= 3:
             # 영구 실패: 핸들을 버려서 무한 재시도 방지
+            # WHAT: 실패 횟수가 3번을 넘어설 경우 큐를 강제로 모두 비워버립니다.
+            # WHY: 브릿지나 환경이 복구 불가능하게 손상되었을 때 계속되는 에러 루프에 빠지는 것을 막기 위함입니다.
+            # HOW: set.clear() 메서드를 호출해 초기화하고 카운터도 다시 0으로 돌립니다.
             _gc_queue.clear()
             _gc_fail_count = 0
 
 
 class _HandleCell:
     """
-    C-01 Fix: weakref.finalize가 생성 시점의 handle(None)을 캡처하는 버그 방지.
-    handle을 mutable container에 담아 finalize 시점에 항상 최신 값을 참조.
-    Reference Cell 패턴 (JAX/Linen에서 사용하는 동일 패턴).
+    WHAT: 실제 핸들(문자열 등)을 감싸는 레퍼런스 셀 클래스입니다.
+    WHY: C-01 Fix: weakref.finalize가 생성 시점의 handle(None)을 캡처하는 버그 방지를 위해,
+         handle을 mutable container에 담아 finalize 시점에 항상 최신 값을 참조하도록 하기 위함입니다.
+    HOW: 슬롯(__slots__)을 사용하여 메모리를 절약하고 속성을 단일화(handle)한 클래스를 정의합니다. Reference Cell 패턴 적용.
     """
     __slots__ = ('handle',)
 
     def __init__(self, handle: Optional[str]) -> None:
+        """
+        WHAT: HandleCell 객체의 생성자입니다.
+        WHY: 객체 생성 시 초기 핸들 값을 저장하기 위해 필요합니다.
+        HOW: 전달받은 인자 handle을 self.handle 멤버 변수에 할당합니다.
+        """
         self.handle = handle
 
 
 class Tensor:
+    """
+    WHAT: AMEVA-Forge의 핵심 데이터 구조인 텐서 클래스입니다.
+    WHY: 다차원 배열 데이터를 다루고, 연산 기록을 추적하여 자동 미분 및 GPU 레이지 평가를 지원하기 위함입니다.
+    HOW: 내부적으로 shape, dtype, device 등의 메타데이터를 저장하며, 데이터 또는 연산(AST)의 참조를 유지합니다.
+    """
     def __init__(
         self,
         shape: Tuple[int, ...],
@@ -84,11 +199,23 @@ class Tensor:
         parents: tuple = (),
         op_params: Optional[list] = None
     ):
+        """
+        WHAT: 텐서 객체를 초기화하는 생성자입니다.
+        WHY: 텐서의 형태, 타입, 디바이스 위치 및 연산 히스토리를 설정하기 위함입니다.
+        HOW: 전달받은 인자들을 검증하고 멤버 변수들에 할당합니다.
+        """
+        # WHAT: 텐서의 차원 크기를 나타내는 튜플입니다.
+        # WHY: 각 연산에서 형태(Shape) 검증 및 브로드캐스팅에 사용됩니다.
+        # HOW: 입력받은 shape 튜플을 할당합니다.
         self.shape = shape
 
         # PY-H01 Fix: shape 타입 검증
         if not isinstance(shape, tuple):
             raise AMEVAForgeShapeError(f"shape must be a tuple, got {type(shape).__name__}")
+        
+        # WHAT: shape 튜플의 각 차원(d)을 순회하는 반복문입니다.
+        # WHY: 모든 차원이 유효한 양의 정수인지 검증하기 위함입니다.
+        # HOW: enumerate로 인덱스와 값을 가져와 int 타입 및 0 이상인지 체크합니다.
         for i, d in enumerate(shape):
             if not isinstance(d, int):
                 raise AMEVAForgeShapeError(f"shape[{i}] must be int, got {type(d).__name__}: {d}")
@@ -96,6 +223,9 @@ class Tensor:
                 raise AMEVAForgeShapeError(f"shape[{i}] must be non-negative, got {d}")
 
         # PY-H02 Fix: 빈 텐서(0-element) 차단 — GPU에서 0바이트 버퍼 크래시 방지
+        # WHAT: shape 내에 0이 포함되어 있는지 확인하는 제너레이터(암묵적 반복문)입니다.
+        # WHY: WebGPU 등에서 0 크기의 버퍼 할당 시 크래시가 발생할 수 있기 때문입니다.
+        # HOW: any()와 제너레이터 표현식을 사용하여 0이 있는지 검사합니다.
         if any(d == 0 for d in shape) and len(shape) > 0:
             raise AMEVAForgeShapeError(
                 f"Zero-size dimensions are not supported: shape={shape}. "
@@ -108,79 +238,165 @@ class Tensor:
                 f"Maximum tensor rank is 8, got {len(shape)}."
             )
 
+        # WHAT: 텐서 데이터의 자료형(예: 'float32')입니다.
+        # WHY: 메모리 할당 크기 및 통신 시 타입 일치를 위해 필요합니다.
+        # HOW: 인자로 받은 dtype을 할당합니다.
         self.dtype = dtype
+        
+        # WHAT: 텐서가 저장될 장치('cpu' 또는 'gpu')입니다.
+        # WHY: 데이터 저장소 및 연산 수행 장소를 결정하기 위함입니다.
+        # HOW: 인자로 받은 device를 할당합니다.
         self.device = device
+        
+        # WHAT: 자동 미분 추적 여부입니다.
+        # WHY: 역전파 그래프에 포함할지를 결정하기 위함입니다.
+        # HOW: 불리언 값을 할당합니다.
         self.requires_grad = requires_grad
+        
+        # WHAT: 역전파를 통해 계산된 이 텐서의 기울기(Gradient)입니다.
+        # WHY: 파라미터 업데이트를 위해 기울기를 저장해두어야 하기 때문입니다.
+        # HOW: 초기값 None으로 설정됩니다.
         self.grad: Optional['Tensor'] = None
 
         # --- 내부 상태 ---
-        # C-01: handle을 _HandleCell로 감싸 finalizer가 항상 최신 handle을 참조
+        # WHAT: 실제 텐서 핸들(GPU 등)을 간접 참조하기 위한 래퍼 객체입니다.
+        # WHY: C-01: handle을 _HandleCell로 감싸 finalizer가 항상 최신 handle을 참조하도록 하기 위함입니다.
+        # HOW: _HandleCell 객체를 생성하여 할당합니다.
         self._handle_cell = _HandleCell(handle)
+        
+        # WHAT: CPU에 저장된 텐서의 실제 데이터(numpy 배열)입니다.
+        # WHY: CPU 기반 연산이나 읽어온 데이터를 캐싱하기 위함입니다.
+        # HOW: 인자로 받은 data를 할당합니다.
         self._data = data
+        
+        # WHAT: 텐서 리소스가 명시적으로 해제되었는지 여부 플래그입니다.
+        # WHY: 이미 해제된 텐서에 접근하는 것을 막아 안전성을 확보하기 위함입니다.
+        # HOW: False로 초기화합니다.
         self._disposed = False
 
         # --- Autograd 상태 ---
-        # NC-05 Fix: autograd graph 부모를 별도 필드로 분리
-        # _parents: lazy graph traversal용 (레이지 그래프 탐색)
-        # _grad_parents: autograd backward용 (Function.apply()에서 설정)
+        # WHAT: 역전파 시 활용될 컨텍스트 객체입니다.
+        # WHY: 순전파(forward) 시에 역전파에 필요한 임시 값들을 저장하기 위함입니다.
+        # HOW: None으로 초기화합니다.
         self._ctx: Optional[Any] = None
+        
+        # WHAT: 이 텐서를 만들어낸 부모 텐서들(레이지 그래프 탐색용)입니다.
+        # WHY: 레이지 그래프를 위상 정렬로 탐색하기 위함입니다.
+        # HOW: 인자로 받은 parents 튜플을 할당합니다.
         self._parents: tuple = parents
-        self._grad_parents: tuple = ()  # NC-05: autograd 전용 부모 필드
+        
+        # WHAT: 자동 미분(backward) 전용 부모 텐서 튜플입니다.
+        # WHY: NC-05: autograd 그래프와 레이지 AST 그래프의 의존성을 분리하기 위함입니다.
+        # HOW: 빈 튜플로 초기화합니다.
+        self._grad_parents: tuple = ()
+        
+        # WHAT: 이 텐서를 생성한 연산(Operation)의 클래스 참조입니다.
+        # WHY: 역전파 시 해당 클래스의 backward를 호출하기 위함입니다.
+        # HOW: None으로 초기화합니다.
         self._op_cls: Optional[Any] = None
 
         # --- Lazy 그래프 메타데이터 ---
+        # WHAT: 레이지 평가 시 이 텐서를 생성하기 위한 연산 이름입니다.
+        # WHY: GPU 컴파일러가 어떤 연산을 수행해야 할지 알기 위함입니다.
+        # HOW: 인자로 받은 op 문자열을 할당합니다.
         self._lazy_op = op
+        
+        # WHAT: 레이지 연산에 필요한 추가 파라미터 리스트입니다.
+        # WHY: 차원(axis) 축 등 연산별 고유 옵션을 저장하기 위함입니다.
+        # HOW: 인자로 받은 op_params를 할당합니다.
         self._lazy_params = op_params
 
-        # RAII: GPU 텐서만 finalize 등록 (C-01: _handle_cell 참조로 수정)
+        # WHAT: GPU 장치인 경우 텐서 파괴 시 가비지 컬렉션을 수행하는 코드 블록입니다.
+        # WHY: 파이썬 객체 소멸 시 메모리 누수를 방지하고 GPU 리소스도 해제하기 위함입니다.
+        # HOW: weakref.finalize를 사용해 콜백을 등록합니다.
         if self.device == "gpu":
             import weakref
             weakref.finalize(self, Tensor._finalize_buffer, self._handle_cell)
 
     @property
     def _handle(self) -> Optional[str]:
+        # WHAT: 내부 래퍼(HandleCell)에서 실제 핸들 값을 가져옵니다.
+        # WHY: 텐서의 고유 ID(GPU 상의 버퍼 포인터 등)를 확인하기 위함입니다.
+        # HOW: _handle_cell의 handle 속성을 반환합니다.
         return self._handle_cell.handle
 
     @_handle.setter
     def _handle(self, value: Optional[str]) -> None:
-        # C-01: handle 업데이트는 항상 cell을 통해 → finalizer도 최신 값 참조
+        # WHAT: 내부 래퍼에 새로운 핸들 값을 설정합니다.
+        # WHY: 연산 결과로 새로운 버퍼가 할당되었을 때 참조를 갱신하기 위함입니다.
+        # HOW: _handle_cell의 handle 속성에 값을 대입합니다.
         self._handle_cell.handle = value
 
     @staticmethod
     def _finalize_buffer(cell: '_HandleCell') -> None:
         """
-        C-01: cell.handle은 realize() 이후 실제 핸들로 채워진 최신 값.
-        M-06: 즉시 dispose하지 않고 큐에 모아 Batch GC를 수행한다.
+        WHAT: 가비지 컬렉터에 의해 호출되는 리소스 해제 콜백 함수입니다.
+        WHY: 텐서 객체가 메모리에서 지워질 때 연결된 GPU 버퍼도 해제하여 메모리 누수를 방지하기 위함입니다.
+        HOW: cell에 저장된 핸들 문자열을 _gc_queue에 추가하여 일괄 해제(Batch GC)를 준비합니다.
         """
+        # WHAT: 해제 대상 텐서의 핸들 값입니다.
+        # WHY: GPU 리소스 식별을 위해 필요합니다.
+        # HOW: cell.handle을 읽어옵니다.
         handle = cell.handle
         if handle is not None:
             _gc_queue.add(handle)
 
     def _check_disposed(self) -> None:
+        # WHAT: 텐서가 이미 해제되었는지 검사하는 내부 함수입니다.
+        # WHY: 해제된 메모리에 접근해 발생하는 크래시(Use-After-Free)를 방지하기 위함입니다.
+        # HOW: _disposed 플래그가 True이면 예외를 발생시킵니다.
         if self._disposed:
             raise AMEVAForgeDisposedError("Cannot access a disposed Tensor.")
 
     def realize(self) -> None:
-        """레이지 그래프를 단일 FFI 호출로 GPU에 제출한다 (동기 submit, 비동기 실행)."""
+        """
+        WHAT: 레이지 평가(Lazy Evaluation) 그래프를 단일 FFI 호출로 GPU에 제출(Submit)하는 함수입니다.
+        WHY: 연산들을 모았다가 한 번에 수행하여 커널 호출 오버헤드를 줄이고 최적화 기회를 얻기 위함입니다.
+        HOW: 위상 정렬된 노드들을 순회하며 명령(instruction) 목록을 만들고 브릿지를 통해 JS로 전달합니다.
+        """
+        # WHAT: 이전에 밀려있는 리소스 해제 요청들을 모두 처리합니다.
+        # WHY: GPU 메모리가 부족해지기 전에 안 쓰는 버퍼를 정리하기 위함입니다.
+        # HOW: flush_gc 함수를 동기 호출합니다.
         flush_gc()
         if self.device == "cpu" or self._handle is not None:
             return
 
+        # WHAT: 현재 텐서를 계산하기 위한 위상 정렬된 노드 리스트입니다.
+        # WHY: 의존성이 없는 순서대로 노드를 처리해야 에러 없이 그래프를 빌드할 수 있기 때문입니다.
+        # HOW: build_lazy_topo 함수를 호출합니다.
         topo = build_lazy_topo(self)
         from .graph import GraphBuilder
+        # WHAT: JS로 넘길 연산 명령어들을 모아주는 빌더 객체입니다.
+        # WHY: 복잡한 연산 그래프를 브릿지가 이해할 수 있는 평탄화된 배열 포맷으로 변환하기 위함입니다.
+        # HOW: GraphBuilder 클래스의 인스턴스를 생성합니다.
         builder = GraphBuilder()
 
+        # WHAT: 파이썬 객체의 id를 빌더의 내부 노드 ID와 매핑하는 딕셔너리입니다.
+        # WHY: 텐서 간의 참조 관계를 빌더 내의 정수형 ID 기반 참조로 변환하기 위함입니다.
+        # HOW: 빈 딕셔너리를 생성한 뒤 반복문에서 값을 채웁니다.
         node_id_map: dict = {}
+        
+        # WHAT: 위상 정렬된 텐서 목록을 순회하여 연산 그래프를 빌드하는 반복문입니다.
+        # WHY: 브릿지(C/WASM)로 넘길 명령 스트림을 순서대로 생성하기 위함입니다.
+        # HOW: topo 리스트 내의 각 텐서(v)를 확인하여 분기 처리합니다.
         for v in topo:
             if v._handle is not None:
-                # NC-04 Fix: load 노드 — 기존 핸들을 참조, 덮어쓰지 않음
+                # WHAT: 노드를 불러오기(load) 위한 정수형 식별자입니다.
+                # WHY: 이미 할당된 텐서를 참조하여 연산을 수행하기 위함입니다.
+                # HOW: builder.add_load를 호출하여 반환된 ID를 저장합니다.
                 nid = builder.add_load(v.shape, v._handle)
                 node_id_map[id(v)] = nid
             elif v._lazy_op == 'upload':
                 nid = builder.add_upload(v.shape, v._data)
                 node_id_map[id(v)] = nid
             else:
+                # WHAT: 현재 연산의 입력으로 사용될 부모 노드들의 ID 리스트입니다.
+                # WHY: builder가 의존성 있는 이전 명령들을 참조할 수 있게 하기 위함입니다.
+                # HOW: 부모 텐서를 순회하며 매핑된 ID를 모읍니다.
                 in_ids = []
+                # WHAT: 부모 텐서들을 순회하는 반복문입니다.
+                # WHY: 모든 입력의 식별자를 추출하기 위함입니다.
+                # HOW: v._parents 튜플을 반복합니다.
                 for p in v._parents:
                     if id(p) not in node_id_map:
                         raise AMEVAForgeDeviceError(
@@ -191,35 +407,46 @@ class Tensor:
                 nid = builder.add_op(v._lazy_op, v.shape, in_ids, v._lazy_params)
                 node_id_map[id(v)] = nid
 
+        # WHAT: JS로 보낼 연산 명령어 배열과 추가 입력 데이터입니다.
+        # WHY: 런타임에서 그래프를 재구성하여 커널을 실행하기 위한 최종 데이터 형태이기 때문입니다.
+        # HOW: builder.compile()을 호출해 튜플 형태로 받습니다.
         instructions, inputs = builder.compile()
         from .bridge import js_execute_graph
 
+        # WHAT: JS 브릿지가 연산을 실행한 뒤 반환한 새로운 텐서 핸들(버퍼 ID)들입니다.
+        # WHY: 생성된 텐서 결과를 파이썬 텐서 객체와 연결(binding)하기 위함입니다.
+        # HOW: js_execute_graph 함수를 호출하여 딕셔너리로 반환받습니다.
         out_handles = js_execute_graph(instructions, inputs)
 
-        # NC-04 Fix: load 노드는 이미 _handle이 있으므로 skip,
-        # upload/compute 노드만 handle을 업데이트
+        # WHAT: 생성된 핸들들을 각 텐서 객체에 주입하는 반복문입니다.
+        # WHY: 레이지(지연) 상태였던 텐서들이 이제 실제 GPU 버퍼를 가리키게 하기 위함입니다.
+        # HOW: topo를 다시 순회하며 out_handles 맵에서 식별자를 찾아 할당합니다.
         for v in topo:
             if v._handle is not None:
-                # load 노드: 이미 realized — 덮어쓰지 않음
                 continue
             nid = node_id_map[id(v)]
+            # WHAT: JS가 반환한 개별 텐서의 실제 문자열 핸들입니다.
+            # WHY: 파이썬 쪽 텐서 객체에 이 값을 심어주기 위함입니다.
+            # HOW: 반환된 딕셔너리에서 nid 키로 조회합니다.
             h = out_handles.get(str(nid)) or out_handles.get(nid)
             if h is None:
                 raise AMEVAForgeDeviceError(
                     f"Failed to retrieve valid tensor handle from JS for node {nid} "
                     f"(op={v._lazy_op!r}). The JS graph executor may have failed silently."
                 )
-            v._handle = h  # C-01: _HandleCell을 통해 setter 호출
+            v._handle = h
             if v._lazy_op == 'upload':
-                v._data = None  # 호스트 메모리 즉시 해제
+                v._data = None
                 
-            # M-08 Fix: 그래프 절단 (Method 3)
-            # materialized된 텐서는 더 이상 과거 AST에 의존하지 않으므로 부모와의 연결을 끊어버림.
             v._parents = ()
             v._lazy_op = None
 
     def numpy(self) -> np.ndarray:
-        """CPU 텐서의 데이터를 동기적으로 반환한다."""
+        """
+        WHAT: CPU 텐서의 데이터를 동기적으로 반환하는 함수입니다.
+        WHY: 텐서 안의 실제 값(수치)을 확인하거나 디버깅, 외부 라이브러리(numpy 기반)에 데이터를 넘기기 위함입니다.
+        HOW: 장치가 'cpu'인지 확인한 뒤 저장된 내부 _data 배열을 반환합니다.
+        """
         self._check_disposed()
         if self.device == "cpu":
             if self._data is None:
@@ -231,7 +458,11 @@ class Tensor:
             )
 
     async def numpy_async(self) -> np.ndarray:
-        """GPU 텐서 데이터를 비동기로 읽어온다."""
+        """
+        WHAT: GPU 텐서 데이터를 비동기로 읽어오는 함수입니다.
+        WHY: GPU에서 CPU로 메모리를 복사하는 작업은 메인 스레드를 블로킹할 수 있으므로 비동기적으로 처리하기 위함입니다.
+        HOW: JS/WebGPU의 비동기 버퍼 맵핑 기능을 활용해 완료를 대기(await)한 후 데이터를 복사합니다.
+        """
         self._check_disposed()
         if self.device == "cpu":
             if self._data is None:
@@ -246,29 +477,39 @@ class Tensor:
         await js_map_async(self._handle)
 
         # 3. WASM 힙에 직접 읽어들이기
+        # WHAT: 데이터를 수신할 빈 numpy 배열입니다.
+        # WHY: GPU로부터 복사해올 데이터를 담아둘 메모리 공간을 미리 준비하기 위함입니다.
+        # HOW: np.empty를 사용하여 텐서와 동일한 크기(shape)의 float32 배열을 할당합니다.
         out = np.empty(self.shape, dtype=np.float32)
         js_read_mapped_into(self._handle, out)
 
         return out
 
     def dispose(self) -> None:
-        """텐서와 연결된 GPU 버퍼를 즉시 해제한다."""
+        """
+        WHAT: 텐서와 연결된 리소스(GPU 버퍼 및 내부 데이터)를 즉시 해제하는 함수입니다.
+        WHY: 더 이상 사용하지 않는 메모리를 명시적으로 반환하여 VRAM 초과(OOM) 오류를 막기 위함입니다.
+        HOW: 핸들을 GC 큐에 넣고 내부 데이터 참조와 그래프 연결을 모두 초기화(None/빈 튜플)합니다.
+        """
         if self._disposed:
             return
         if self.device == "gpu" and self._handle is not None:
             _gc_queue.add(self._handle)
             self._handle = None
 
-
         self._data = None
         self._disposed = True
         self._lazy_op = None
         self._parents = ()
-        self._grad_parents = ()  # NC-05: grad parents도 초기화
+        self._grad_parents = ()
         self._ctx = None
 
     def backward(self, gradient: Optional['Tensor'] = None) -> None:
-        """역전파를 수행한다."""
+        """
+        WHAT: 역전파(Backpropagation)를 수행하여 이 텐서에 기여한 모든 부모 텐서들의 기울기(gradient)를 계산하는 함수입니다.
+        WHY: 신경망을 학습시킬 때 손실 함수(Loss)로부터 파라미터 업데이트에 필요한 미분값을 구하기 위해서입니다.
+        HOW: 위상 정렬의 역순으로 그래프를 탐색하며, 연산 클래스의 backward 함수에 체인 룰(Chain Rule)을 적용합니다.
+        """
         self._check_disposed()
         if not self.requires_grad:
             raise RuntimeError("Cannot call backward() on a tensor that does not require grad.")
@@ -276,29 +517,37 @@ class Tensor:
         from .autograd import build_topological_sort
         from .ops import ones_like
 
-        # NH-09 Fix: 스칼라/비스칼라 구분하여 gradient 초기화
         if gradient is None:
-            # PyTorch 방식: 스칼라 or 1-element 텐서만 gradient 없이 backward 가능
             if self.shape != () and self.shape != (1,):
                 raise RuntimeError("grad can be implicitly created only for scalar outputs")
             else:
                 gradient = ones_like(self)
 
-        # grad 맵 초기화
+        # WHAT: 각 텐서 노드의 ID를 키로 하여 해당 노드까지 누적된 기울기를 저장하는 맵입니다.
+        # WHY: 중복된 경로를 통해 전달되는 기울기들을 하나로 모아(add) 기록하기 위함입니다.
+        # HOW: 현재 노드(루트)에 대한 기울기를 초기화하여 딕셔너리에 넣습니다.
         grads: dict = {id(self): gradient}
 
+        # WHAT: 순전파 시 생성된 그래프를 탐색하기 위한 위상 정렬된 노드 리스트입니다.
+        # WHY: 계산 순서를 보장해야 부모 노드로 기울기를 올바르게 전달할 수 있기 때문입니다.
+        # HOW: autograd 모듈의 함수를 호출합니다.
         topo = build_topological_sort(self)
-        # 역순 탐색
+        
+        # WHAT: 정렬된 노드를 역방향으로 순회하며 역전파를 수행하는 반복문입니다.
+        # WHY: 체인 룰에 따라 최종 출력(현재 텐서)에서부터 입력(부모) 방향으로 기울기를 흘려보내야 하기 때문입니다.
+        # HOW: reversed() 함수를 통해 리스트의 순서를 뒤집어 반복합니다.
         for v in reversed(topo):
             if not getattr(v, 'requires_grad', False):
                 continue
             if id(v) not in grads:
                 continue
 
+            # WHAT: 현재 노드(v)에 전달된 누적 기울기입니다.
+            # WHY: 부모 노드들의 기울기를 구하기 위해 이 값을 곱해야(Chain Rule) 하기 때문입니다.
+            # HOW: grads 맵에서 꺼내옵니다.
             grad_out = grads[id(v)]
 
             if v._ctx is None or v._op_cls is None:
-                # 리프 노드 → grad 누적
                 if v.grad is None:
                     v.grad = grad_out
                 else:
@@ -306,14 +555,22 @@ class Tensor:
                     v.grad = add(v.grad, grad_out)
                 continue
 
-            # backward 호출 — NC-05 Fix: _grad_parents 사용
+            # WHAT: 현재 노드의 연산 클래스가 계산해 낸 부모 노드 방향의 기울기들입니다.
+            # WHY: 여러 입력을 받은 연산(예: 덧셈, 행렬곱)의 경우 각 입력에 대한 기울기가 다르기 때문입니다.
+            # HOW: _op_cls.backward 메서드에 컨텍스트와 grad_out을 넘겨 호출합니다.
             grad_inputs = v._op_cls.backward(v._ctx, grad_out)
             if not isinstance(grad_inputs, tuple):
                 grad_inputs = (grad_inputs,)
 
+            # WHAT: 계산된 부모 기울기들을 각 부모 노드에 전달하는 반복문입니다.
+            # WHY: 부모 노드의 ID 맵(grads)에 값을 누적(add)하기 위함입니다.
+            # HOW: _grad_parents 튜플과 grad_inputs를 zip으로 묶어 순회합니다.
             for parent, g in zip(v._grad_parents, grad_inputs):
                 if not getattr(parent, 'requires_grad', False) or g is None:
                     continue
+                # WHAT: 부모 노드의 메모리 주소(ID)입니다.
+                # WHY: grads 딕셔너리에 접근하는 식별자로 사용하기 위함입니다.
+                # HOW: id() 함수를 사용합니다.
                 pid = id(parent)
                 if pid in grads:
                     from .ops import add
@@ -324,19 +581,39 @@ class Tensor:
 
 
     def relu(self) -> 'Tensor':
+        """
+        WHAT: 현재 텐서에 ReLU(Rectified Linear Unit) 활성화 함수를 적용합니다.
+        WHY: 신경망에 비선형성을 부여하여 복잡한 패턴을 학습할 수 있게 하기 위함입니다.
+        HOW: ops 모듈의 relu 연산을 호출하여 결과를 반환합니다.
+        """
         self._check_disposed()
         from .ops import relu
         return relu(self)
 
     def matmul(self, other: 'Tensor') -> 'Tensor':
+        """
+        WHAT: 현재 텐서와 다른 텐서 간의 행렬 곱셈을 수행합니다.
+        WHY: 선형 계층(Linear Layer) 등에서 가중치와의 곱 연산을 처리하기 위함입니다.
+        HOW: ops 모듈의 matmul 함수를 호출하여 결과를 반환합니다.
+        """
         self._check_disposed()
         from .ops import matmul
         return matmul(self, other)
 
     def __matmul__(self, other: 'Tensor') -> 'Tensor':
+        """
+        WHAT: 파이썬의 `@` 연산자를 오버로딩하여 행렬 곱셈을 수행합니다.
+        WHY: 사용자가 `a @ b`처럼 직관적으로 수학 기호를 사용할 수 있게 하기 위함입니다.
+        HOW: 내부적으로 self.matmul()을 호출합니다.
+        """
         return self.matmul(other)
 
     def __add__(self, other):
+        """
+        WHAT: 두 텐서 간의 덧셈 연산(`+`)을 수행합니다.
+        WHY: 텐서들 간의 요소별 덧셈을 직관적으로 지원하기 위함입니다.
+        HOW: 스칼라 값일 경우 동일 크기의 텐서로 변환(full)한 뒤 ops.add를 호출합니다.
+        """
         self._check_disposed()
         from .ops import add, full
         if isinstance(other, (int, float)):
@@ -344,9 +621,19 @@ class Tensor:
         return add(self, other)
 
     def __radd__(self, other):
+        """
+        WHAT: 우측 피연산자 기준의 덧셈 연산(`스칼라 + 텐서`)을 수행합니다.
+        WHY: 파이썬 내장 스칼라 타입이 왼쪽에 올 때도 덧셈이 동작하도록 지원하기 위함입니다.
+        HOW: 덧셈은 교환 법칙이 성립하므로 self.__add__(other)를 그대로 반환합니다.
+        """
         return self.__add__(other)
 
     def __sub__(self, other):
+        """
+        WHAT: 두 텐서 간의 뺄셈 연산(`-`)을 수행합니다.
+        WHY: 텐서 요소들 간의 차이를 계산하기 위함입니다.
+        HOW: 스칼라를 텐서로 변환한 뒤 ops.sub를 호출합니다.
+        """
         self._check_disposed()
         from .ops import sub, full
         if isinstance(other, (int, float)):
@@ -354,6 +641,11 @@ class Tensor:
         return sub(self, other)
 
     def __rsub__(self, other):
+        """
+        WHAT: 우측 피연산자 기준의 뺄셈 연산(`스칼라 - 텐서`)을 수행합니다.
+        WHY: 스칼라가 왼쪽에 올 경우 순서에 맞게 뺄셈을 적용하기 위함입니다.
+        HOW: other를 텐서로 변환한 뒤 other에서 self를 빼는 ops.sub를 호출합니다.
+        """
         self._check_disposed()
         from .ops import sub, full
         if isinstance(other, (int, float)):
@@ -361,6 +653,11 @@ class Tensor:
         return sub(other, self)
 
     def __mul__(self, other):
+        """
+        WHAT: 두 텐서 간의 요소별 곱셈 연산(`*`)을 수행합니다.
+        WHY: 아다마르 곱(Hadamard Product)이나 스칼라 배율을 적용하기 위함입니다.
+        HOW: 스칼라를 텐서로 변환 후 ops.mul을 호출합니다.
+        """
         self._check_disposed()
         from .ops import mul, full
         if isinstance(other, (int, float)):
@@ -368,9 +665,19 @@ class Tensor:
         return mul(self, other)
 
     def __rmul__(self, other):
+        """
+        WHAT: 우측 피연산자 기준의 곱셈 연산(`스칼라 * 텐서`)을 수행합니다.
+        WHY: 곱셈의 교환 법칙을 지원하여 스칼라가 왼쪽에 와도 처리되게 하기 위함입니다.
+        HOW: self.__mul__(other)를 호출하여 결과를 반환합니다.
+        """
         return self.__mul__(other)
 
     def __truediv__(self, other):
+        """
+        WHAT: 두 텐서 간의 나눗셈 연산(`/`)을 수행합니다.
+        WHY: 텐서 요소별 나눗셈을 수식으로 간편하게 표현하기 위함입니다.
+        HOW: 스칼라를 텐서로 변환 후 ops.div를 호출합니다.
+        """
         self._check_disposed()
         from .ops import div, full
         if isinstance(other, (int, float)):
@@ -378,6 +685,11 @@ class Tensor:
         return div(self, other)
 
     def __rtruediv__(self, other):
+        """
+        WHAT: 우측 피연산자 기준의 나눗셈 연산(`스칼라 / 텐서`)을 수행합니다.
+        WHY: 스칼라를 텐서의 각 요소로 나누는 연산을 지원하기 위함입니다.
+        HOW: 스칼라를 텐서로 바꾼 후 other를 self로 나누는 ops.div를 호출합니다.
+        """
         self._check_disposed()
         from .ops import div, full
         if isinstance(other, (int, float)):
@@ -385,6 +697,11 @@ class Tensor:
         return div(other, self)
 
     def __neg__(self):
+        """
+        WHAT: 텐서의 부호를 반전시키는 단항 연산(`-텐서`)을 수행합니다.
+        WHY: 수식 내에서 값의 부호를 쉽게 바꾸기 위함입니다.
+        HOW: ops.neg 함수를 호출하여 결과를 반환합니다.
+        """
         self._check_disposed()
         from .ops import neg
         return neg(self)
@@ -392,16 +709,31 @@ class Tensor:
 
 
     def sum(self):
+        """
+        WHAT: 텐서 내 모든 요소들의 합을 계산합니다.
+        WHY: 손실(Loss) 합산이나 특정 차원의 데이터를 집계하기 위함입니다.
+        HOW: ops.sum_op 함수를 호출하여 스칼라(또는 축소된 텐서)를 반환합니다.
+        """
         self._check_disposed()
         from .ops import sum_op
         return sum_op(self)
 
     def mean(self):
+        """
+        WHAT: 텐서 내 모든 요소들의 평균을 계산합니다.
+        WHY: MSE 손실 계산 등에서 전체 데이터의 평균적인 크기를 구하기 위함입니다.
+        HOW: ops.mean_op 함수를 호출하여 결과를 반환합니다.
+        """
         self._check_disposed()
         from .ops import mean_op
         return mean_op(self)
 
     def reshape(self, *shape):
+        """
+        WHAT: 텐서의 차원 형태(Shape)를 변경합니다.
+        WHY: 데이터의 논리적 구조를 재배열하여 다른 연산(행렬곱 등)과 호환되게 하기 위함입니다.
+        HOW: 새로운 shape 튜플을 구성하고 ops.reshape를 호출합니다.
+        """
         self._check_disposed()
         from .ops import reshape
         if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
@@ -409,20 +741,46 @@ class Tensor:
         return reshape(self, shape)
 
     def view(self, *shape):
+        """
+        WHAT: reshape와 동일하게 텐서의 형태를 변경합니다.
+        WHY: 기존 파이토치(PyTorch) 코드와의 호환성을 유지하여 사용 편의성을 높이기 위함입니다.
+        HOW: 내부적으로 self.reshape를 호출합니다.
+        """
         return self.reshape(*shape)
 
     def numel(self):
+        """
+        WHAT: 텐서가 포함하는 전체 원소(Element)의 개수를 반환합니다.
+        WHY: 데이터의 총 크기를 파악하거나 평균 계산 시 나누는 값으로 사용하기 위함입니다.
+        HOW: 텐서의 shape 튜플을 순회하며(loop) 각 차원의 크기를 곱합니다.
+        """
+        # WHAT: 원소 개수를 누적해서 곱할 변수입니다.
+        # WHY: 1부터 시작하여 각 차원을 곱해가기 위함입니다.
+        # HOW: 정수 1로 초기화합니다.
         n = 1
+        # WHAT: shape의 각 차원 크기를 순회하는 반복문입니다.
+        # WHY: 모든 차원의 크기를 곱하여 총 볼륨을 구하기 위함입니다.
+        # HOW: self.shape를 순회하여 n에 곱합니다.
         for d in self.shape:
             n *= d
         return n
 
     @property
     def data(self):
+        """
+        WHAT: 현재 텐서 객체 자체를 반환합니다 (데이터 속성 접근용).
+        WHY: 파이토치 스타일의 tensor.data 접근 패턴을 모방하여 기존 코드 호환성을 제공하기 위함입니다.
+        HOW: self를 그대로 반환합니다.
+        """
         return self
 
     @data.setter
     def data(self, new_tensor):
+        """
+        WHAT: 텐서의 내부 데이터와 상태를 다른 텐서의 것으로 교체(In-place replacement)합니다.
+        WHY: 옵티마이저(Optimizer)가 파라미터를 업데이트할 때 새로운 텐서를 할당하지 않고 제자리에서 값을 바꾸기 위함입니다.
+        HOW: 새 텐서의 데이터, 핸들, 형태를 복사하고, 기존의 자동 미분 그래프 연결(부모, 컨텍스트 등)을 모두 끊습니다.
+        """
         # In-place replacement for optimizer updates
         self._data = new_tensor._data if hasattr(new_tensor, '_data') else None
         self.shape = new_tensor.shape
@@ -435,46 +793,91 @@ class Tensor:
         self.grad = None
         
     def exp(self):
+        """
+        WHAT: 텐서의 각 요소에 지수 함수(e^x)를 적용합니다.
+        WHY: 소프트맥스(Softmax) 등의 활성화 함수나 로그 확정값을 원래 스케일로 복원하기 위함입니다.
+        HOW: ops.exp_op를 호출합니다.
+        """
         self._check_disposed()
         from .ops import exp_op
         return exp_op(self)
         
     def log(self):
+        """
+        WHAT: 텐서의 각 요소에 자연 로그(ln x)를 적용합니다.
+        WHY: 크로스 엔트로피 손실(Cross Entropy Loss) 등 정보량 기반 수식 처리를 위함입니다.
+        HOW: ops.log_op를 호출합니다.
+        """
         self._check_disposed()
         from .ops import log_op
         return log_op(self)
         
     def sigmoid(self):
+        """
+        WHAT: 시그모이드(Sigmoid) 활성화 함수를 적용합니다.
+        WHY: 출력값을 0과 1 사이의 확률값으로 변환하기 위함입니다.
+        HOW: ops.sigmoid를 호출합니다.
+        """
         self._check_disposed()
         from .ops import sigmoid
         return sigmoid(self)
         
     def tanh(self):
+        """
+        WHAT: 하이퍼볼릭 탄젠트(Tanh) 활성화 함수를 적용합니다.
+        WHY: 출력값을 -1과 1 사이로 정규화하여 기울기 소실을 완화하기 위함입니다.
+        HOW: ops.tanh_op를 호출합니다.
+        """
         self._check_disposed()
         from .ops import tanh_op
         return tanh_op(self)
 
     def unsqueeze(self, dim: int):
+        """
+        WHAT: 지정한 차원(dim) 위치에 크기가 1인 새로운 차원을 삽입합니다.
+        WHY: 브로드캐스팅(Broadcasting)을 위해 차원 수를 늘리거나 배치 차원을 추가하기 위함입니다.
+        HOW: ops.unsqueeze를 호출합니다.
+        """
         self._check_disposed()
         from .ops import unsqueeze
         return unsqueeze(self, dim)
         
     def squeeze(self, dim: Optional[int] = None):
+        """
+        WHAT: 크기가 1인 차원을 제거합니다. dim 지정 시 해당 차원만 제거합니다.
+        WHY: 불필요한 차원을 축소시켜 데이터 구조를 단순화하거나 차원 수를 맞추기 위함입니다.
+        HOW: ops.squeeze를 호출합니다.
+        """
         self._check_disposed()
         from .ops import squeeze
         return squeeze(self, dim)
         
     def flatten(self, start_dim: int = 0, end_dim: int = -1):
+        """
+        WHAT: 다차원 텐서를 1차원 배열(또는 지정된 차원 구간 축소)로 평탄화합니다.
+        WHY: 합성곱(CNN) 층의 출력을 선형(Linear) 층에 전달하기 위해 1차원 벡터로 펴주어야 하기 때문입니다.
+        HOW: ops.flatten을 호출합니다.
+        """
         self._check_disposed()
         from .ops import flatten
         return flatten(self, start_dim, end_dim)
         
     def permute(self, dims: tuple):
+        """
+        WHAT: 텐서의 차원 순서를 지정된 배열(dims)대로 재배치합니다.
+        WHY: 이미지 데이터의 채널 순서 변경(NHWC <-> NCHW)이나 행렬 전치 등을 수행하기 위함입니다.
+        HOW: ops.permute를 호출합니다.
+        """
         self._check_disposed()
         from .ops import permute
         return permute(self, dims)
 
     def max(self, axis=None):
+        """
+        WHAT: 텐서 내 요소들의 최댓값을 구합니다. 특정 축(axis)이 주어지면 해당 축을 따라 최댓값을 구합니다.
+        WHY: 예측 클래스를 선택(Argmax 역할)하거나 풀링 연산을 수행하기 위함입니다.
+        HOW: axis 여부에 따라 ops.max_op 또는 ops.max_axis를 호출합니다.
+        """
         self._check_disposed()
         if axis is None:
             from .ops import max_op
@@ -484,21 +887,41 @@ class Tensor:
             return max_axis(self, axis)
 
     def var(self, axis=None, unbiased=True):
+        """
+        WHAT: 텐서의 분산(Variance)을 계산합니다.
+        WHY: 데이터의 분포 범위를 파악하거나 정규화(Normalization) 과정에서 쓰이기 때문입니다.
+        HOW: ops.var를 호출합니다.
+        """
         self._check_disposed()
         from .ops import var
         return var(self, axis, unbiased)
         
     def std(self, axis=None, unbiased=True):
+        """
+        WHAT: 텐서의 표준 편차(Standard Deviation)를 계산합니다.
+        WHY: 데이터의 퍼짐 정도를 원래 단위로 확인하거나 표준화 기법에서 분모로 사용하기 위함입니다.
+        HOW: ops.std를 호출합니다.
+        """
         self._check_disposed()
         from .ops import std
         return std(self, axis, unbiased)
 
     def __getitem__(self, key):
+        """
+        WHAT: 인덱싱 또는 슬라이싱 문법(예: tensor[0:2])을 사용하여 텐서의 부분 배열을 추출합니다.
+        WHY: 특정 데이터 샘플을 선택하거나 관심 영역(ROI)만 잘라내어 처리하기 위함입니다.
+        HOW: 파이썬 특수 메서드를 오버로딩하여 ops.slice_op를 호출합니다.
+        """
         self._check_disposed()
         from .ops import slice_op
         return slice_op(self, key)
 
     def __repr__(self) -> str:
+        """
+        WHAT: 텐서 객체를 문자열로 표현(출력)합니다.
+        WHY: 디버깅이나 로그 확인 시 텐서의 크기, 타입, 디바이스 등 메타데이터를 쉽게 확인하기 위함입니다.
+        HOW: 포맷팅된 문자열을 생성하여 반환합니다. 해제된 텐서는 별도로 표시합니다.
+        """
         if self._disposed:
             return '<AMEVA Tensor (disposed)>'
         return (
