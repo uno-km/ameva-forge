@@ -9,7 +9,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["@webgpu/types", "jest"]
+    "types": ["@webgpu/types", "jest", "node"]
   },
   "include": ["src/**/*", "tests/**/*"]
 }

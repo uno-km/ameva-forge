@@ -97,3 +97,33 @@ class AMEVAForgeSecurityError(AMEVAForgeError):
     어떻게: AMEVAForgeError를 상속받아 세부 예외 타입으로 분리되었다.
     """
     pass
+
+
+class AMEVAForgeValidationError(AMEVAForgeError):
+    """GPU validation error scope에서 감지된 오류."""
+    pass
+
+
+class AMEVAForgeOutOfMemoryError(AMEVAForgeError):
+    """GPU out-of-memory error scope에서 감지된 오류."""
+    pass
+
+
+class AMEVAForgeInternalGPUError(AMEVAForgeError):
+    """GPU internal error scope에서 감지된 오류."""
+    pass
+
+
+class AMEVAForgeDeviceLostError(AMEVAForgeError):
+    """GPU device lost 오류."""
+    pass
+
+
+class AMEVAForgeStaleHandleError(AMEVAForgeError):
+    """이전 generation의 stale handle 접근 오류."""
+    pass
+
+
+class AMEVAForgeUnsupportedOperationError(AMEVAForgeError):
+    """Release 1에서 지원하지 않는 연산 오류."""
+    pass

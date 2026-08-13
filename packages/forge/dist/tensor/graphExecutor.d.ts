@@ -21,4 +21,4 @@ import { TensorHandle } from "../types";
  * WHY: 매 연산마다 JS와 WebAssembly/GPU 사이를 왕복(context switch)하면 극심한 오버헤드가 발생하므로, 한 번의 호출로 많은 명령을 처리(Transaction)하기 위해 설계되었습니다.
  * HOW: JSON을 파싱하고, 명령을 검증하며, 적절한 청크로 분할하여 WebGPU 커맨드 버퍼에 기록하고 제출(submit)합니다. 실패 시 트랜잭션을 롤백합니다.
  */
-export declare function executeGraph(instructionsJson: string, jsInputs: unknown): Record<number, TensorHandle>;
+export declare function executeGraph(instructionsJson: string, jsInputs: unknown): Promise<Record<number, TensorHandle>>;

@@ -43,6 +43,12 @@ from .errors import (
     AMEVAForgeWebGPUUnavailableError,
     AMEVAForgeQuotaExceededError,   # NL-07: TypeScript와 대칭
     AMEVAForgeSecurityError,         # NL-07: TypeScript와 대칭
+    AMEVAForgeValidationError,
+    AMEVAForgeOutOfMemoryError,
+    AMEVAForgeInternalGPUError,
+    AMEVAForgeDeviceLostError,
+    AMEVAForgeStaleHandleError,
+    AMEVAForgeUnsupportedOperationError,
 )
 
 # WHAT: 패키지 버전을 정의하는 변수입니다.
@@ -141,6 +147,12 @@ __all__ = [
     "AMEVAForgeWebGPUUnavailableError",
     "AMEVAForgeQuotaExceededError",
     "AMEVAForgeSecurityError",
+    "AMEVAForgeValidationError",
+    "AMEVAForgeOutOfMemoryError",
+    "AMEVAForgeInternalGPUError",
+    "AMEVAForgeDeviceLostError",
+    "AMEVAForgeStaleHandleError",
+    "AMEVAForgeUnsupportedOperationError",
     # 디버그/설정
     "set_debug_mode",
     "get_debug_mode",

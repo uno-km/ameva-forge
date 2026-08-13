@@ -348,7 +348,7 @@ class Tensor:
         if self._disposed:
             raise AMEVAForgeDisposedError("Cannot access a disposed Tensor.")
 
-    def realize(self) -> None:
+    async def realize(self) -> None:
         """
         WHAT: 레이지 평가(Lazy Evaluation) 그래프를 단일 FFI 호출로 GPU에 제출(Submit)하는 함수입니다.
         WHY: 연산들을 모았다가 한 번에 수행하여 커널 호출 오버헤드를 줄이고 최적화 기회를 얻기 위함입니다.
@@ -416,7 +416,7 @@ class Tensor:
         # WHAT: JS 브릿지가 연산을 실행한 뒤 반환한 새로운 텐서 핸들(버퍼 ID)들입니다.
         # WHY: 생성된 텐서 결과를 파이썬 텐서 객체와 연결(binding)하기 위함입니다.
         # HOW: js_execute_graph 함수를 호출하여 딕셔너리로 반환받습니다.
-        out_handles = js_execute_graph(instructions, inputs)
+        out_handles = await js_execute_graph(instructions, inputs)
 
         # WHAT: 생성된 핸들들을 각 텐서 객체에 주입하는 반복문입니다.
         # WHY: 레이지(지연) 상태였던 텐서들이 이제 실제 GPU 버퍼를 가리키게 하기 위함입니다.
@@ -469,8 +469,8 @@ class Tensor:
                 raise AMEVAForgeDisposedError("CPU tensor data has been released.")
             return self._data
 
-        # 1. 레이지 그래프를 GPU에 제출 (동기 submit)
-        self.realize()
+        # 1. 레이지 그래프를 GPU에 제출 (동기 submit -> 이제 async)
+        await self.realize()
 
         from .bridge import js_map_async, js_read_mapped_into
         # 2. GPU 큐 완료 대기 + staging 버퍼 맵핑

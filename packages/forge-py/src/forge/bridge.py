@@ -16,6 +16,14 @@ M-06 Fix: batch dispose 구현
 from typing import Any, List, Optional
 import sys
 
+from .errors import (
+    AMEVAForgeValidationError,
+    AMEVAForgeOutOfMemoryError,
+    AMEVAForgeInternalGPUError,
+    AMEVAForgeDeviceLostError,
+    AMEVAForgeQuotaExceededError
+)
+
 
 def is_pyodide() -> bool:
     """
@@ -161,51 +169,53 @@ def js_dispose_batch(handles: list) -> None:
             core.dispose(h)
 
 
-def js_execute_graph(instructions_json: str, inputs: Any) -> Any:
-    """
-    [WHAT] 
-    파이썬 측에서 직렬화한 연산 그래프(명령어)와 입력 데이터들을 JS 측 엔진으로 넘겨 실제 GPU 연산을 실행시키는 핵심 미들웨어 함수입니다.
-    
-    [WHY] 
-    순수 파이썬만으로는 브라우저의 WebGPU API에 접근하여 병렬 연산을 수행할 수 없으므로, 연산 그래프의 직렬화 문자열을 브릿지를 통해 위임해야 합니다.
-    
-    [HOW] 
-    입력 데이터의 dtype을 검증(float32)하고 JS 배열로 변환한 뒤, core.executeGraph()에 명령어와 인풋을 전달하여 실행 결과를 파이썬 딕셔너리로 받아옵니다.
-    """
-    # 전역 JS 브릿지 객체를 가져옵니다.
-    core = get_js_core()
-    # 파이썬 객체를 JS 객체로 변환하기 위해 to_js를 임포트합니다.
-    from pyodide.ffi import to_js
-    # H-NEW-09: inputs 내 ndarray dtype 검증
-    # 넘파이 모듈을 불러와 배열 타입을 검사할 준비를 합니다.
-    import numpy as np
-    
-    # 전달받은 입력 데이터 리스트를 순회하며 각 텐서/배열의 요소를 확인합니다.
-    for i, inp in enumerate(inputs):
-        if hasattr(inp, 'dtype') and inp.dtype != np.float32:
-            # 배열의 데이터 타입이 float32가 아니면, 연산 정확도나 GPU 셰이더 호환 문제가 생길 수 있으므로 타입 에러를 던집니다.
-            raise TypeError(
-                f"Input[{i}] dtype must be float32, got {inp.dtype}. "
-                f"Use .astype(np.float32) to convert."
-            )
-            
-    # 입력 리스트를 JS 배열로 변환합니다. depth=1 옵션을 주어 1단계 리스트까지만 변환하도록 제어합니다.
-    js_inputs = to_js(inputs, depth=1)
+def _map_js_error(e: Exception) -> None:
+    """Map JS error names to Python typed exceptions."""
+    msg = str(e)
+    if 'AMEVAForgeValidationError' in msg:
+        raise AMEVAForgeValidationError(msg) from e
+    elif 'AMEVAForgeOutOfMemoryError' in msg or 'OOM' in msg:
+        raise AMEVAForgeOutOfMemoryError(msg) from e
+    elif 'AMEVAForgeInternalGPUError' in msg:
+        raise AMEVAForgeInternalGPUError(msg) from e
+    elif 'AMEVAForgeDeviceLostError' in msg or 'device lost' in msg.lower():
+        raise AMEVAForgeDeviceLostError(msg) from e
+    elif 'AMEVAForgeQuotaExceededError' in msg:
+        raise AMEVAForgeQuotaExceededError(msg) from e
 
-    # 문자열로 된 명령어 JSON과 JS 객체로 변환된 입력 데이터를 전달하여 그래프 연산을 요청합니다.
-    result = core.executeGraph(instructions_json, js_inputs)
-    
-    # js_inputs 프록시 메모리 해제
-    if hasattr(js_inputs, 'destroy'):
-        js_inputs.destroy()
-    # CRITICAL: JS Record<number,string> → Python dict 변환.
-    # to_py() 없이는 JS Proxy 객체가 반환되어
-    # tensor.py의 out_handles.get() 호출 시 AttributeError 발생.
-    if hasattr(result, 'to_py'):
-        # JS Proxy 객체일 경우, to_py() 메서드를 통해 순수 파이썬 객체(dict)로 명시적 변환을 수행합니다.
-        ret = result.to_py()
-        result.destroy() # VUL-019: JS Proxy 객체 해제 (Memory Leak 방지)
-        return ret
-    # to_py 메서드가 없다면, 기본 dict() 생성자를 사용해 파이썬 딕셔너리로 형변환하여 반환합니다.
-    return dict(result)
+async def js_execute_graph(instructions_json: str, inputs) -> dict:
+    """Execute graph via JS bridge (async - executeGraph returns Promise)."""
+    core = get_js_core()
+    js_inputs = None
+    result_proxy = None
+    try:
+        # Convert inputs to JS
+        if inputs is not None:
+            from pyodide.ffi import to_js
+            # Validate float32
+            for arr in inputs:
+                if hasattr(arr, 'dtype') and str(arr.dtype) != 'float32':
+                    raise TypeError(f"Expected float32, got {arr.dtype}")
+            js_inputs = to_js(inputs, depth=1)
+        
+        # Call async executeGraph — returns Promise in Pyodide
+        result_proxy = await core.executeGraph(instructions_json, js_inputs)
+        
+        # Convert JS result to Python dict
+        result = result_proxy.to_py()
+        return result
+    except Exception as e:
+        _map_js_error(e)
+        raise
+    finally:
+        if js_inputs is not None:
+            try:
+                js_inputs.destroy()
+            except Exception:
+                pass
+        if result_proxy is not None:
+            try:
+                result_proxy.destroy()
+            except Exception:
+                pass
 

@@ -1,0 +1,60 @@
+﻿jest-haste-map: Haste module naming collision: @ameva/forge
+  The following files share their name; please adjust your hasteImpl:
+    * <rootDir>\package.json
+    * <rootDir>\test-results\package.json
+
+node.exe : FAIL tests/sourceContract.test.ts
+위치 줄:1 문자:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (FAIL tests/sourceContract.test.ts:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  ??Test suite failed to run
+
+    [96mtests/sourceContract.test.ts[0m:[93m1[0m:[93m30[0m - [91merror[0m[90m TS2307: [0mCannot find module '
+fs' or its corresponding type declarations.
+
+    [7m1[0m import { readFileSync } from "fs"; import { join } from "path";
+    [7m [0m [91m                             ~~~~[0m
+    [96mtests/sourceContract.test.ts[0m:[93m1[0m:[93m57[0m - [91merror[0m[90m TS2307: [0mCannot find module '
+path' or its corresponding type declarations.
+
+    [7m1[0m import { readFileSync } from "fs"; import { join } from "path";
+    [7m [0m [91m                                                        ~~~~~~[0m
+    [96mtests/sourceContract.test.ts[0m:[93m2[0m:[93m99[0m - [91merror[0m[90m TS2304: [0mCannot find name '__
+dirname'.
+
+    [7m2[0m describe("R1 source contracts",()=>{it("reduction uses input size",()=>{const s=readFileSync(join(__dirna
+me,"../src/tensor/graphExecutor.ts"),"utf8");expect(s).toContain("_globalRegistry.get(reductionInputHandle).byteLength 
+/ 4");expect(s).not.toContain("let currentSize = byteLength / 4");});it("duplicate readback is rejected",()=>{const s=r
+eadFileSync(join(__dirname,"../src/tensor/gpuCore.ts"),"utf8");expect(s).toContain("_pendingStagingBuffers.has(handle)"
+);});});
+    [7m [0m [91m                                                                                                  ~~
+~~~~~~~[0m
+    [96mtests/sourceContract.test.ts[0m:[93m2[0m:[93m361[0m - [91merror[0m[90m TS2304: [0mCannot find name '_
+_dirname'.
+
+    [7m2[0m describe("R1 source contracts",()=>{it("reduction uses input size",()=>{const s=readFileSync(join(__dirna
+me,"../src/tensor/graphExecutor.ts"),"utf8");expect(s).toContain("_globalRegistry.get(reductionInputHandle).byteLength 
+/ 4");expect(s).not.toContain("let currentSize = byteLength / 4");});it("duplicate readback is rejected",()=>{const s=r
+eadFileSync(join(__dirname,"../src/tensor/gpuCore.ts"),"utf8");expect(s).toContain("_pendingStagingBuffers.has(handle)"
+);});});
+    [7m [0m [91m                                                                                                    
+                                                                                                                       
+                                                                                                                       
+                      ~~~~~~~~~[0m
+
+PASS tests/tensorRegistry.test.ts
+PASS tests/quota.test.ts
+PASS tests/shaderGuard.test.ts
+PASS tests/validateShape.test.ts
+PASS tests/validateWasmRange.test.ts
+PASS tests/validateDType.test.ts
+PASS tests/stress.test.ts
+
+Test Suites: 1 failed, 7 passed, 8 total
+Tests:       36 passed, 36 total
+Snapshots:   0 total
+Time:        4.834 s, estimated 47 s
+Ran all test suites.

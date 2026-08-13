@@ -79,3 +79,33 @@ export class AMEVAForgeSecurityError extends AMEVAForgeError {}
  * HOW: AMEVAForgeError를 상속받아 구현되지 않은 기능 호출 시 발생합니다.
  */
 export class AMEVAForgeUnsupportedOpError extends AMEVAForgeError {}
+
+/**
+ * WHAT: GPU validation error scope에서 감지된 오류 클래스입니다.
+ * WHY: WebGPU pushErrorScope('validation') 결과를 typed exception으로 전달하기 위해 존재합니다.
+ */
+export class AMEVAForgeValidationError extends AMEVAForgeError {}
+
+/**
+ * WHAT: GPU out-of-memory error scope에서 감지된 오류 클래스입니다.
+ * WHY: WebGPU pushErrorScope('out-of-memory') 결과를 typed exception으로 전달하기 위해 존재합니다.
+ */
+export class AMEVAForgeOutOfMemoryError extends AMEVAForgeError {}
+
+/**
+ * WHAT: GPU internal error scope에서 감지된 오류 클래스입니다.
+ * WHY: WebGPU pushErrorScope('internal') 결과를 typed exception으로 전달하기 위해 존재합니다.
+ */
+export class AMEVAForgeInternalGPUError extends AMEVAForgeError {}
+
+/**
+ * WHAT: GPU 디바이스가 유실(device lost)되었을 때 발생하는 오류 클래스입니다.
+ * WHY: 디바이스 유실 상황을 명확히 구분하여 재초기화 흐름을 유도하기 위해 존재합니다.
+ */
+export class AMEVAForgeDeviceLostError extends AMEVAForgeError {}
+
+/**
+ * WHAT: 이전 generation의 stale handle에 접근할 때 발생하는 오류 클래스입니다.
+ * WHY: Device lost 후 재초기화된 환경에서 이전 텐서 접근을 차단하기 위해 존재합니다.
+ */
+export class AMEVAForgeStaleHandleError extends AMEVAForgeError {}

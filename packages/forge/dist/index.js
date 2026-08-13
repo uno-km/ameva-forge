@@ -80,6 +80,36 @@ class AMEVAForgeSecurityError extends AMEVAForgeError {
  */
 class AMEVAForgeUnsupportedOpError extends AMEVAForgeError {
 }
+/**
+ * WHAT: GPU validation error scope에서 감지된 오류 클래스입니다.
+ * WHY: WebGPU pushErrorScope('validation') 결과를 typed exception으로 전달하기 위해 존재합니다.
+ */
+class AMEVAForgeValidationError extends AMEVAForgeError {
+}
+/**
+ * WHAT: GPU out-of-memory error scope에서 감지된 오류 클래스입니다.
+ * WHY: WebGPU pushErrorScope('out-of-memory') 결과를 typed exception으로 전달하기 위해 존재합니다.
+ */
+class AMEVAForgeOutOfMemoryError extends AMEVAForgeError {
+}
+/**
+ * WHAT: GPU internal error scope에서 감지된 오류 클래스입니다.
+ * WHY: WebGPU pushErrorScope('internal') 결과를 typed exception으로 전달하기 위해 존재합니다.
+ */
+class AMEVAForgeInternalGPUError extends AMEVAForgeError {
+}
+/**
+ * WHAT: GPU 디바이스가 유실(device lost)되었을 때 발생하는 오류 클래스입니다.
+ * WHY: 디바이스 유실 상황을 명확히 구분하여 재초기화 흐름을 유도하기 위해 존재합니다.
+ */
+class AMEVAForgeDeviceLostError extends AMEVAForgeError {
+}
+/**
+ * WHAT: 이전 generation의 stale handle에 접근할 때 발생하는 오류 클래스입니다.
+ * WHY: Device lost 후 재초기화된 환경에서 이전 텐서 접근을 차단하기 위해 존재합니다.
+ */
+class AMEVAForgeStaleHandleError extends AMEVAForgeError {
+}
 
 /**
  * Created: 2026-08-12 12:14:52 +0900
@@ -793,7 +823,11 @@ async function mapBufferAsync$1(buffer, byteLength) {
 function readMappedInto$1(stagingBuffer, token, outArray) {
     try {
         const arrayBuffer = stagingBuffer.getMappedRange();
-        outArray.set(new Float32Array(arrayBuffer));
+        const mapped = new Float32Array(arrayBuffer);
+        if (outArray.length !== mapped.length) {
+            throw new RangeError(`readMappedInto destination length mismatch: expected ${mapped.length}, got ${outArray.length}`);
+        }
+        outArray.set(mapped);
     }
     finally {
         stagingBuffer.unmap();
@@ -3898,6 +3932,9 @@ function read(handle) {
  * HOW: 레지스트리에서 버퍼를 조회한 뒤 맵핑을 수행하고 반환된 스테이징 버퍼를 _pendingStagingBuffers에 저장합니다.
  */
 async function mapBufferAsync(handle) {
+    if (_pendingStagingBuffers.has(handle)) {
+        throw new Error(`[AMEVA] A readback is already pending for handle "${handle}".`);
+    }
     /**
      * WHAT: 매핑할 원본 텐서 레코드입니다.
      * WHY: 복사 소스가 될 GPUBuffer와 크기 정보를 제공하기 위해 참조됩니다.
@@ -4560,7 +4597,7 @@ function validateInstruction(inst, idx) {
  * WHY: 매 연산마다 JS와 WebAssembly/GPU 사이를 왕복(context switch)하면 극심한 오버헤드가 발생하므로, 한 번의 호출로 많은 명령을 처리(Transaction)하기 위해 설계되었습니다.
  * HOW: JSON을 파싱하고, 명령을 검증하며, 적절한 청크로 분할하여 WebGPU 커맨드 버퍼에 기록하고 제출(submit)합니다. 실패 시 트랜잭션을 롤백합니다.
  */
-function executeGraph(instructionsJson, jsInputs) {
+async function executeGraph(instructionsJson, jsInputs) {
     // ── 1. Parse ──
     /**
      * WHAT: JSON 문자열에서 파싱된 원시(unvalidated) 자바스크립트 객체 배열입니다.
@@ -4626,6 +4663,7 @@ function executeGraph(instructionsJson, jsInputs) {
      * HOW: 디스패치를 하나 추가할 때마다 1씩 증가시킵니다.
      */
     let opsInCurrentBatch = 0;
+    let encoderHasCommands = false;
     /**
      * WHAT: 현재 커맨드 인코더에 제출된 총 연산 원소 수(워크로드)입니다.
      * WHY: WORKLOAD_BUDGET_ELEMENTS 상한선에 도달했는지 확인하여 TDR 현상을 피하도록 배치를 끊기 위해 계산합니다.
@@ -4661,7 +4699,7 @@ function executeGraph(instructionsJson, jsInputs) {
      * WHY: GPU 큐 작업이 비동기적으로 완료된 후, 이 임시 버퍼들을 모아서 파괴(destroy)하여 메모리 누수를 방지하기 위해 저장합니다.
      * HOW: 디스패치 과정에서 createBuffer된 파라미터 버퍼들을 push()로 수집합니다.
      */
-    const paramsBuffersToDestroy = [];
+    const paramsAllocations = [];
     try {
         /**
          * WHAT: 검증된 각 그래프 명령어를 순차적으로 순회하며 GPU 작업으로 변환하는 메인 루프입니다.
@@ -4745,9 +4783,13 @@ function executeGraph(instructionsJson, jsInputs) {
                  * HOW: allocateBuffer 헬퍼를 호출하여 STORAGE 및 COPY 용도의 버퍼를 생성합니다.
                  */
                 const { buffer, token } = allocateBuffer(byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, 'tensor', `Graph_${instructions[0]?.id}`);
-                writeFloat32Array(buffer, actualData);
-                if (bufProxy)
-                    bufProxy.release();
+                try {
+                    writeFloat32Array(buffer, actualData);
+                }
+                finally {
+                    if (bufProxy)
+                        bufProxy.release();
+                }
                 /**
                  * WHAT: 업로드된 버퍼를 전역 레지스트리에 등록한 결과로 발급받은 텐서 핸들입니다.
                  * WHY: 리소스 생명주기를 추적하고 트랜잭션 실패 시 롤백 대상으로 삼기 위해 저장합니다.
@@ -4811,11 +4853,8 @@ function executeGraph(instructionsJson, jsInputs) {
              * WHY: 각 연산의 크기나 특수 인자(스토라이드, 패딩 값 등)를 셰이더 내에서 읽을 수 있게 제공해야 합니다.
              * HOW: 계산된 paramsSize로 device.createBuffer를 호출하고 UNIFORM 속성을 지정합니다. 생성 후에는 paramsBuffersToDestroy에 등록해 사후 삭제를 예약합니다.
              */
-            const paramsBuffer = device.createBuffer({
-                size: paramsSize,
-                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-            });
-            paramsBuffersToDestroy.push(paramsBuffer);
+            const { buffer: paramsBuffer, token: paramsToken } = allocateBuffer(paramsSize, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, 'uniform', `Graph_${instructions[0]?.id}_params`);
+            paramsAllocations.push({ buffer: paramsBuffer, token: paramsToken });
             /**
              * WHAT: 현재 실행할 WGSL 셰이더 소스 코드를 담는 문자열 변수입니다.
              * WHY: 오퍼레이션 키워드(inst.op)에 맞는 셰이더를 매핑하여 캐시 조회 및 파이프라인 생성에 넘기기 위함입니다.
@@ -5126,9 +5165,12 @@ function executeGraph(instructionsJson, jsInputs) {
                     throw new AMEVAForgeSecurityError(`Instruction op="${inst.op}" is missing 'in' field.`);
                 }
                 const REDUCTION_WG_SIZE = 256;
-                let currentSize = byteLength / 4;
+                const reductionInputHandle = idToHandle[inst.in[0]];
+                if (!reductionInputHandle)
+                    throw new AMEVAForgeSecurityError(`Unresolved reduction input id ${inst.in[0]}`);
+                let currentSize = _globalRegistry.get(reductionInputHandle).byteLength / 4;
                 let currentInputBuf = idToBuffer[inst.in[0]];
-                const intermediateBuffers = [];
+                const intermediateAllocations = [];
                 /**
                  * WHAT: 병렬 리덕션(Reduction) 연산을 위한 다중 패스 트리 루프입니다.
                  * WHY: 전체 배열을 하나의 스칼라로 압축하기 위해 여러 번의 컴퓨트 패스를 통해 계층적으로 데이터를 축소시키기 위함입니다.
@@ -5136,16 +5178,10 @@ function executeGraph(instructionsJson, jsInputs) {
                  */
                 while (currentSize > 1) {
                     const numWGs = Math.ceil(currentSize / REDUCTION_WG_SIZE);
-                    const passBuf = device.createBuffer({
-                        size: Math.max(4, numWGs * 4),
-                        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-                    });
-                    intermediateBuffers.push(passBuf);
-                    const passParamsBuf = device.createBuffer({
-                        size: 16,
-                        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-                    });
-                    intermediateBuffers.push(passParamsBuf);
+                    const { buffer: passBuf, token: passBufToken } = allocateBuffer(Math.max(4, numWGs * 4), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, 'temporary', `Graph_${instructions[0]?.id}_reduction`);
+                    intermediateAllocations.push({ buffer: passBuf, token: passBufToken });
+                    const { buffer: passParamsBuf, token: passParamsToken } = allocateBuffer(16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, 'uniform', `Graph_${instructions[0]?.id}_reduction_params`);
+                    intermediateAllocations.push({ buffer: passParamsBuf, token: passParamsToken });
                     device.queue.writeBuffer(passParamsBuf, 0, new Uint32Array([currentSize, 0, 0, 0]));
                     const wgsl = inst.op === 'sum' ? SUM_WGSL : MAX_WGSL;
                     const { pipeline: reducePipeline } = _globalPipelineCache.getPipeline(inst.op + '_pass', wgsl);
@@ -5161,17 +5197,19 @@ function executeGraph(instructionsJson, jsInputs) {
                     }));
                     passEncoder.dispatchWorkgroups(numWGs);
                     passEncoder.end();
+                    encoderHasCommands = true;
                     currentInputBuf = passBuf;
                     currentSize = numWGs;
                 }
                 commandEncoder.copyBufferToBuffer(currentInputBuf, 0, outBuffer, 0, 4);
+                encoderHasCommands = true;
                 /**
                  * WHAT: 리덕션 연산 중 만들어진 중간 임시 버퍼들을 수집하는 루프입니다.
                  * WHY: 작업 완료 후 가비지 컬렉션이나 명시적 해제를 수행하여 메모리 릭을 방지하기 위함입니다.
                  * HOW: for...of 구문으로 intermediateBuffers 배열을 순회하여 paramsBuffersToDestroy에 등록합니다.
                  */
-                for (const buf of intermediateBuffers) {
-                    paramsBuffersToDestroy.push(buf);
+                for (const alloc of intermediateAllocations) {
+                    paramsAllocations.push(alloc);
                 }
                 continue; // skip normal dispatch
             }
@@ -5300,28 +5338,15 @@ function executeGraph(instructionsJson, jsInputs) {
     catch (err) {
         // ── 5. Rollback on Sync Error ──
         console.error(`[AMEVA Forge] Transaction Sync Failed. Rolling back...`, err);
-        if (typeof globalThis !== 'undefined') {
-            globalThis.__ameva_last_gpu_error = err.message;
-        }
-        /**
-         * WHAT: 트랜잭션 도중 오류 발생 시 이미 생성되어 버린 텐서들을 일괄 정리하는 롤백 루프입니다.
-         * WHY: 부분적으로 생성된 텐서들이 메모리에 남아서 OOM이나 논리적 오염을 일으키는 것을 막기 위함입니다.
-         * HOW: for...of 루프를 돌며 레지스트리의 dispose를 강제로 호출합니다.
-         */
         for (const handle of createdHandles) {
             try {
                 _globalRegistry.dispose(handle);
             }
             catch { }
         }
-        /**
-         * WHAT: 파라미터 유니폼 버퍼들을 강제 파괴하는 루프입니다.
-         * WHY: 큐에 제출되지도 못하고 에러가 난 임시 버퍼 리소스들을 메모리에서 날리기 위해서입니다.
-         * HOW: for...of 루프를 돌며 버퍼 객체의 destroy 메서드를 호출합니다.
-         */
-        for (const buf of paramsBuffersToDestroy) {
+        for (const alloc of paramsAllocations) {
             try {
-                buf.destroy();
+                freeBuffer(alloc.buffer, alloc.token);
             }
             catch { }
         }
@@ -5331,64 +5356,51 @@ function executeGraph(instructionsJson, jsInputs) {
         void device.popErrorScope();
         throw err;
     }
-    if (opsInCurrentBatch > 0) {
+    if (encoderHasCommands || opsInCurrentBatch > 0) {
         device.queue.submit([commandEncoder.finish()]);
+        encoderHasCommands = false;
     }
-    // ── 5. Commit / Rollback (Async) ──
-    const p1 = device.popErrorScope().then(error => {
-        if (error)
-            throw new AMEVAForgeSecurityError(`Internal Error: ${error.message}`);
-    });
-    const p2 = device.popErrorScope().then(error => {
-        if (error)
-            throw new AMEVAForgeSecurityError(`OOM Error: ${error.message}`);
-    });
-    const p3 = device.popErrorScope().then(error => {
-        if (error)
-            throw new AMEVAForgeSecurityError(`Validation Error: ${error.message}`);
-    });
-    Promise.all([p1, p2, p3]).catch((error) => {
-        console.error(`[AMEVA Forge] Transaction Async Failed. Rolling back ${createdHandles.length} tensors...`, error);
-        if (typeof globalThis !== 'undefined') {
-            globalThis.__ameva_last_gpu_error = error.message;
-        }
-        /**
-         * WHAT: 비동기 스코프에서 GPU 에러(OOM 등)가 발견되었을 때 사후적으로 텐서를 롤백하는 루프입니다.
-         * WHY: 큐에 제출(Submit)은 성공했더라도 디바이스 단에서 실제 처리 도중 터진 문제를 수습하기 위해 필요합니다.
-         * HOW: 배열을 순회하며 레지스트리에서 텐서를 해제합니다.
-         */
+    // ── 5. Commit / Rollback (Async) — await error scopes before returning ──
+    const internalError = await device.popErrorScope();
+    const oomError = await device.popErrorScope();
+    const validationError = await device.popErrorScope();
+    // Check for GPU errors BEFORE returning handles
+    const gpuError = internalError || oomError || validationError;
+    if (gpuError) {
+        console.error(`[AMEVA Forge] GPU error detected. Rolling back ${createdHandles.length} tensors...`, gpuError);
         for (const handle of createdHandles) {
             try {
                 _globalRegistry.dispose(handle);
             }
             catch { }
         }
-    });
-    if (paramsBuffersToDestroy.length > 0) {
+        // Determine error type
+        if (internalError) {
+            throw new AMEVAForgeInternalGPUError(`Internal GPU Error: ${internalError.message}`);
+        }
+        else if (oomError) {
+            throw new AMEVAForgeOutOfMemoryError(`GPU Out of Memory: ${oomError.message}`);
+        }
+        else {
+            throw new AMEVAForgeValidationError(`GPU Validation Error: ${validationError.message}`);
+        }
+    }
+    // ── 6. Cleanup temporary/uniform allocations after GPU completion ──
+    if (paramsAllocations.length > 0) {
         device.queue.onSubmittedWorkDone().then(() => {
-            /**
-             * WHAT: GPU 연산이 정상적으로 완료된 후 파라미터 버퍼들을 파괴하는 콜백 루프입니다.
-             * WHY: 일회용 유니폼 버퍼들이 작업을 마쳤으므로 메모리를 환원하기 위함입니다.
-             * HOW: forEach 콜백 내에서 destroy를 호출합니다.
-             */
-            paramsBuffersToDestroy.forEach(b => {
+            for (const alloc of paramsAllocations) {
                 try {
-                    b.destroy();
+                    freeBuffer(alloc.buffer, alloc.token);
                 }
                 catch { }
-            });
+            }
         }).catch(() => {
-            /**
-             * WHAT: GPU 연산이 실패했을 경우에도 버퍼를 정리하는 콜백 루프입니다.
-             * WHY: 오류 상황에서도 임시 자원의 누수는 방지해야 하기 때문입니다.
-             * HOW: catch 블록 내에서 forEach로 파괴합니다.
-             */
-            paramsBuffersToDestroy.forEach(b => {
+            for (const alloc of paramsAllocations) {
                 try {
-                    b.destroy();
+                    freeBuffer(alloc.buffer, alloc.token);
                 }
                 catch { }
-            });
+            }
         });
     }
     return idToHandle;
@@ -5557,12 +5569,17 @@ function registerPyodideBridge() {
 
 exports.AMEVAForgeDTypeError = AMEVAForgeDTypeError;
 exports.AMEVAForgeDeviceError = AMEVAForgeDeviceError;
+exports.AMEVAForgeDeviceLostError = AMEVAForgeDeviceLostError;
 exports.AMEVAForgeDisposedError = AMEVAForgeDisposedError;
 exports.AMEVAForgeError = AMEVAForgeError;
+exports.AMEVAForgeInternalGPUError = AMEVAForgeInternalGPUError;
+exports.AMEVAForgeOutOfMemoryError = AMEVAForgeOutOfMemoryError;
 exports.AMEVAForgeQuotaExceededError = AMEVAForgeQuotaExceededError;
 exports.AMEVAForgeSecurityError = AMEVAForgeSecurityError;
 exports.AMEVAForgeShapeError = AMEVAForgeShapeError;
+exports.AMEVAForgeStaleHandleError = AMEVAForgeStaleHandleError;
 exports.AMEVAForgeUnsupportedOpError = AMEVAForgeUnsupportedOpError;
+exports.AMEVAForgeValidationError = AMEVAForgeValidationError;
 exports.AMEVAForgeWebGPUUnavailableError = AMEVAForgeWebGPUUnavailableError;
 exports.KERNEL_REGISTRY = KERNEL_REGISTRY;
 exports.QuotaManager = QuotaManager;
