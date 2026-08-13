@@ -1,4 +1,4 @@
-﻿# Node.js
+# Node.js
 node_modules/
 npm-debug.log*
 yarn-debug.log*
@@ -54,4 +54,5 @@ scripts/
 # Temporary Logs and Exports
 .temp_logs/
 scripts/codes/
+docs/audits/
 packages/forge/test-results/

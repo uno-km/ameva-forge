@@ -26,7 +26,6 @@ export function allocateBuffer(
   kind: AllocationKind = 'tensor',
   ownerGraph: string | null = null
 ): { buffer: GPUBuffer, token: AllocationToken } {
-  console.log("allocateBuffer called with byteLength:", byteLength, "kind:", kind);
   const token = _globalQuotaManager.reserveToken(byteLength, kind, ownerGraph);
   try {
     const buffer = getDevice().createBuffer({ size: byteLength, usage });
@@ -126,7 +125,11 @@ export function readMappedInto(
 ): void {
   try {
     const arrayBuffer = stagingBuffer.getMappedRange();
-    outArray.set(new Float32Array(arrayBuffer));
+    const mapped = new Float32Array(arrayBuffer);
+    if (outArray.length !== mapped.length) {
+      throw new RangeError(`readMappedInto destination length mismatch: expected ${mapped.length}, got ${outArray.length}`);
+    }
+    outArray.set(mapped);
   } finally {
     stagingBuffer.unmap();
     stagingBuffer.destroy();

@@ -1,20 +1,12 @@
 import time
 import numpy as np
 import asyncio
-try:
-    import ameva_tensor as at
-except ImportError:
-    # 로컬 터미널 실행 시 WebGPU 모듈 가짜(Mock) 객체 생성
-    class MockAT:
-        async def random(self, shape): return None
-        async def add(self, a, b): return None
-        async def mul(self, a, b): return None
-        async def sin(self, a): return None
-        async def cos(self, a): return None
-        async def matmul(self, a, b): return None
-        async def nbody_gravity_step(self, p, m): return None
-        async def scaled_dot_product_attention(self, q, k, v): return None
-    at = MockAT()
+
+print("===============================================================")
+print(" AMEVA OS WebGPU-Python Bridge: EXTREME Benchmark Suite v2.0")
+print(" [!] WARNING: This script is temporarily DISABLED (UNVERIFIED).")
+print("===============================================================")
+raise RuntimeError("Synthetic benchmark execution is blocked in Release 1. Run via 'npm test' in browser harness instead.")
 
 async def run_extreme_benchmark():
     print("===============================================================")

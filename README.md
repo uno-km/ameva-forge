@@ -1,6 +1,6 @@
 # AMEVA-Forge
 
-> **Release 1 (Public Technical Preview)**: Browser-local Educational Autograd & Small Model Experimentation Framework
+> **Release 1 Candidate (Internal Alpha)**: Browser-local Educational Autograd & Small Model Experimentation Framework
 
 ![AMEVA Forge Logo](https://img.shields.io/badge/WebGPU-Powered-blueviolet?style=for-the-badge) ![Python](https://img.shields.io/badge/Python-3.12+-blue?style=for-the-badge&logo=python) ![Pyodide](https://img.shields.io/badge/Browser_Ready-Pyodide-yellow?style=for-the-badge) ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
@@ -13,7 +13,7 @@ AMEVA-Forge is currently in an **Internal Alpha / Technical Preview** stage. Our
 
 Unlike heavy production frameworks, AMEVA-Forge requires zero C++ infrastructure or server backends. It provides a pure Python interface that dispatches to WebGPU.
 
-### Supported Features (Release 1)
+### Target Core Features for Release 1
 - **Core Tensor Ops**: `tensor`, `upload`, `readback`, `dispose`
 - **Basic Math**: `add`, `sub`, `mul`, `div`, `neg`
 - **Matrix Operations**: `matmul` (2D)
@@ -27,7 +27,7 @@ Unlike heavy production frameworks, AMEVA-Forge requires zero C++ infrastructure
 
 ### Installation
 ```bash
-pip install ameva-forge
+pip install ./packages/forge-py
 ```
 *(Requires a Pyodide/WebGPU compatible browser environment for execution)*
 
@@ -48,9 +48,9 @@ loss = fg.nn.MSELoss()(out, fg.ones_like(out))
 loss.backward()
 
 # 4. SGD Step
-lr = 0.01
-w.data -= lr * w.grad.data
-b.data -= lr * b.grad.data
+optimizer = fg.optim.SGD([w, b], lr=0.01)
+optimizer.step()
+optimizer.zero_grad()
 ```
 
 ## 🤝 Roadmap

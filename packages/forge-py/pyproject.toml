@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "forge"
-version = "2.0.0"
+version = "0.1.0"
 description = "WebGPU-accelerated tensor computation library with autograd for deep learning training"
 readme = "README.md"
 license = {text = "MIT"}
@@ -13,7 +13,7 @@ authors = [
     {name = "AMEVA Team"}
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",

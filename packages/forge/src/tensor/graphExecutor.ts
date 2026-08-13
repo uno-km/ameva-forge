@@ -345,6 +345,7 @@ export function executeGraph(
    * HOW: 디스패치를 하나 추가할 때마다 1씩 증가시킵니다.
    */
   let opsInCurrentBatch = 0;
+  let encoderHasCommands = false;
   
   /**
    * WHAT: 현재 커맨드 인코더에 제출된 총 연산 원소 수(워크로드)입니다.
@@ -863,7 +864,9 @@ export function executeGraph(
               throw new AMEVAForgeSecurityError(`Instruction op="${inst.op}" is missing 'in' field.`);
           }
           const REDUCTION_WG_SIZE = 256;
-          let currentSize = byteLength / 4;
+          const reductionInputHandle = idToHandle[inst.in[0]];
+          if (!reductionInputHandle) throw new AMEVAForgeSecurityError(`Unresolved reduction input id ${inst.in[0]}`);
+          let currentSize = _globalRegistry.get(reductionInputHandle).byteLength / 4;
           let currentInputBuf = idToBuffer[inst.in[0]];
           const intermediateBuffers: GPUBuffer[] = [];
           
@@ -902,12 +905,13 @@ export function executeGraph(
               }));
               passEncoder.dispatchWorkgroups(numWGs);
               passEncoder.end();
-              
+              encoderHasCommands = true;
               currentInputBuf = passBuf;
               currentSize = numWGs;
           }
           
           commandEncoder.copyBufferToBuffer(currentInputBuf, 0, outBuffer, 0, 4);
+          encoderHasCommands = true;
           
           /**
            * WHAT: 리덕션 연산 중 만들어진 중간 임시 버퍼들을 수집하는 루프입니다.
@@ -1075,8 +1079,9 @@ export function executeGraph(
     throw err;
   }
 
-  if (opsInCurrentBatch > 0) {
+  if (encoderHasCommands || opsInCurrentBatch > 0) {
     device.queue.submit([commandEncoder.finish()]);
+    encoderHasCommands = false;
   }
 
   // ── 5. Commit / Rollback (Async) ──

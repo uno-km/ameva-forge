@@ -293,6 +293,9 @@ export function read(handle: TensorHandle): Promise<Float32Array> {
  * HOW: 레지스트리에서 버퍼를 조회한 뒤 맵핑을 수행하고 반환된 스테이징 버퍼를 _pendingStagingBuffers에 저장합니다.
  */
 export async function mapBufferAsync(handle: TensorHandle): Promise<void> {
+  if (_pendingStagingBuffers.has(handle)) {
+    throw new Error(`[AMEVA] A readback is already pending for handle "${handle}".`);
+  }
   /**
    * WHAT: 매핑할 원본 텐서 레코드입니다.
    * WHY: 복사 소스가 될 GPUBuffer와 크기 정보를 제공하기 위해 참조됩니다.
