@@ -12,6 +12,7 @@
  */
 import { init, read, dispose, getTensorInfo, mapBufferAsync, readMappedInto, warmupKernels } from "../tensor/gpuCore";
 import { executeGraph } from "../tensor/graphExecutor";
+import { getQuotaSnapshot } from "../webgpu/quota";
 import { TensorHandle } from "../types";
 /**
  * WHAT: 이 인터페이스는 전역 amevaForge 객체의 형태를 정의합니다.
@@ -44,6 +45,9 @@ export interface AmevaTensorGlobalAPI {
      * HOW: 전달된 배열을 순회하며 개별 dispose를 호출.
      */
     disposeBatch: (handles: TensorHandle[]) => void;
+    getQuotaSnapshot: typeof getQuotaSnapshot;
+    snapshotHandles: () => string[];
+    flushGC: () => Promise<void> | void;
 }
 declare global {
     /**

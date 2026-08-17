@@ -158,3 +158,9 @@ export declare class QuotaManager {
  * HOW: QuotaManager를 기본값(1GB/768MB)으로 인스턴스화하여 내보냅니다(export).
  */
 export declare const _globalQuotaManager: QuotaManager;
+export interface QuotaSnapshot {
+    usedBytes: number;
+    maxBytes: number;
+    activeTokens: number;
+}
+export declare function getQuotaSnapshot(): QuotaSnapshot;

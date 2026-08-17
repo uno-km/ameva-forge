@@ -16,13 +16,14 @@
  */
 
 import { getDevice } from "../webgpu/device";
-import { _globalRegistry } from "./tensorRegistry";
-import { TensorHandle } from "../types";
+import { _globalRegistry, TensorRegistry } from "./tensorRegistry";
+import { TensorHandle, DType } from "../types";
 import { allocateBuffer, writeFloat32Array, freeBuffer } from "../webgpu/buffers";
-import { AllocationToken } from "../webgpu/quota";
+import { _globalQuotaManager, AllocationToken } from "../webgpu/quota";
 import { _globalPipelineCache } from "../webgpu/pipelineCache";
 import { AMEVAForgeShapeError, AMEVAForgeSecurityError, AMEVAForgeUnsupportedOpError, AMEVAForgeValidationError, AMEVAForgeOutOfMemoryError, AMEVAForgeInternalGPUError } from "../errors";
 import { assertAllowedKernelName } from "../webgpu/shaderGuard";
+
 
 // kernels
 import { MATMUL_WGSL } from "./kernels/matmul.wgsl";
@@ -67,7 +68,7 @@ const ALLOWED_OPS = new Set([
   'upload', 'load', 'matmul', 'batched_matmul', 'relu', 'add', 'mul', 'transpose', 'relu_backward',
   'sub', 'neg', 'div', 'exp', 'log', 'sigmoid', 'tanh', 'sigmoid_backward', 'tanh_backward',
   'fill', 'sum', 'max', 'sum_axis', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
-  'im2col', 'col2im', 'dropout', 'permute'
+  'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu'
 ]);
 
 /** 
@@ -119,6 +120,54 @@ interface GraphInstruction {
   handle?: string;
   params?: number[];
 }
+
+export interface PendingTensorRecord {
+  handle: TensorHandle;
+  buffer: GPUBuffer;
+  token: AllocationToken;
+  shape: number[];
+  dtype: DType;
+  byteLength: number;
+}
+
+export class GraphTransaction {
+  private readonly pending = new Map<TensorHandle, PendingTensorRecord>();
+
+  add(record: PendingTensorRecord): void {
+    if (this.pending.has(record.handle)) {
+      throw new AMEVAForgeValidationError(`Duplicate pending handle: ${record.handle}`);
+    }
+    this.pending.set(record.handle, record);
+  }
+
+  get(handle: TensorHandle): PendingTensorRecord | undefined {
+    return this.pending.get(handle);
+  }
+
+  get handles(): TensorHandle[] {
+    return Array.from(this.pending.keys());
+  }
+
+  commit(registry: TensorRegistry): void {
+    for (const record of this.pending.values()) {
+      registry.registerRecord(record);
+    }
+    this.pending.clear();
+  }
+
+  rollback(): void {
+    for (const record of this.pending.values()) {
+      try {
+        record.buffer.destroy();
+      } catch {}
+      try {
+        _globalQuotaManager.releaseToken(record.token);
+      } catch {}
+    }
+    this.pending.clear();
+  }
+}
+
 
 /**
  * WHAT: JSON에서 파싱된 단일 명령어 객체의 무결성을 엄격하게 검증하는 함수입니다.
@@ -217,8 +266,7 @@ function validateInstruction(inst: unknown, idx: number): GraphInstruction {
     'maxpool2d': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
     'avgpool2d': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
     'im2col': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
-    'col2im': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
-    'transpose': { minIn: 1, exactIn: true, minParams: 3, exactParams: true },
+    'transpose': { minIn: 1, exactIn: true, minParams: 2, exactParams: false },
     'permute': { minIn: 1, exactIn: true, minParams: 1, exactParams: false }, // rank 길이 가변
     'add': { minIn: 2, exactIn: true, minParams: 0, exactParams: true },
     'sub': { minIn: 2, exactIn: true, minParams: 0, exactParams: true },
@@ -270,7 +318,33 @@ function validateInstruction(inst: unknown, idx: number): GraphInstruction {
  * WHY: 매 연산마다 JS와 WebAssembly/GPU 사이를 왕복(context switch)하면 극심한 오버헤드가 발생하므로, 한 번의 호출로 많은 명령을 처리(Transaction)하기 위해 설계되었습니다.
  * HOW: JSON을 파싱하고, 명령을 검증하며, 적절한 청크로 분할하여 WebGPU 커맨드 버퍼에 기록하고 제출(submit)합니다. 실패 시 트랜잭션을 롤백합니다.
  */
+let _executionQueueChain: Promise<any> = Promise.resolve();
+
 export async function executeGraph(
+  instructionsJson: string,
+  inputs: (Float32Array | any)[],
+  outputIds?: number[]
+): Promise<Record<string, TensorHandle>> {
+  const previous = _executionQueueChain;
+  let releaseLock: () => void;
+  _executionQueueChain = new Promise<void>((resolve) => {
+    releaseLock = resolve;
+  });
+
+  try {
+    await previous;
+  } catch {
+    // Suppress previous transaction error so queue continues processing
+  }
+
+  try {
+    return await _executeGraphCore(instructionsJson, inputs);
+  } finally {
+    releaseLock!();
+  }
+}
+
+async function _executeGraphCore(
   instructionsJson: string,
   jsInputs: unknown
 ): Promise<Record<number, TensorHandle>> {
@@ -360,26 +434,9 @@ export async function executeGraph(
    * HOW: 키는 명령어 id, 값은 TensorHandle(문자열)로 할당합니다.
    */
   const idToHandle: Record<number, TensorHandle> = {};
-  
-  /**
-   * WHAT: 명령어 ID를 실제 GPUBuffer 객체 포인터에 매핑하는 객체입니다.
-   * WHY: 그래프 내에서 이전 연산의 결과(ID)를 다음 연산의 입력으로 빠르게 찾아 바인딩하기 위해 사용합니다.
-   * HOW: 키는 명령어 id, 값은 GPUBuffer로 저장됩니다.
-   */
   const idToBuffer: Record<number, GPUBuffer> = {};
-  
-  /**
-   * WHAT: 이번 트랜잭션(executeGraph 호출) 내에서 새로 생성된 모든 텐서 핸들들의 배열입니다.
-   * WHY: 중간에 에러가 발생하여 롤백이 필요할 때, 새롭게 할당된 메모리들을 일괄 해제(dispose)하기 위해 기록합니다.
-   * HOW: 버퍼가 새로 할당될 때마다 push()를 통해 배열에 추가합니다.
-   */
-  const createdHandles: TensorHandle[] = [];
-  
-  /**
-   * WHAT: upload 명령을 처리할 때 inputs 배열에서 다음에 꺼내올 데이터의 인덱스입니다.
-   * WHY: 여러 번의 upload 명령이 순서대로 입력 데이터를 소비할 수 있도록 추적합니다.
-   * HOW: upload 명령이 실행될 때마다 현재 위치의 데이터를 읽고 1씩 증가(++)합니다.
-   */
+  const idToByteLength: Record<number, number> = {};
+  const transaction = new GraphTransaction();
   let inputIdx = 0;
   
   /**
@@ -414,6 +471,9 @@ export async function executeGraph(
           throw new AMEVAForgeSecurityError(`load instruction missing handle`);
         }
         
+        if (!_globalRegistry.has(handle)) {
+          console.error(`[GraphExecutor DIAGNOSTIC] load op failed for handle="${handle}". Registered handles count=${_globalRegistry.snapshotHandles().length}, list=${JSON.stringify(_globalRegistry.snapshotHandles())}`);
+        }
         const record = _globalRegistry.get(handle);
         // F-018 Fix: JSON 형상과 레지스트리 실제 형상 일치 여부 검사
         if (inst.shape.length !== record.shape.length || !inst.shape.every((v, i) => v === record.shape[i])) {
@@ -422,6 +482,7 @@ export async function executeGraph(
         
         idToHandle[inst.id] = handle;
         idToBuffer[inst.id] = record.buffer;
+        idToByteLength[inst.id] = record.byteLength;
         continue;
       }
 
@@ -489,27 +550,26 @@ export async function executeGraph(
           if (bufProxy) bufProxy.release();
         }
 
-        /**
-         * WHAT: 업로드된 버퍼를 전역 레지스트리에 등록한 결과로 발급받은 텐서 핸들입니다.
-         * WHY: 리소스 생명주기를 추적하고 트랜잭션 실패 시 롤백 대상으로 삼기 위해 저장합니다.
-         * HOW: _globalRegistry.register()를 호출하고 그 결과를 idToHandle, idToBuffer, createdHandles 배열에 추가합니다.
-         */
-        const handle = _globalRegistry.register({
-          buffer, token, shape: inst.shape, dtype: "float32", byteLength
+        const uuid = typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : Math.random().toString(36).substring(2, 15);
+        const handle = `tensor_${uuid}`;
+        transaction.add({
+          handle,
+          buffer,
+          token,
+          shape: inst.shape,
+          dtype: "float32",
+          byteLength
         });
         idToHandle[inst.id] = handle;
         idToBuffer[inst.id] = buffer;
-        createdHandles.push(handle);
+        idToByteLength[inst.id] = byteLength;
         continue;
       }
 
       assertAllowedKernelName(inst.op);
 
-      /**
-       * WHAT: 현재 연산의 결과 데이터를 저장할 대상 GPUBuffer 포인터입니다.
-       * WHY: 각 연산 명령어는 새로운 텐서(혹은 제자리 연산 시 기존 텐서)에 결과를 출력해야 하므로 필요합니다.
-       * HOW: axpy 등 인플레이스(in-place) 오퍼레이션일 경우 기존 입력 버퍼를 가리키고, 그 외의 경우 allocateBuffer로 새로 할당합니다.
-       */
       let outBuffer: GPUBuffer;
       if (inst.op === 'axpy') {
         if (!inst.in || inst.in.length < 2) {
@@ -518,15 +578,21 @@ export async function executeGraph(
         outBuffer = idToBuffer[inst.in[1]];
         idToHandle[inst.id] = idToHandle[inst.in[1]];
         idToBuffer[inst.id] = outBuffer;
+        idToByteLength[inst.id] = byteLength;
       } else {
         const { buffer, token } = allocateBuffer(
           byteLength,
-          GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+          GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
           'tensor',
           `Graph_${instructions[0]?.id}`
         );
         outBuffer = buffer;
-        const handle = _globalRegistry.register({
+        const uuid = typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : Math.random().toString(36).substring(2, 15);
+        const handle = `tensor_${uuid}`;
+        transaction.add({
+          handle,
           buffer: outBuffer,
           token,
           shape: inst.shape,
@@ -535,7 +601,7 @@ export async function executeGraph(
         });
         idToHandle[inst.id] = handle;
         idToBuffer[inst.id] = outBuffer;
-        createdHandles.push(handle);
+        idToByteLength[inst.id] = byteLength;
       }
 
       /**
@@ -633,10 +699,12 @@ export async function executeGraph(
         
         device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array(inst.params));
       } else if (inst.op === 'transpose') {
-        if (!inst.params || inst.params.length < 3) {
+        if (!inst.params || inst.params.length < 2) {
           throw new AMEVAForgeSecurityError(`transpose instruction missing params`);
         }
-        const [rM, rN, rB] = inst.params;
+        const rM = inst.params[0];
+        const rN = inst.params[1];
+        const rB = inst.params.length >= 3 ? inst.params[2] : 1;
         wgslCode = TRANSPOSE_WGSL;
         device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([rM, rN, rB, 0]));
         dispatchX = Math.ceil(rM / 8);
@@ -844,7 +912,13 @@ export async function executeGraph(
             dispatchX = Math.min(65535, Math.ceil(Math.sqrt(totalWorkgroups)));
             dispatchY = Math.min(65535, Math.ceil(totalWorkgroups / dispatchX));
         }
-        device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([numElements, dispatchX, 0, 0, 0, 0, 0, 0]));
+        let numA = 0;
+        let numB = 0;
+        if (inst.in && inst.in.length >= 2) {
+          numA = (idToByteLength[inst.in[0]] ?? byteLength) / 4;
+          numB = (idToByteLength[inst.in[1]] ?? byteLength) / 4;
+        }
+        device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([numElements, dispatchX, numA, numB, 0, 0, 0, 0]));
 
         if (inst.op === 'cat') {
           if (!inst.params || inst.params.length < 3) {
@@ -870,7 +944,15 @@ export async function executeGraph(
           const REDUCTION_WG_SIZE = 256;
           const reductionInputHandle = idToHandle[inst.in[0]];
           if (!reductionInputHandle) throw new AMEVAForgeSecurityError(`Unresolved reduction input id ${inst.in[0]}`);
-          let currentSize = _globalRegistry.get(reductionInputHandle).byteLength / 4;
+          
+          let currentByteLength = idToByteLength[inst.in[0]];
+          if (currentByteLength === undefined) {
+            const rec = _globalRegistry.has(reductionInputHandle)
+              ? _globalRegistry.get(reductionInputHandle)
+              : transaction.get(reductionInputHandle);
+            currentByteLength = rec ? rec.byteLength : 4;
+          }
+          let currentSize = currentByteLength / 4;
           let currentInputBuf = idToBuffer[inst.in[0]];
           const intermediateAllocations: Array<{ buffer: GPUBuffer, token: AllocationToken }> = [];
           
@@ -1060,9 +1142,7 @@ export async function executeGraph(
     // ── 5. Rollback on Sync Error ──
     console.error(`[AMEVA Forge] Transaction Sync Failed. Rolling back...`, err);
     
-    for (const handle of createdHandles) {
-      try { _globalRegistry.dispose(handle); } catch {}
-    }
+    transaction.rollback();
     
     for (const alloc of paramsAllocations) {
       try { freeBuffer(alloc.buffer, alloc.token); } catch {}
@@ -1087,9 +1167,10 @@ export async function executeGraph(
   // Check for GPU errors BEFORE returning handles
   const gpuError = internalError || oomError || validationError;
   if (gpuError) {
-    console.error(`[AMEVA Forge] GPU error detected. Rolling back ${createdHandles.length} tensors...`, gpuError);
-    for (const handle of createdHandles) {
-      try { _globalRegistry.dispose(handle); } catch {}
+    console.error(`[AMEVA Forge] GPU error detected. Rolling back transaction...`, gpuError);
+    transaction.rollback();
+    for (const alloc of paramsAllocations) {
+      try { freeBuffer(alloc.buffer, alloc.token); } catch {}
     }
     // Determine error type
     if (internalError) {
@@ -1101,7 +1182,10 @@ export async function executeGraph(
     }
   }
 
-  // ── 6. Cleanup temporary/uniform allocations after GPU completion ──
+  // ── 6. Commit transaction to global registry only on verified success ──
+  transaction.commit(_globalRegistry);
+
+  // ── 7. Cleanup temporary/uniform allocations after GPU completion ──
   if (paramsAllocations.length > 0) {
     device.queue.onSubmittedWorkDone().then(() => {
       for (const alloc of paramsAllocations) {

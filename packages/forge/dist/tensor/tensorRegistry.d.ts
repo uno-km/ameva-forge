@@ -15,19 +15,11 @@ import { TensorHandle, TensorRecord } from "../types";
  * WHY: 생성된 텐서의 메타데이터와 WebGPU 버퍼를 중앙에서 추적하고 메모리 누수를 방지하기 위해 존재합니다.
  * HOW: Map 객체를 사용하여 고유한 핸들(TensorHandle)을 키로, 텐서 레코드(TensorRecord)를 값으로 저장 및 관리합니다.
  */
-declare class TensorRegistry {
-    /**
-     * WHAT: 텐서 핸들과 텐서 레코드를 매핑하여 저장하는 내부 상태 변수입니다.
-     * WHY: 생성된 모든 텐서에 빠르게 접근하고 상태를 업데이트하기 위해 해시맵(Map)을 사용합니다.
-     * HOW: TensorHandle(문자열)을 키로, TensorRecord 객체를 값으로 유지합니다.
-     */
+export declare class TensorRegistry {
     private records;
-    /**
-     * WHAT: 다음에 생성될 텐서에 부여될 단조 증가 식별자입니다.
-     * WHY: 타이밍 정보 노출(부채널 공격)을 방지하기 위해 Date.now() 대신 단순 증가 ID를 사용합니다.
-     * HOW: 텐서가 새로 등록될 때마다 1씩 증가하여 각 텐서 레코드의 createdAt 필드에 할당됩니다.
-     */
     private nextId;
+    snapshotHandles(): string[];
+    registerRecord(record: Omit<TensorRecord, 'createdAt' | 'disposed'>): TensorHandle;
     /**
      * WHAT: 새로운 텐서를 레지스트리에 등록하고 고유 핸들을 반환하는 함수입니다.
      * WHY: WebGPU 버퍼 및 메타데이터를 프레임워크가 추적할 수 있도록 레지스트리에 기록하기 위함입니다.
@@ -66,4 +58,3 @@ declare class TensorRegistry {
  * HOW: TensorRegistry 클래스의 새 인스턴스를 생성하여 내보냅니다(export).
  */
 export declare const _globalRegistry: TensorRegistry;
-export {};

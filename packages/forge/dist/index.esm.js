@@ -112,176 +112,6 @@ class AMEVAForgeStaleHandleError extends AMEVAForgeError {
 /**
  * Created: 2026-08-12 12:14:52 +0900
  * Modified:
- *   - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
- *
- * device.ts — WebGPU 싱글톤 디바이스 래퍼
- *
- * H-04 Fix: getAdapter() export 추가 → gpuCore.ts에서 adapter.limits 조회 가능
- * L-03 Fix: device lost 시 onDeviceLostCallback을 통해 pipelineCache도 무효화
- */
-/**
- * WHAT: 개발 환경이나 디버그 모드에서만 시스템 메시지를 출력하는 안전한 로깅 함수입니다.
- * WHY: 불필요한 콘솔 출력을 프로덕션 환경에서 방지하고, 에러 없이 안전하게 로그를 남기기 위해 사용됩니다.
- * HOW: 현재 실행 환경이 개발 모드(NODE_ENV, AMEVA_DEBUG, __DEV__, Vite env 등)인지 확인하고 조건을 만족할 때만 `globalThis.log`를 통해 메시지를 출력합니다. 예외가 발생해도 시스템이 멈추지 않도록 try-catch로 감쌉니다.
- */
-function _safeLog$1(msg) {
-    try {
-        // VUL-015 Fix: Only log in development or explicit debug modes
-        const isDev = (typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production') ||
-            (typeof globalThis.AMEVA_DEBUG !== 'undefined' && globalThis.AMEVA_DEBUG) ||
-            (typeof globalThis.__DEV__ !== 'undefined' && globalThis.__DEV__);
-        // Vite/ESBuild injects import.meta.env, wrap in try-catch to avoid syntax errors in older environments
-        let isViteDev = false;
-        try {
-            const getImportMeta = new Function('return import.meta');
-            const meta = getImportMeta();
-            isViteDev = meta && meta.env && meta.env.MODE !== 'production';
-        }
-        catch (e) { }
-        if (!isDev && !isViteDev)
-            return;
-        if (typeof globalThis.log === 'function') {
-            globalThis.log(msg, 'system');
-        }
-    }
-    catch (e) { }
-}
-/**
- * WHAT: 초기화된 논리적 WebGPU 디바이스(GPUDevice) 인스턴스를 저장하는 내부 변수입니다.
- * WHY: 모듈 내에서 싱글톤(singleton) 패턴을 유지하여 여러 번 초기화되지 않도록 상태를 관리합니다.
- * HOW: initWebGPU 함수 내에서 생성된 디바이스가 할당되며, 디바이스 손실(device lost) 시 다시 null로 초기화됩니다.
- */
-let device = null;
-/**
- * WHAT: WebGPU 기능 및 하드웨어 한계를 나타내는 물리적 GPU 어댑터(GPUAdapter) 인스턴스를 저장하는 내부 변수입니다.
- * WHY: 디바이스 생성 전 스펙(limits)을 검사하거나 생성 후 하드웨어 정보를 참조하기 위해 캐싱해 둡니다.
- * HOW: initWebGPU 실행 시 requestAdapter()로 요청받아 할당되며, 디바이스 손실 시 함께 정리됩니다.
- */
-let adapter = null;
-/**
- * WHAT: 디바이스 손실(device lost) 발생 시 실행될 콜백 함수를 저장하는 변수입니다.
- * WHY: GPU 오류나 컨텍스트 초기화 상황이 발생했을 때 상위 애플리케이션으로 이벤트를 위임하기 위해 필요합니다.
- * HOW: setDeviceLostCallback 함수를 통해 설정되며, device.lost Promise가 해결(resolve)될 때 내부적으로 호출됩니다.
- */
-let onDeviceLostCallback = null;
-/**
- * WHAT: 시스템 환경에서 WebGPU 디바이스 및 어댑터를 비동기적으로 초기화합니다.
- * WHY: WebGPU API를 사용하기 위해 필수적인 하드웨어 어댑터(adapter)와 논리적 디바이스(device) 인스턴스를 확보하고 전역에서 접근할 수 있도록 캐싱하기 위해 존재합니다.
- * HOW:
- *   1. navigator.gpu 객체가 존재하는지 확인하고, requestAdapter()로 물리적 GPU 어댑터를 요청합니다.
- *   2. 어댑터가 지원하는 최대 버퍼 크기 등의 한계를 파악하여 requestDevice()로 디바이스를 생성합니다.
- *   3. 디바이스 손실(device.lost) 이벤트를 수신하여 리소스를 정리하고 등록된 콜백을 실행하도록 설정합니다.
- */
-async function initWebGPU(options) {
-    _safeLog$1(`[device.ts] initWebGPU started. current device=${device ? 'SET' : 'NULL'}`);
-    if (device)
-        return;
-    if (typeof navigator === "undefined" || !navigator.gpu) {
-        throw new AMEVAForgeWebGPUUnavailableError("WebGPU is not available in this environment. " +
-            "Ensure you are running in a supported browser with WebGPU enabled.");
-    }
-    adapter = await navigator.gpu.requestAdapter(options);
-    if (!adapter) {
-        throw new AMEVAForgeWebGPUUnavailableError("Failed to request a WebGPU adapter. " +
-            "Your GPU may not support WebGPU, or the browser has disabled it.");
-    }
-    const requiredLimits = {};
-    if (adapter.limits) {
-        requiredLimits.maxBufferSize = adapter.limits.maxBufferSize;
-        requiredLimits.maxStorageBufferBindingSize = adapter.limits.maxStorageBufferBindingSize;
-    }
-    device = await adapter.requestDevice({ requiredLimits });
-    // F-013 Fix: Remove globalThis.__AMEVA_DEVICE__ to encapsulate GPUDevice
-    // (globalThis as any).__AMEVA_DEVICE__ = device;
-    _safeLog$1(`[device.ts] initWebGPU finished. device successfully created.`);
-    device.lost.then((info) => {
-        const msg = `[AMEVA] WebGPU Device Lost: ${info.message} (reason: ${info.reason})`;
-        console.error(msg);
-        _safeLog$1(msg);
-        device = null;
-        // (globalThis as any).__AMEVA_DEVICE__ = null;
-        adapter = null;
-        if (onDeviceLostCallback) {
-            onDeviceLostCallback();
-        }
-    });
-}
-/**
- * WHAT: 전역에 캐시된 WebGPU 디바이스 인스턴스를 반환합니다.
- * WHY: 애플리케이션의 여러 모듈에서 동일한 단일 디바이스 인스턴스에 접근하여 버퍼 및 텍스처를 생성할 수 있도록 제공하기 위함입니다.
- * HOW: 내부 `device` 변수가 초기화되어 있는지 확인하고, 없을 경우 예외(AMEVAForgeDeviceError)를 발생시키며, 존재할 경우 그대로 반환합니다.
- */
-function getDevice() {
-    if (!device) {
-        const globalExists = typeof globalThis.amevaForge !== "undefined";
-        throw new AMEVAForgeDeviceError(`WebGPU device is not initialized. (globalThis.amevaForge exists: ${globalExists}). Call await init() first.`);
-    }
-    return device;
-}
-/**
- * WHAT: 전역에 캐시된 WebGPU 어댑터(Adapter) 인스턴스를 반환합니다.
- * WHY: GPU의 하드웨어 스펙(limits, features 등)을 조회하거나 디바이스 기능 제약 조건을 파악하기 위해 외부 모듈에서 어댑터에 접근할 수 있게 합니다.
- * HOW: 내부 `adapter` 변수를 그대로 반환합니다. 아직 초기화되지 않았다면 null이 반환될 수 있습니다.
- */
-function getAdapter() {
-    return adapter;
-}
-/**
- * WHAT: 초기화된 WebGPU 디바이스와 연결된 커맨드 큐(GPUQueue)를 반환합니다.
- * WHY: 데이터를 버퍼로 전송(writeBuffer)하거나 렌더링/컴퓨트 커맨드(submit)를 실행할 수 있도록 접근 지점을 제공합니다.
- * HOW: `getDevice()` 함수를 호출해 디바이스를 얻은 후 `device.queue` 속성을 반환합니다.
- */
-function getQueue() {
-    return getDevice().queue;
-}
-/**
- * WHAT: WebGPU 디바이스가 현재 성공적으로 초기화되어 사용 가능한지 여부를 반환합니다.
- * WHY: 기능 호환성 검사나 런타임 조건부 로직 실행 전, WebGPU 사용 가능 여부를 안전하게 확인하기 위해 제공됩니다.
- * HOW: 내부에 저장된 `device` 변수가 null이 아닌지 불리언(Boolean) 값으로 평가하여 반환합니다.
- */
-function isAvailable() {
-    return device !== null;
-}
-/**
- * WHAT: GPU 디바이스 연결이 끊어졌을 때(device lost) 호출될 콜백 함수를 등록합니다.
- * WHY: 예기치 못한 GPU 충돌이나 컨텍스트 상실 시 상위 계층(예: 파이프라인 캐시 무효화, 재초기화 로직)에 이를 알리기 위해 존재합니다.
- * HOW: 전달받은 함수(callback)를 모듈 레벨 변수인 `onDeviceLostCallback`에 할당하여 이후 디바이스 손실 이벤트 발생 시 실행될 수 있도록 합니다.
- */
-function setDeviceLostCallback(callback) {
-    onDeviceLostCallback = callback;
-}
-
-/**
- * Created: 2026-08-12 12:14:52 +0900
- * Modified:
- *   - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
- *
- * WHAT: WASM(WebAssembly) 메모리 영역에 접근할 때 오프셋과 길이의 유효성을 검증하는 모듈입니다.
- * WHY: 잘못된 메모리 주소나 범위를 참조하여 발생하는 버퍼 오버플로우, 세그멘테이션 폴트 및 잠재적 보안 취약점을 차단하기 위해 필요합니다.
- */
-/**
- * WHAT: 주어진 오프셋과 데이터 길이가 WASM 선형 메모리 힙(heap)의 유효한 범위 내에 있는지 안전하게 검사합니다.
- * WHY: CPU-GPU 간 데이터 전송이나 공유 메모리 접근 시 악의적이거나 잘못된 크기 요청으로 인한 메모리 침범을 방어하기 위해 호출됩니다.
- * HOW: `Number.isSafeInteger`와 비음수(non-negative) 조건을 통해 입력 인자의 데이터 타입을 엄격히 검증한 후, `offset + byteLength`가 총 WASM 메모리 크기를 초과하지 않는지 계산하여 확인합니다. 위반 시 보안 예외를 던집니다.
- */
-function assertWasmRange(offset, byteLength, wasmByteLength) {
-    if (!Number.isSafeInteger(offset) || offset < 0) {
-        throw new AMEVAForgeSecurityError("Invalid offset: must be a non-negative safe integer.");
-    }
-    if (!Number.isSafeInteger(byteLength) || byteLength < 0) {
-        throw new AMEVAForgeSecurityError("Invalid byteLength: must be a non-negative safe integer.");
-    }
-    if (!Number.isSafeInteger(wasmByteLength) || wasmByteLength < 0) {
-        throw new AMEVAForgeSecurityError("Invalid wasmByteLength: must be a non-negative safe integer.");
-    }
-    if (offset > wasmByteLength || byteLength > wasmByteLength - offset) {
-        throw new AMEVAForgeSecurityError("WASM memory range out of bounds");
-    }
-}
-
-/**
- * Created: 2026-08-12 12:14:52 +0900
- * Modified:
  *   - 2026-08-12 12:59:35 +0900: Feat: Introduce v3.0 features (CNN, Pooling, Dropout, Serialization)
  *   - 2026-08-12 12:23:09 +0900: Docs: Build Apache-style docs and unify tests
  *   - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
@@ -498,6 +328,198 @@ class QuotaManager {
  * HOW: QuotaManager를 기본값(1GB/768MB)으로 인스턴스화하여 내보냅니다(export).
  */
 const _globalQuotaManager = new QuotaManager();
+function getQuotaSnapshot() {
+    const usage = _globalQuotaManager.getUsage();
+    return Object.freeze({
+        usedBytes: usage.allocatedBytes,
+        maxBytes: usage.hardLimitBytes,
+        activeTokens: usage.activeTokens,
+    });
+}
+
+/**
+ * Created: 2026-08-12 12:14:52 +0900
+ * Modified:
+ *   - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
+ *
+ * device.ts — WebGPU 싱글톤 디바이스 래퍼
+ *
+ * H-04 Fix: getAdapter() export 추가 → gpuCore.ts에서 adapter.limits 조회 가능
+ * L-03 Fix: device lost 시 onDeviceLostCallback을 통해 pipelineCache도 무효화
+ */
+/**
+ * WHAT: 개발 환경이나 디버그 모드에서만 시스템 메시지를 출력하는 안전한 로깅 함수입니다.
+ * WHY: 불필요한 콘솔 출력을 프로덕션 환경에서 방지하고, 에러 없이 안전하게 로그를 남기기 위해 사용됩니다.
+ * HOW: 현재 실행 환경이 개발 모드(NODE_ENV, AMEVA_DEBUG, __DEV__, Vite env 등)인지 확인하고 조건을 만족할 때만 `globalThis.log`를 통해 메시지를 출력합니다. 예외가 발생해도 시스템이 멈추지 않도록 try-catch로 감쌉니다.
+ */
+function _safeLog$1(msg) {
+    try {
+        // VUL-015 Fix: Only log in development or explicit debug modes
+        const isDev = (typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production') ||
+            (typeof globalThis.AMEVA_DEBUG !== 'undefined' && globalThis.AMEVA_DEBUG) ||
+            (typeof globalThis.__DEV__ !== 'undefined' && globalThis.__DEV__);
+        // Vite/ESBuild injects import.meta.env, wrap in try-catch to avoid syntax errors in older environments
+        let isViteDev = false;
+        try {
+            const getImportMeta = new Function('return import.meta');
+            const meta = getImportMeta();
+            isViteDev = meta && meta.env && meta.env.MODE !== 'production';
+        }
+        catch (e) { }
+        if (!isDev && !isViteDev)
+            return;
+        if (typeof globalThis.log === 'function') {
+            globalThis.log(msg, 'system');
+        }
+    }
+    catch (e) { }
+}
+/**
+ * WHAT: 초기화된 논리적 WebGPU 디바이스(GPUDevice) 인스턴스를 저장하는 내부 변수입니다.
+ * WHY: 모듈 내에서 싱글톤(singleton) 패턴을 유지하여 여러 번 초기화되지 않도록 상태를 관리합니다.
+ * HOW: initWebGPU 함수 내에서 생성된 디바이스가 할당되며, 디바이스 손실(device lost) 시 다시 null로 초기화됩니다.
+ */
+let device = null;
+/**
+ * WHAT: WebGPU 기능 및 하드웨어 한계를 나타내는 물리적 GPU 어댑터(GPUAdapter) 인스턴스를 저장하는 내부 변수입니다.
+ * WHY: 디바이스 생성 전 스펙(limits)을 검사하거나 생성 후 하드웨어 정보를 참조하기 위해 캐싱해 둡니다.
+ * HOW: initWebGPU 실행 시 requestAdapter()로 요청받아 할당되며, 디바이스 손실 시 함께 정리됩니다.
+ */
+let adapter = null;
+/**
+ * WHAT: 디바이스 손실(device lost) 발생 시 실행될 콜백 함수를 저장하는 변수입니다.
+ * WHY: GPU 오류나 컨텍스트 초기화 상황이 발생했을 때 상위 애플리케이션으로 이벤트를 위임하기 위해 필요합니다.
+ * HOW: setDeviceLostCallback 함수를 통해 설정되며, device.lost Promise가 해결(resolve)될 때 내부적으로 호출됩니다.
+ */
+let onDeviceLostCallback = null;
+/**
+ * WHAT: 시스템 환경에서 WebGPU 디바이스 및 어댑터를 비동기적으로 초기화합니다.
+ * WHY: WebGPU API를 사용하기 위해 필수적인 하드웨어 어댑터(adapter)와 논리적 디바이스(device) 인스턴스를 확보하고 전역에서 접근할 수 있도록 캐싱하기 위해 존재합니다.
+ * HOW:
+ *   1. navigator.gpu 객체가 존재하는지 확인하고, requestAdapter()로 물리적 GPU 어댑터를 요청합니다.
+ *   2. 어댑터가 지원하는 최대 버퍼 크기 등의 한계를 파악하여 requestDevice()로 디바이스를 생성합니다.
+ *   3. 디바이스 손실(device.lost) 이벤트를 수신하여 리소스를 정리하고 등록된 콜백을 실행하도록 설정합니다.
+ */
+async function initWebGPU(options) {
+    _safeLog$1(`[device.ts] initWebGPU started. current device=${device ? 'SET' : 'NULL'}`);
+    if (device)
+        return;
+    if (typeof navigator === "undefined" || !navigator.gpu) {
+        throw new AMEVAForgeWebGPUUnavailableError("WebGPU is not available in this environment. " +
+            "Ensure you are running in a supported browser with WebGPU enabled.");
+    }
+    adapter = await navigator.gpu.requestAdapter(options);
+    if (!adapter) {
+        throw new AMEVAForgeWebGPUUnavailableError("Failed to request a WebGPU adapter. " +
+            "Your GPU may not support WebGPU, or the browser has disabled it.");
+    }
+    const requiredLimits = {};
+    if (adapter.limits) {
+        requiredLimits.maxBufferSize = adapter.limits.maxBufferSize;
+        requiredLimits.maxStorageBufferBindingSize = adapter.limits.maxStorageBufferBindingSize;
+    }
+    device = await adapter.requestDevice({ requiredLimits });
+    if (device.limits && device.limits.maxStorageBufferBindingSize) {
+        const maxBinding = device.limits.maxStorageBufferBindingSize;
+        const adaptedHard = Math.max(1024 * 1024 * 1024, maxBinding * 2);
+        const adaptedSoft = Math.max(768 * 1024 * 1024, maxBinding);
+        try {
+            _globalQuotaManager.setLimits(adaptedHard, adaptedSoft);
+        }
+        catch { }
+    }
+    _safeLog$1(`[device.ts] initWebGPU finished. device successfully created.`);
+    device.lost.then((info) => {
+        const msg = `[AMEVA] WebGPU Device Lost: ${info.message} (reason: ${info.reason})`;
+        console.error(msg);
+        _safeLog$1(msg);
+        device = null;
+        // (globalThis as any).__AMEVA_DEVICE__ = null;
+        adapter = null;
+        if (onDeviceLostCallback) {
+            onDeviceLostCallback();
+        }
+    });
+}
+/**
+ * WHAT: 전역에 캐시된 WebGPU 디바이스 인스턴스를 반환합니다.
+ * WHY: 애플리케이션의 여러 모듈에서 동일한 단일 디바이스 인스턴스에 접근하여 버퍼 및 텍스처를 생성할 수 있도록 제공하기 위함입니다.
+ * HOW: 내부 `device` 변수가 초기화되어 있는지 확인하고, 없을 경우 예외(AMEVAForgeDeviceError)를 발생시키며, 존재할 경우 그대로 반환합니다.
+ */
+function getDevice() {
+    if (!device) {
+        const globalExists = typeof globalThis.amevaForge !== "undefined";
+        throw new AMEVAForgeDeviceError(`WebGPU device is not initialized. (globalThis.amevaForge exists: ${globalExists}). Call await init() first.`);
+    }
+    return device;
+}
+/**
+ * WHAT: 전역에 캐시된 WebGPU 어댑터(Adapter) 인스턴스를 반환합니다.
+ * WHY: GPU의 하드웨어 스펙(limits, features 등)을 조회하거나 디바이스 기능 제약 조건을 파악하기 위해 외부 모듈에서 어댑터에 접근할 수 있게 합니다.
+ * HOW: 내부 `adapter` 변수를 그대로 반환합니다. 아직 초기화되지 않았다면 null이 반환될 수 있습니다.
+ */
+function getAdapter() {
+    return adapter;
+}
+/**
+ * WHAT: 초기화된 WebGPU 디바이스와 연결된 커맨드 큐(GPUQueue)를 반환합니다.
+ * WHY: 데이터를 버퍼로 전송(writeBuffer)하거나 렌더링/컴퓨트 커맨드(submit)를 실행할 수 있도록 접근 지점을 제공합니다.
+ * HOW: `getDevice()` 함수를 호출해 디바이스를 얻은 후 `device.queue` 속성을 반환합니다.
+ */
+function getQueue() {
+    return getDevice().queue;
+}
+/**
+ * WHAT: WebGPU 디바이스가 현재 성공적으로 초기화되어 사용 가능한지 여부를 반환합니다.
+ * WHY: 기능 호환성 검사나 런타임 조건부 로직 실행 전, WebGPU 사용 가능 여부를 안전하게 확인하기 위해 제공됩니다.
+ * HOW: 내부에 저장된 `device` 변수가 null이 아닌지 불리언(Boolean) 값으로 평가하여 반환합니다.
+ */
+function isAvailable() {
+    return device !== null;
+}
+function _resetDeviceForTesting() {
+    device = null;
+    adapter = null;
+    if (onDeviceLostCallback) {
+        onDeviceLostCallback();
+    }
+}
+/**
+ * WHAT: GPU 디바이스 연결이 끊어졌을 때(device lost) 호출될 콜백 함수를 등록합니다.
+ * WHY: 예기치 못한 GPU 충돌이나 컨텍스트 상실 시 상위 계층(예: 파이프라인 캐시 무효화, 재초기화 로직)에 이를 알리기 위해 존재합니다.
+ * HOW: 전달받은 함수(callback)를 모듈 레벨 변수인 `onDeviceLostCallback`에 할당하여 이후 디바이스 손실 이벤트 발생 시 실행될 수 있도록 합니다.
+ */
+function setDeviceLostCallback(callback) {
+    onDeviceLostCallback = callback;
+}
+
+/**
+ * Created: 2026-08-12 12:14:52 +0900
+ * Modified:
+ *   - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
+ *
+ * WHAT: WASM(WebAssembly) 메모리 영역에 접근할 때 오프셋과 길이의 유효성을 검증하는 모듈입니다.
+ * WHY: 잘못된 메모리 주소나 범위를 참조하여 발생하는 버퍼 오버플로우, 세그멘테이션 폴트 및 잠재적 보안 취약점을 차단하기 위해 필요합니다.
+ */
+/**
+ * WHAT: 주어진 오프셋과 데이터 길이가 WASM 선형 메모리 힙(heap)의 유효한 범위 내에 있는지 안전하게 검사합니다.
+ * WHY: CPU-GPU 간 데이터 전송이나 공유 메모리 접근 시 악의적이거나 잘못된 크기 요청으로 인한 메모리 침범을 방어하기 위해 호출됩니다.
+ * HOW: `Number.isSafeInteger`와 비음수(non-negative) 조건을 통해 입력 인자의 데이터 타입을 엄격히 검증한 후, `offset + byteLength`가 총 WASM 메모리 크기를 초과하지 않는지 계산하여 확인합니다. 위반 시 보안 예외를 던집니다.
+ */
+function assertWasmRange(offset, byteLength, wasmByteLength) {
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+        throw new AMEVAForgeSecurityError("Invalid offset: must be a non-negative safe integer.");
+    }
+    if (!Number.isSafeInteger(byteLength) || byteLength < 0) {
+        throw new AMEVAForgeSecurityError("Invalid byteLength: must be a non-negative safe integer.");
+    }
+    if (!Number.isSafeInteger(wasmByteLength) || wasmByteLength < 0) {
+        throw new AMEVAForgeSecurityError("Invalid wasmByteLength: must be a non-negative safe integer.");
+    }
+    if (offset > wasmByteLength || byteLength > wasmByteLength - offset) {
+        throw new AMEVAForgeSecurityError("WASM memory range out of bounds");
+    }
+}
 
 /**
  * Created: 2026-08-12 12:14:52 +0900
@@ -580,6 +602,7 @@ let ALLOWED_KERNEL_NAMES = new Set([
     "im2col",
     "col2im",
     "permute",
+    "matmul_bias_relu",
 ]);
 /**
  * WHAT: 화이트리스트에 허용된 커널 이름들을 새롭게 등록(덮어쓰기)합니다.
@@ -860,18 +883,27 @@ function freeBuffer(buffer, token) {
  * HOW: Map 객체를 사용하여 고유한 핸들(TensorHandle)을 키로, 텐서 레코드(TensorRecord)를 값으로 저장 및 관리합니다.
  */
 class TensorRegistry {
-    /**
-     * WHAT: 텐서 핸들과 텐서 레코드를 매핑하여 저장하는 내부 상태 변수입니다.
-     * WHY: 생성된 모든 텐서에 빠르게 접근하고 상태를 업데이트하기 위해 해시맵(Map)을 사용합니다.
-     * HOW: TensorHandle(문자열)을 키로, TensorRecord 객체를 값으로 유지합니다.
-     */
     records = new Map();
-    /**
-     * WHAT: 다음에 생성될 텐서에 부여될 단조 증가 식별자입니다.
-     * WHY: 타이밍 정보 노출(부채널 공격)을 방지하기 위해 Date.now() 대신 단순 증가 ID를 사용합니다.
-     * HOW: 텐서가 새로 등록될 때마다 1씩 증가하여 각 텐서 레코드의 createdAt 필드에 할당됩니다.
-     */
     nextId = 1;
+    snapshotHandles() {
+        const list = [];
+        for (const [handle, record] of this.records.entries()) {
+            if (!record.disposed)
+                list.push(handle);
+        }
+        return list;
+    }
+    registerRecord(record) {
+        console.warn(`[REGISTRY REGISTER_RECORD] handle=${record.handle}`);
+        const fullRecord = {
+            ...record,
+            disposed: false,
+            createdAt: this.nextId - 1,
+        };
+        this.records.set(record.handle, fullRecord);
+        this.nextId++;
+        return record.handle;
+    }
     /**
      * WHAT: 새로운 텐서를 레지스트리에 등록하고 고유 핸들을 반환하는 함수입니다.
      * WHY: WebGPU 버퍼 및 메타데이터를 프레임워크가 추적할 수 있도록 레지스트리에 기록하기 위함입니다.
@@ -948,14 +980,10 @@ class TensorRegistry {
      * HOW: 레코드를 disposed로 표시하고 맵에서 제거한 뒤, QuotaManager와 WebGPU 큐를 통해 버퍼를 해제합니다.
      */
     dispose(handle) {
+        console.warn(`[REGISTRY DISPOSE CALLED] handle=${handle}`);
         if (!this.records.has(handle)) {
             return; // TS-H04: 이중 dispose 방어 — 이미 해제된 핸들 무시
         }
-        /**
-         * WHAT: 폐기할 텐서의 레코드 객체입니다.
-         * WHY: 텐서의 WebGPU 버퍼와 할당 토큰(token)에 접근하여 실제 메모리를 해제하기 위해 필요합니다.
-         * HOW: this.records.get()으로 가져오며, 유효하지 않으면 조기 반환(return)합니다.
-         */
         const record = this.records.get(handle);
         if (!record || record.disposed)
             return;
@@ -1322,10 +1350,8 @@ struct Params {
   size: u32,
   // X 차원의 워크그룹 개수입니다. 2D 이상의 그리드에서 1차원 인덱스를 계산하기 위해(What) 필요합니다.
   workgroups_x: u32,
-  // 16바이트 정렬(alignment) 규칙을 맞추기 위한 패딩 변수입니다. 특별한 로직을 수행하지는 않습니다.
-  pad2: u32,
-  // 16바이트 정렬(alignment) 규칙을 맞추기 위한 패딩 변수입니다.
-  pad3: u32,
+  size_a: u32,
+  size_b: u32,
 };
 
 // params: GPU와 CPU 간의 데이터를 동기화하기 위한 Uniform 버퍼입니다. 연산에 필요한 메타데이터가 담겨 있습니다.
@@ -1337,29 +1363,15 @@ struct Params {
 // out: 연산 결과(덧셈)가 저장되는 출력 배열입니다. 읽고 쓰기가 가능한(storage, read_write) 형태로 선언되었습니다.
 @group(0) @binding(3) var<storage, read_write> out: array<f32>;
 
-/**
- * @function main
- * @brief WGSL의 메인 컴퓨트 셰이더 함수입니다. 두 배열 a와 b의 요소를 더하여 out에 저장합니다. (What)
- * 병렬 처리를 통해 대규모 텐서의 요소별(element-wise) 덧셈을 매우 빠르게 수행하기 위해(Why) 작성되었습니다.
- * 
- * @param global_id 내장 변수로, 현재 스레드가 전체 스레드 그리드에서 위치하는 3차원 인덱스입니다. (How)
- */
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  // params 구조체에서 연산할 전체 배열의 크기를 가져옵니다.
   let num_elements = params.size;
-  // X축 방향으로 할당된 워크그룹의 개수를 가져옵니다.
   let workgroups_x = params.workgroups_x;
-  
-  // 2차원(혹은 3차원)으로 구성된 스레드 그리드의 인덱스를 1차원 배열 인덱스로 변환합니다. (How)
-  // X인덱스에 Y인덱스 * (X방향 워크그룹 수 * 워크그룹 크기(64))를 더하여 선형 인덱스(idx)를 구합니다.
   let idx = global_id.x + global_id.y * workgroups_x * 64u;
-  
-  // 계산된 1차원 인덱스가 실제 처리해야 할 요소의 개수보다 작은지 검사합니다. (What)
-  // 버퍼 오버플로우나 유효하지 않은 메모리 접근을 방지하기 위함입니다. (Why)
   if (idx < num_elements) {
-    // a 배열과 b 배열의 동일한 인덱스 위치에 있는 값을 더하여, 그 결과를 out 배열에 저장합니다. (How)
-    out[idx] = a[idx] + b[idx];
+    let idx_a = select(idx % params.size_a, 0u, params.size_a == 1u);
+    let idx_b = select(idx % params.size_b, 0u, params.size_b == 1u);
+    out[idx] = a[idx_a] + b[idx_b];
   }
 }
 `;
@@ -1457,58 +1469,26 @@ const MUL_WGSL = `
 // 목적 (WHY): WebGPU 컴퓨트 셰이더로 유니폼(uniform) 데이터를 효율적으로 전달하기 위해 존재합니다.
 // 동작 방식 (HOW): 각 스레드가 처리해야 할 전체 크기 및 작업 그룹 설정 값을 메모리에서 읽어옵니다.
 struct Params {
-  // 변수: size
-  // 역할: 텐서 내 처리할 전체 요소의 개수
   size: u32,
-  // 변수: workgroups_x
-  // 역할: X축 방향의 작업 그룹(workgroup) 개수
   workgroups_x: u32,
-  // 변수: pad2, pad3
-  // 역할: 16바이트 정렬(alignment)을 맞추기 위한 패딩 변수
-  pad2: u32,
-  pad3: u32,
-}
+  size_a: u32,
+  size_b: u32,
+};
 
-// 변수: params
-// 역할: Params 구조체 타입의 유니폼 버퍼 바인딩
 @group(0) @binding(0) var<uniform> params : Params;
-
-// 변수: A
-// 역할: 첫 번째 입력 텐서 데이터를 담고 있는 읽기 전용 스토리지 버퍼
 @group(0) @binding(1) var<storage, read> A : array<f32>;
-
-// 변수: B
-// 역할: 두 번째 입력 텐서 데이터를 담고 있는 읽기 전용 스토리지 버퍼
 @group(0) @binding(2) var<storage, read> B : array<f32>;
-
-// 변수: C
-// 역할: 곱셈 결과가 저장될 읽기/쓰기 가능한 출력 스토리지 버퍼
 @group(0) @binding(3) var<storage, read_write> C : array<f32>;
 
-// 함수: main
-// 역할 (WHAT): 두 텐서 A와 B의 각 요소를 곱하여 C에 저장하는 컴퓨트 셰이더 메인 함수입니다.
-// 목적 (WHY): 병렬 처리를 통해 대규모 배열의 요소별 곱셈(Element-wise multiplication)을 빠르게 수행하기 위함입니다.
-// 동작 방식 (HOW): 64개의 스레드를 가진 작업 그룹에서 실행되며, 1차원 배열을 2D 그리드 방식으로 매핑하여 현재 스레드의 글로벌 인덱스를 계산하고, 이 인덱스가 전체 크기(size)보다 작을 때만 곱셈을 수행합니다.
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id : vec3<u32>) {
-  // 변수: num_elements
-  // 역할: 유니폼 버퍼에서 전체 요소의 개수를 가져와 저장합니다.
   let num_elements = params.size;
-  
-  // 변수: workgroups_x
-  // 역할: X축 방향의 작업 그룹 크기를 가져와 저장합니다. (2D 그리드를 1D 인덱스로 변환할 때 사용)
   let workgroups_x = params.workgroups_x;
-  
-  // 변수: index
-  // 역할: 현재 스레드가 처리해야 할 1차원 글로벌 데이터 인덱스를 계산합니다.
   let index = global_id.x + global_id.y * workgroups_x * 64u;
-  
-  // 조건문: index 유효성 검사
-  // 역할: 인덱스가 실제 데이터 크기(num_elements) 배열 범위 내에 있는지 확인합니다.
   if (index < num_elements) {
-    // 변수 C 배열 갱신
-    // 역할: A 배열과 B 배열의 동일 인덱스 위치에 있는 값을 곱하여 C 배열에 저장합니다.
-    C[index] = A[index] * B[index];
+    let idx_a = select(index % params.size_a, 0u, params.size_a == 1u);
+    let idx_b = select(index % params.size_b, 0u, params.size_b == 1u);
+    C[index] = A[idx_a] * B[idx_b];
   }
 }
 `;
@@ -1598,72 +1578,26 @@ const SUB_WGSL = `
 // 목적: WGSL 커널에서 사용할 유니폼 파라미터(Uniform parameters)들을 정의합니다.
 // 작동 방식: 배열의 크기(size)와 2차원 워크그룹 배열의 X축 크기(workgroups_x)를 제공합니다.
 struct Params {
-  // 변수: size
-  // 목적: 연산할 전체 배열 요소의 개수입니다.
-  // 작동 방식: 배열 범위를 초과하는 인덱스 접근을 차단하기 위한 경계값으로 쓰입니다.
   size: u32,
-  // 변수: workgroups_x
-  // 목적: X축 방향 워크그룹의 개수입니다.
-  // 작동 방식: 3D 워크그룹 인덱스를 1D 전역 인덱스로 변환할 때 필요합니다.
   workgroups_x: u32,
-  // 변수: pad2
-  // 목적: 메모리 16바이트 정렬을 위한 패딩입니다.
-  // 작동 방식: 구조체 크기를 16바이트의 배수로 맞춰 GPU 메모리 접근 오류를 방지합니다.
-  pad2: u32,
-  // 변수: pad3
-  // 목적: 메모리 16바이트 정렬을 위한 패딩입니다.
-  // 작동 방식: 구조체 크기를 16바이트의 배수로 맞춰 GPU 메모리 접근 오류를 방지합니다.
-  pad3: u32,
+  size_a: u32,
+  size_b: u32,
 };
 
-// 변수: params
-// 목적: 셰이더 실행에 필요한 설정값을 담고 있는 유니폼 버퍼 변수입니다.
-// 작동 방식: 바인딩 0에 할당되어 모든 워크그룹이 공유하여 읽습니다.
 @group(0) @binding(0) var<uniform> params: Params;
-
-// 변수: a
-// 목적: 뺄셈 연산의 피연산자 A(minuend)를 저장하는 읽기 전용 버퍼입니다.
-// 작동 방식: 바인딩 1에 할당되어 첫 번째 입력 텐서 데이터를 제공합니다.
 @group(0) @binding(1) var<storage, read> a: array<f32>;
-
-// 변수: b
-// 목적: 뺄셈 연산의 피연산자 B(subtrahend)를 저장하는 읽기 전용 버퍼입니다.
-// 작동 방식: 바인딩 2에 할당되어 두 번째 입력 텐서 데이터를 제공합니다.
 @group(0) @binding(2) var<storage, read> b: array<f32>;
-
-// 변수: out
-// 목적: 뺄셈 연산 결과(A - B)를 저장할 읽기/쓰기 가능한 출력 버퍼입니다.
-// 작동 방식: 바인딩 3에 할당되며, 병렬 처리된 결과가 각 인덱스 위치에 기록됩니다.
 @group(0) @binding(3) var<storage, read_write> out: array<f32>;
 
-// 함수: main
-// 목적: 두 텐서의 요소별(element-wise) 뺄셈 연산을 병렬로 수행하는 커널 진입점입니다.
-// 작동 방식: 각 스레드가 자신의 인덱스(idx)를 계산한 뒤 'a[idx] - b[idx]' 연산을 수행하고 out 배열에 저장합니다.
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  // 변수: num_elements
-  // 목적: 연산할 전체 원소 개수를 로컬에 할당합니다.
-  // 작동 방식: 유니폼 구조체(params)에서 size 필드를 읽어옵니다.
   let num_elements = params.size;
-
-  // 변수: workgroups_x
-  // 목적: X축 방향의 워크그룹 개수를 로컬에 할당합니다.
-  // 작동 방식: 유니폼 구조체(params)에서 workgroups_x 필드를 읽어옵니다.
   let workgroups_x = params.workgroups_x;
-
-  // 변수: idx
-  // 목적: 스레드가 처리할 데이터의 1차원 인덱스를 계산합니다.
-  // 작동 방식: 현재 워크그룹의 (y * 워크그룹X개수 * 64) 오프셋에 x 인덱스를 더해 글로벌 인덱스를 평면화합니다.
   let idx = global_id.x + global_id.y * workgroups_x * 64u;
-
-  // 제어문: if
-  // 목적: 배열 크기를 넘어서는 유효하지 않은 인덱스에 접근하는 것을 방지합니다.
-  // 작동 방식: idx가 num_elements보다 작을 때만 아래 연산을 수행합니다.
   if (idx < num_elements) {
-    // 연산: out[idx] 기록
-    // 목적: 요소별 뺄셈 결과를 저장합니다.
-    // 작동 방식: 인덱스에 해당하는 a 값에서 b 값을 뺀 후 out 배열의 같은 위치에 씁니다.
-    out[idx] = a[idx] - b[idx];
+    let idx_a = select(idx % params.size_a, 0u, params.size_a == 1u);
+    let idx_b = select(idx % params.size_b, 0u, params.size_b == 1u);
+    out[idx] = a[idx_a] - b[idx_b];
   }
 }
 `;
@@ -1745,47 +1679,28 @@ const DIV_WGSL = `
  * 셰이더 내에서 배열 크기 경계를 확인하고 3D 스레드 인덱스를 1차원으로 풀기 위해 사용됩니다. (Why)
  */
 struct Params {
-  // 전체 요소(element)의 개수입니다. 배열 인덱스 초과를 막기 위해 사용됩니다.
   size: u32,
-  // X 차원의 워크그룹 총 개수입니다. 2차원(Y방향) 인덱스 계산을 위해 사용됩니다.
   workgroups_x: u32,
-  // 16바이트(float4) 메모리 정렬을 위한 여유 패딩 변수입니다.
-  pad2: u32,
-  // 16바이트 메모리 정렬을 위한 여유 패딩 변수입니다.
-  pad3: u32,
+  size_a: u32,
+  size_b: u32,
 };
 
-// params: GPU와 CPU 간 데이터 통신을 위한 Uniform 버퍼입니다. 텐서 크기 정보를 전달합니다.
 @group(0) @binding(0) var<uniform> params: Params;
-// a: 분자(나누어지는 수, dividend) 역할을 하는 첫 번째 입력 배열입니다 (읽기 전용).
 @group(0) @binding(1) var<storage, read> a: array<f32>;
-// b: 분모(나누는 수, divisor) 역할을 하는 두 번째 입력 배열입니다 (읽기 전용).
 @group(0) @binding(2) var<storage, read> b: array<f32>;
-// out: 나눗셈 연산의 몫이 저장되는 출력 배열입니다 (읽기/쓰기 가능).
 @group(0) @binding(3) var<storage, read_write> out: array<f32>;
 
-/**
- * @function main
- * @brief 스레드 인덱스에 따라 a 텐서의 값을 b 텐서의 값으로 나누어 그 결과를 out 텐서에 기록합니다. (What)
- * 요소 단위(Element-wise)의 병렬 나눗셈을 통해 대규모 데이터의 정규화 등의 처리를 매우 빠르게 수행하기 위함입니다. (Why)
- * @param global_id 워크그룹 및 스레드의 3차원 전역 인덱스입니다. (How)
- */
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  // 연산을 수행할 전체 원소의 수를 가져옵니다.
   let num_elements = params.size;
-  // X축으로 할당된 워크그룹의 개수를 가져옵니다.
   let workgroups_x = params.workgroups_x;
-  
-  // 글로벌 스레드 ID의 X, Y 좌표와 워크그룹 수, 워크그룹 사이즈(64)를 곱하고 더하여 1차원 선형 인덱스(idx)를 구합니다. (How)
   let idx = global_id.x + global_id.y * workgroups_x * 64u;
-  
-  // 계산된 인덱스가 전체 요소 수(num_elements)보다 작은지 검사합니다. (What)
-  // 텐서의 크기보다 초과된 메모리 영역에 잘못 접근하는 오류를 방지하기 위해 사용됩니다. (Why)
   if (idx < num_elements) {
-    // 해당 위치의 a 값을 b 값으로 나누어 결과 배열(out)에 저장합니다. (How)
-    // (주의: WGSL에서 부동소수점 0으로 나누기 발생 시 무한대(Infinity)나 NaN이 들어갈 수 있습니다.)
-    out[idx] = a[idx] / b[idx];
+    let idx_a = select(idx % params.size_a, 0u, params.size_a == 1u);
+    let idx_b = select(idx % params.size_b, 0u, params.size_b == 1u);
+    let divisor = b[idx_b];
+    let safe_divisor = select(divisor, select(1e-7, -1e-7, divisor < 0.0), abs(divisor) < 1e-7);
+    out[idx] = a[idx_a] / safe_divisor;
   }
 }
 `;
@@ -2262,10 +2177,10 @@ struct Params {
 // 작동 방식: 바인딩 2에 할당되며, 최종적으로 워크그룹 개수만큼의 결과가 저장됩니다.
 @group(0) @binding(2) var<storage, read_write> output: array<f32>;
 
-// 변수: shared
+// 변수: s_data
 // 목적: 워크그룹 내 스레드들이 공유하는 로컬 메모리(Shared memory)입니다.
 // 작동 방식: 256 크기의 배열로 할당되어 빠른 Reduction(축소) 연산을 위한 캐시 역할을 합니다.
-var<workgroup> shared: array<f32, 256>;
+var<workgroup> s_data: array<f32, 256>;
 
 // 함수: main
 // 목적: 배열 요소들의 총합을 구하기 위한 병렬 Reduction(축소) 알고리즘을 수행합니다.
@@ -2289,11 +2204,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invo
   
   // 제어문: if-else
   // 목적: 입력 데이터를 로컬 공유 메모리에 복사하면서, 범위를 벗어난 공간을 0으로 초기화합니다.
-  // 작동 방식: gid가 유효한 원소 범위 안에 있으면 input[gid]를, 벗어나면 0.0을 shared에 할당합니다.
+  // 작동 방식: gid가 유효한 원소 범위 안에 있으면 input[gid]를, 벗어나면 0.0을 s_data에 할당합니다.
   if (gid < params.numElements) {
-    shared[lid] = input[gid];
+    s_data[lid] = input[gid];
   } else {
-    shared[lid] = 0.0;
+    s_data[lid] = 0.0;
   }
   
   // 동기화: workgroupBarrier()
@@ -2307,21 +2222,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invo
   for (var s = 128u; s > 0u; s >>= 1u) {
     // 제어문: if
     // 목적: 유효한 절반의 스레드들만 덧셈 연산에 참여하도록 제한합니다.
-    // 작동 방식: 로컬 인덱스가 현재 단계의 s보다 작을 경우에만 shared[lid]와 shared[lid + s]를 더합니다.
+    // 작동 방식: 로컬 인덱스가 현재 단계의 s보다 작을 경우에만 s_data[lid]와 s_data[lid + s]를 더합니다.
     if (lid < s) {
-      shared[lid] += shared[lid + s];
+      s_data[lid] = s_data[lid] + s_data[lid + s];
     }
     // 동기화: workgroupBarrier()
-    // 목적: 각 단계의 덧셈이 모든 참여 스레드에서 끝날 때까지 대기합니다.
-    // 작동 방식: 이전 단계의 덧셈 결과가 완전히 기록된 후 다음 단계를 진행하도록 합니다.
+    // 목적: 다음 단계의 Reduction으로 넘어가기 전, 현재 단계의 덧셈이 모든 스레드에서 완료되었는지 확인합니다.
+    // 작동 방식: 모든 스레드가 동기화 지점에 도달할 때까지 실행을 일시 중단합니다.
     workgroupBarrier();
   }
   
   // 제어문: if
-  // 목적: Reduction 연산이 완료된 최종 합계를 전역 메모리에 기록합니다.
-  // 작동 방식: 로컬 인덱스가 0인 첫 번째 스레드가 워크그룹의 최종 합(shared[0])을 output 버퍼의 wid 위치에 저장합니다.
+  // 목적: 워크그룹 내 최종 합산 결과(s_data[0])를 전역 출력 버퍼에 단 한 번만 기록합니다.
+  // 작동 방식: 로컬 인덱스가 0번인 스레드만 대표로 output[wid]에 s_data[0] 값을 할당합니다.
   if (lid == 0u) {
-    output[wid] = shared[0];
+    output[wid] = s_data[0];
   }
 }
 `;
@@ -2348,11 +2263,11 @@ struct Params {
 @group(0) @binding(2) var<storage, read_write> output: array<f32>; // 워크그룹별 부분 최댓값이 저장될 출력 텐서입니다.
 
 // 하나의 워크그룹(256개의 스레드) 내에서 데이터를 공유하고 리덕션을 수행하기 위해 존재하는 공유 메모리 공간입니다.
-var<workgroup> shared: array<f32, 256>;
+var<workgroup> s_data: array<f32, 256>;
 
 /**
  * main 함수는 트리 기반의 리덕션(Tree-based Reduction) 알고리즘을 사용하여 배열 내 원소들의 최댓값을 계산합니다.
- * 방대한 데이터를 병렬로 빠르게 비교압축하기 위해 공유 메모리(shared)와 배리어(barrier) 동기화를 사용합니다.
+ * 방대한 데이터를 병렬로 빠르게 비교압축하기 위해 공유 메모리(s_data)와 배리어(barrier) 동기화를 사용합니다.
  */
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>, @builtin(workgroup_id) workgroup_id: vec3<u32>) {
@@ -2362,9 +2277,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invo
   
   // 글로벌 인덱스가 데이터 크기 이내라면 입력 데이터를, 벗어난다면 부동소수점의 최소값(-FLT_MAX)을 공유 메모리에 로드합니다.
   if (gid < params.numElements) {
-    shared[lid] = input[gid];
+    s_data[lid] = input[gid];
   } else {
-    shared[lid] = -3.402823e+38; // 쓰레기값을 방지하기 위한 최소값 초기화입니다.
+    s_data[lid] = -3.402823e+38; // 쓰레기값을 방지하기 위한 최소값 초기화입니다.
   }
   
   // 공유 메모리 로드가 완전히 끝날 때까지 워크그룹 내의 모든 스레드를 대기시킵니다.
@@ -2375,7 +2290,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invo
   for (var s = 128u; s > 0u; s >>= 1u) {
     // 현재 단계에서 값을 비교하고 갱신할 권한이 있는 스레드만 실행합니다.
     if (lid < s) {
-      shared[lid] = max(shared[lid], shared[lid + s]); // 자신의 값과 s만큼 떨어진 옆의 값을 비교해 큰 값을 저장합니다.
+      s_data[lid] = max(s_data[lid], s_data[lid + s]); // 자신의 값과 s만큼 떨어진 옆의 값을 비교해 큰 값을 저장합니다.
     }
     // 데이터 경합(Data Race)을 막고 다음 단계를 안전하게 수행하기 위해 스레드 동기화를 수행합니다.
     workgroupBarrier();
@@ -2384,7 +2299,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invo
   // 리덕션이 완료되면 공유 메모리의 0번 인덱스에 현재 워크그룹의 전체 최댓값이 남게 됩니다.
   // 0번 스레드가 이를 대표로 전역 출력 버퍼에 기록합니다.
   if (lid == 0u) {
-    output[wid] = shared[0];
+    output[wid] = s_data[0];
   }
 }
 `;
@@ -2514,9 +2429,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     return;
   }
   
-  // 현재 파라미터 값에서 (학습률 * 기울기) 만큼을 차감하여 새로운 값으로 갱신(덮어쓰기)합니다. (How)
-  // 전형적인 옵티마이저(SGD)의 스텝 연산입니다. (What)
-  param[idx] = param[idx] - params.lr * grad[idx];
+  let g = grad[idx];
+  // Numerical Safety: Guard against NaN/Inf gradient poisoning (IEEE 754 in WGSL)
+  let safe_g = select(clamp(g, -1e6, 1e6), 0.0, g != g);
+  param[idx] = param[idx] - params.lr * safe_g;
 }
 `;
 
@@ -3766,6 +3682,7 @@ registerKernelNames(KERNEL_REGISTRY.keys());
  * HOW: 텐서 핸들(문자열)을 키로, 매핑된 GPUBuffer와 AllocationToken 객체를 값으로 유지합니다.
  */
 const _pendingStagingBuffers = new Map();
+const _inFlightMapPromises = new Map();
 /**
  * WHAT: GPU 코어의 런타임 메모리와 모든 캐시된 리소스를 초기화(해제)하는 함수입니다.
  * WHY: 디바이스 유실(Device Lost) 이벤트가 발생하거나 시스템 강제 리셋 시 남은 자원의 메모리 누수를 방지하기 위해 존재합니다.
@@ -3775,6 +3692,7 @@ function resetRuntimeMemory() {
     _globalRegistry.clear();
     _globalQuotaManager.reset();
     _globalPipelineCache.clear(); // L-03 Fix: device lost 시 파이프라인 캐시도 무효화
+    _inFlightMapPromises.clear();
     /**
      * WHAT: 스테이징 버퍼 맵에 남아있는 모든 엔트리를 순회하여 파괴하는 루프입니다.
      * WHY: 사용되지 않고 남겨진 스테이징 버퍼가 VRAM을 계속 차지하는 것을 방지하기 위해 필요합니다.
@@ -3930,22 +3848,27 @@ function read(handle) {
  * HOW: 레지스트리에서 버퍼를 조회한 뒤 맵핑을 수행하고 반환된 스테이징 버퍼를 _pendingStagingBuffers에 저장합니다.
  */
 async function mapBufferAsync(handle) {
+    // If already staged and mapped, return immediately
     if (_pendingStagingBuffers.has(handle)) {
-        throw new Error(`[AMEVA] A readback is already pending for handle "${handle}".`);
+        return;
     }
-    /**
-     * WHAT: 매핑할 원본 텐서 레코드입니다.
-     * WHY: 복사 소스가 될 GPUBuffer와 크기 정보를 제공하기 위해 참조됩니다.
-     * HOW: 레지스트리에서 핸들 키를 통해 가져옵니다.
-     */
+    // If a mapping operation is already in-flight for this handle, coalesce with existing promise
+    const inFlight = _inFlightMapPromises.get(handle);
+    if (inFlight) {
+        return inFlight;
+    }
     const record = _globalRegistry.get(handle);
-    /**
-     * WHAT: 원본 버퍼에서 복사된 후 매핑 상태가 될 스테이징 버퍼와 메모리 할당 토큰입니다.
-     * WHY: 이 버퍼를 통해 CPU에서 안전하게 데이터를 읽어갈 수 있으므로 필요합니다.
-     * HOW: _mapBufferAsync 헬퍼 함수를 호출하여 비동기적으로 얻습니다.
-     */
-    const { stagingBuffer, token } = await mapBufferAsync$1(record.buffer, record.byteLength);
-    _pendingStagingBuffers.set(handle, { stagingBuffer, token });
+    const promise = (async () => {
+        try {
+            const { stagingBuffer, token } = await mapBufferAsync$1(record.buffer, record.byteLength);
+            _pendingStagingBuffers.set(handle, { stagingBuffer, token });
+        }
+        finally {
+            _inFlightMapPromises.delete(handle);
+        }
+    })();
+    _inFlightMapPromises.set(handle, promise);
+    return promise;
 }
 /**
  * WHAT: 매핑이 완료된 스테이징 버퍼에서 대상 배열로 데이터를 동기 복사하는 함수입니다.
@@ -4433,7 +4356,7 @@ const ALLOWED_OPS = new Set([
     'upload', 'load', 'matmul', 'batched_matmul', 'relu', 'add', 'mul', 'transpose', 'relu_backward',
     'sub', 'neg', 'div', 'exp', 'log', 'sigmoid', 'tanh', 'sigmoid_backward', 'tanh_backward',
     'fill', 'sum', 'max', 'sum_axis', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
-    'im2col', 'col2im', 'dropout', 'permute'
+    'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu'
 ]);
 /**
  * WHAT: 단일 텐서가 가질 수 있는 최대 랭크(차원 수)입니다.
@@ -4466,6 +4389,40 @@ const WORKLOAD_BUDGET_ELEMENTS = 100_000_000; // 100M elements per submit
  * HOW: 256개 명령어마다 무조건 큐에 submit 하도록 강제합니다.
  */
 const MAX_OPS_PER_SUBMIT = 256; // 안전장치: element 수 관계없이 256 ops마다 강제 분할
+class GraphTransaction {
+    pending = new Map();
+    add(record) {
+        if (this.pending.has(record.handle)) {
+            throw new AMEVAForgeValidationError(`Duplicate pending handle: ${record.handle}`);
+        }
+        this.pending.set(record.handle, record);
+    }
+    get(handle) {
+        return this.pending.get(handle);
+    }
+    get handles() {
+        return Array.from(this.pending.keys());
+    }
+    commit(registry) {
+        for (const record of this.pending.values()) {
+            registry.registerRecord(record);
+        }
+        this.pending.clear();
+    }
+    rollback() {
+        for (const record of this.pending.values()) {
+            try {
+                record.buffer.destroy();
+            }
+            catch { }
+            try {
+                _globalQuotaManager.releaseToken(record.token);
+            }
+            catch { }
+        }
+        this.pending.clear();
+    }
+}
 /**
  * WHAT: JSON에서 파싱된 단일 명령어 객체의 무결성을 엄격하게 검증하는 함수입니다.
  * WHY: 타입 오류나 범위 초과 등을 가진 악성 데이터가 하위 WebGPU 계층으로 흘러가 충돌을 일으키지 않도록 방어하기 위함입니다.
@@ -4549,8 +4506,7 @@ function validateInstruction(inst, idx) {
         'maxpool2d': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
         'avgpool2d': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
         'im2col': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
-        'col2im': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
-        'transpose': { minIn: 1, exactIn: true, minParams: 3, exactParams: true },
+        'transpose': { minIn: 1, exactIn: true, minParams: 2, exactParams: false },
         'permute': { minIn: 1, exactIn: true, minParams: 1, exactParams: false }, // rank 길이 가변
         'add': { minIn: 2, exactIn: true, minParams: 0, exactParams: true },
         'sub': { minIn: 2, exactIn: true, minParams: 0, exactParams: true },
@@ -4598,7 +4554,27 @@ function validateInstruction(inst, idx) {
  * WHY: 매 연산마다 JS와 WebAssembly/GPU 사이를 왕복(context switch)하면 극심한 오버헤드가 발생하므로, 한 번의 호출로 많은 명령을 처리(Transaction)하기 위해 설계되었습니다.
  * HOW: JSON을 파싱하고, 명령을 검증하며, 적절한 청크로 분할하여 WebGPU 커맨드 버퍼에 기록하고 제출(submit)합니다. 실패 시 트랜잭션을 롤백합니다.
  */
-async function executeGraph(instructionsJson, jsInputs) {
+let _executionQueueChain = Promise.resolve();
+async function executeGraph(instructionsJson, inputs, outputIds) {
+    const previous = _executionQueueChain;
+    let releaseLock;
+    _executionQueueChain = new Promise((resolve) => {
+        releaseLock = resolve;
+    });
+    try {
+        await previous;
+    }
+    catch {
+        // Suppress previous transaction error so queue continues processing
+    }
+    try {
+        return await _executeGraphCore(instructionsJson, inputs);
+    }
+    finally {
+        releaseLock();
+    }
+}
+async function _executeGraphCore(instructionsJson, jsInputs) {
     // ── 1. Parse ──
     /**
      * WHAT: JSON 문자열에서 파싱된 원시(unvalidated) 자바스크립트 객체 배열입니다.
@@ -4677,23 +4653,9 @@ async function executeGraph(instructionsJson, jsInputs) {
      * HOW: 키는 명령어 id, 값은 TensorHandle(문자열)로 할당합니다.
      */
     const idToHandle = {};
-    /**
-     * WHAT: 명령어 ID를 실제 GPUBuffer 객체 포인터에 매핑하는 객체입니다.
-     * WHY: 그래프 내에서 이전 연산의 결과(ID)를 다음 연산의 입력으로 빠르게 찾아 바인딩하기 위해 사용합니다.
-     * HOW: 키는 명령어 id, 값은 GPUBuffer로 저장됩니다.
-     */
     const idToBuffer = {};
-    /**
-     * WHAT: 이번 트랜잭션(executeGraph 호출) 내에서 새로 생성된 모든 텐서 핸들들의 배열입니다.
-     * WHY: 중간에 에러가 발생하여 롤백이 필요할 때, 새롭게 할당된 메모리들을 일괄 해제(dispose)하기 위해 기록합니다.
-     * HOW: 버퍼가 새로 할당될 때마다 push()를 통해 배열에 추가합니다.
-     */
-    const createdHandles = [];
-    /**
-     * WHAT: upload 명령을 처리할 때 inputs 배열에서 다음에 꺼내올 데이터의 인덱스입니다.
-     * WHY: 여러 번의 upload 명령이 순서대로 입력 데이터를 소비할 수 있도록 추적합니다.
-     * HOW: upload 명령이 실행될 때마다 현재 위치의 데이터를 읽고 1씩 증가(++)합니다.
-     */
+    const idToByteLength = {};
+    const transaction = new GraphTransaction();
     let inputIdx = 0;
     /**
      * WHAT: 셰이더의 파라미터 전달을 위해 임시로 생성된 유니폼 버퍼(Uniform Buffer)들의 배열입니다.
@@ -4724,6 +4686,9 @@ async function executeGraph(instructionsJson, jsInputs) {
                 if (typeof handle !== 'string') {
                     throw new AMEVAForgeSecurityError(`load instruction missing handle`);
                 }
+                if (!_globalRegistry.has(handle)) {
+                    console.error(`[GraphExecutor DIAGNOSTIC] load op failed for handle="${handle}". Registered handles count=${_globalRegistry.snapshotHandles().length}, list=${JSON.stringify(_globalRegistry.snapshotHandles())}`);
+                }
                 const record = _globalRegistry.get(handle);
                 // F-018 Fix: JSON 형상과 레지스트리 실제 형상 일치 여부 검사
                 if (inst.shape.length !== record.shape.length || !inst.shape.every((v, i) => v === record.shape[i])) {
@@ -4731,6 +4696,7 @@ async function executeGraph(instructionsJson, jsInputs) {
                 }
                 idToHandle[inst.id] = handle;
                 idToBuffer[inst.id] = record.buffer;
+                idToByteLength[inst.id] = record.byteLength;
                 continue;
             }
             if (inst.op === 'upload') {
@@ -4791,25 +4757,24 @@ async function executeGraph(instructionsJson, jsInputs) {
                     if (bufProxy)
                         bufProxy.release();
                 }
-                /**
-                 * WHAT: 업로드된 버퍼를 전역 레지스트리에 등록한 결과로 발급받은 텐서 핸들입니다.
-                 * WHY: 리소스 생명주기를 추적하고 트랜잭션 실패 시 롤백 대상으로 삼기 위해 저장합니다.
-                 * HOW: _globalRegistry.register()를 호출하고 그 결과를 idToHandle, idToBuffer, createdHandles 배열에 추가합니다.
-                 */
-                const handle = _globalRegistry.register({
-                    buffer, token, shape: inst.shape, dtype: "float32", byteLength
+                const uuid = typeof crypto !== 'undefined' && crypto.randomUUID
+                    ? crypto.randomUUID()
+                    : Math.random().toString(36).substring(2, 15);
+                const handle = `tensor_${uuid}`;
+                transaction.add({
+                    handle,
+                    buffer,
+                    token,
+                    shape: inst.shape,
+                    dtype: "float32",
+                    byteLength
                 });
                 idToHandle[inst.id] = handle;
                 idToBuffer[inst.id] = buffer;
-                createdHandles.push(handle);
+                idToByteLength[inst.id] = byteLength;
                 continue;
             }
             assertAllowedKernelName(inst.op);
-            /**
-             * WHAT: 현재 연산의 결과 데이터를 저장할 대상 GPUBuffer 포인터입니다.
-             * WHY: 각 연산 명령어는 새로운 텐서(혹은 제자리 연산 시 기존 텐서)에 결과를 출력해야 하므로 필요합니다.
-             * HOW: axpy 등 인플레이스(in-place) 오퍼레이션일 경우 기존 입력 버퍼를 가리키고, 그 외의 경우 allocateBuffer로 새로 할당합니다.
-             */
             let outBuffer;
             if (inst.op === 'axpy') {
                 if (!inst.in || inst.in.length < 2) {
@@ -4818,11 +4783,17 @@ async function executeGraph(instructionsJson, jsInputs) {
                 outBuffer = idToBuffer[inst.in[1]];
                 idToHandle[inst.id] = idToHandle[inst.in[1]];
                 idToBuffer[inst.id] = outBuffer;
+                idToByteLength[inst.id] = byteLength;
             }
             else {
-                const { buffer, token } = allocateBuffer(byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, 'tensor', `Graph_${instructions[0]?.id}`);
+                const { buffer, token } = allocateBuffer(byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, 'tensor', `Graph_${instructions[0]?.id}`);
                 outBuffer = buffer;
-                const handle = _globalRegistry.register({
+                const uuid = typeof crypto !== 'undefined' && crypto.randomUUID
+                    ? crypto.randomUUID()
+                    : Math.random().toString(36).substring(2, 15);
+                const handle = `tensor_${uuid}`;
+                transaction.add({
+                    handle,
                     buffer: outBuffer,
                     token,
                     shape: inst.shape,
@@ -4831,7 +4802,7 @@ async function executeGraph(instructionsJson, jsInputs) {
                 });
                 idToHandle[inst.id] = handle;
                 idToBuffer[inst.id] = outBuffer;
-                createdHandles.push(handle);
+                idToByteLength[inst.id] = byteLength;
             }
             /**
              * WHAT: 현재 오퍼레이션의 유니폼 파라미터를 담기 위해 필요한 바이트 크기입니다.
@@ -4924,10 +4895,12 @@ async function executeGraph(instructionsJson, jsInputs) {
                 device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array(inst.params));
             }
             else if (inst.op === 'transpose') {
-                if (!inst.params || inst.params.length < 3) {
+                if (!inst.params || inst.params.length < 2) {
                     throw new AMEVAForgeSecurityError(`transpose instruction missing params`);
                 }
-                const [rM, rN, rB] = inst.params;
+                const rM = inst.params[0];
+                const rN = inst.params[1];
+                const rB = inst.params.length >= 3 ? inst.params[2] : 1;
                 wgslCode = TRANSPOSE_WGSL;
                 device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([rM, rN, rB, 0]));
                 dispatchX = Math.ceil(rM / 8);
@@ -5145,7 +5118,13 @@ async function executeGraph(instructionsJson, jsInputs) {
                     dispatchX = Math.min(65535, Math.ceil(Math.sqrt(totalWorkgroups)));
                     dispatchY = Math.min(65535, Math.ceil(totalWorkgroups / dispatchX));
                 }
-                device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([numElements, dispatchX, 0, 0, 0, 0, 0, 0]));
+                let numA = 0;
+                let numB = 0;
+                if (inst.in && inst.in.length >= 2) {
+                    numA = (idToByteLength[inst.in[0]] ?? byteLength) / 4;
+                    numB = (idToByteLength[inst.in[1]] ?? byteLength) / 4;
+                }
+                device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([numElements, dispatchX, numA, numB, 0, 0, 0, 0]));
                 if (inst.op === 'cat') {
                     if (!inst.params || inst.params.length < 3) {
                         throw new AMEVAForgeSecurityError(`cat instruction missing params`);
@@ -5169,7 +5148,14 @@ async function executeGraph(instructionsJson, jsInputs) {
                 const reductionInputHandle = idToHandle[inst.in[0]];
                 if (!reductionInputHandle)
                     throw new AMEVAForgeSecurityError(`Unresolved reduction input id ${inst.in[0]}`);
-                let currentSize = _globalRegistry.get(reductionInputHandle).byteLength / 4;
+                let currentByteLength = idToByteLength[inst.in[0]];
+                if (currentByteLength === undefined) {
+                    const rec = _globalRegistry.has(reductionInputHandle)
+                        ? _globalRegistry.get(reductionInputHandle)
+                        : transaction.get(reductionInputHandle);
+                    currentByteLength = rec ? rec.byteLength : 4;
+                }
+                let currentSize = currentByteLength / 4;
                 let currentInputBuf = idToBuffer[inst.in[0]];
                 const intermediateAllocations = [];
                 /**
@@ -5339,12 +5325,7 @@ async function executeGraph(instructionsJson, jsInputs) {
     catch (err) {
         // ── 5. Rollback on Sync Error ──
         console.error(`[AMEVA Forge] Transaction Sync Failed. Rolling back...`, err);
-        for (const handle of createdHandles) {
-            try {
-                _globalRegistry.dispose(handle);
-            }
-            catch { }
-        }
+        transaction.rollback();
         for (const alloc of paramsAllocations) {
             try {
                 freeBuffer(alloc.buffer, alloc.token);
@@ -5368,10 +5349,11 @@ async function executeGraph(instructionsJson, jsInputs) {
     // Check for GPU errors BEFORE returning handles
     const gpuError = internalError || oomError || validationError;
     if (gpuError) {
-        console.error(`[AMEVA Forge] GPU error detected. Rolling back ${createdHandles.length} tensors...`, gpuError);
-        for (const handle of createdHandles) {
+        console.error(`[AMEVA Forge] GPU error detected. Rolling back transaction...`, gpuError);
+        transaction.rollback();
+        for (const alloc of paramsAllocations) {
             try {
-                _globalRegistry.dispose(handle);
+                freeBuffer(alloc.buffer, alloc.token);
             }
             catch { }
         }
@@ -5386,7 +5368,9 @@ async function executeGraph(instructionsJson, jsInputs) {
             throw new AMEVAForgeValidationError(`GPU Validation Error: ${validationError.message}`);
         }
     }
-    // ── 6. Cleanup temporary/uniform allocations after GPU completion ──
+    // ── 6. Commit transaction to global registry only on verified success ──
+    transaction.commit(_globalRegistry);
+    // ── 7. Cleanup temporary/uniform allocations after GPU completion ──
     if (paramsAllocations.length > 0) {
         device.queue.onSubmittedWorkDone().then(() => {
             for (const alloc of paramsAllocations) {
@@ -5562,11 +5546,211 @@ function registerPyodideBridge() {
         executeGraph,
         warmupKernels,
         disposeBatch,
+        getQuotaSnapshot,
+        snapshotHandles: () => _globalRegistry.snapshotHandles(),
+        flushGC: async () => {
+            try {
+                const dev = getDevice();
+                await dev.queue.onSubmittedWorkDone();
+            }
+            catch { }
+        },
     };
     Object.freeze(api); // F-014 Fix: API 객체 동결하여 외부 변조 방지
     globalThis.amevaForge = api;
     return api;
 }
 
-export { AMEVAForgeDTypeError, AMEVAForgeDeviceError, AMEVAForgeDeviceLostError, AMEVAForgeDisposedError, AMEVAForgeError, AMEVAForgeInternalGPUError, AMEVAForgeOutOfMemoryError, AMEVAForgeQuotaExceededError, AMEVAForgeSecurityError, AMEVAForgeShapeError, AMEVAForgeStaleHandleError, AMEVAForgeUnsupportedOpError, AMEVAForgeValidationError, AMEVAForgeWebGPUUnavailableError, KERNEL_REGISTRY, QuotaManager, add, assertAllowedKernelName, assertAllowedShaderConstant, assertSafeShaderIdentifier, assertStaticShaderSourceOnly, assertWasmRange, cloneToFloat32Array, dispose, ensureFloat32Array, executeGraph, getAdapter, getAllowedKernelNames, getDevice, getQueue, getTensorInfo, init, initWebGPU, isAvailable, mapBufferAsync, matmul, mul, random, read, readMappedInto, registerKernelNames, registerPyodideBridge, relu, relu_backward, resetRuntimeMemory, setDeviceLostCallback, transpose, uploadFloat32Array, validateDType, validateShape, warmupKernels };
+/**
+ * AMEVA-Forge Lightweight In-Browser Visual Inspector & DevTools HUD
+ * Real-time VRAM allocation tracking & Training loss curve visualization
+ */
+let inspectorContainer = null;
+let canvasElement = null;
+let animationFrameId = null;
+const lossHistory = [];
+/**
+ * Record a training step loss for live chart visualization
+ */
+function recordStepLoss(step, loss) {
+    lossHistory.push({ step, loss });
+    if (lossHistory.length > 200) {
+        lossHistory.shift();
+    }
+}
+/**
+ * Clear recorded training history
+ */
+function clearStepLossHistory() {
+    lossHistory.length = 0;
+}
+/**
+ * Render HUD loop
+ */
+function renderHUD() {
+    if (!canvasElement)
+        return;
+    const ctx = canvasElement.getContext('2d');
+    if (!ctx)
+        return;
+    const width = canvasElement.width;
+    const height = canvasElement.height;
+    // Background
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 0, width, height);
+    // Header / Metrics
+    const quota = getQuotaSnapshot();
+    const handles = _globalRegistry.snapshotHandles();
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText('⚡ AMEVA-Forge DevTools', 10, 20);
+    ctx.font = '10px monospace';
+    ctx.fillStyle = '#94a3b8';
+    const vramKB = (quota.usedBytes / 1024).toFixed(1);
+    const maxKB = (quota.maxBytes / (1024 * 1024)).toFixed(0);
+    ctx.fillText(`VRAM: ${vramKB} KB / ${maxKB} MB | Handles: ${handles.length}`, 10, 36);
+    // VRAM Bar
+    const barWidth = width - 20;
+    const barHeight = 6;
+    ctx.fillStyle = '#334155';
+    ctx.fillRect(10, 44, barWidth, barHeight);
+    const usageRatio = Math.min(1.0, quota.usedBytes / Math.max(1, quota.maxBytes));
+    ctx.fillStyle = usageRatio > 0.8 ? '#ef4444' : '#10b981';
+    ctx.fillRect(10, 44, barWidth * usageRatio, barHeight);
+    // Loss Curve Area
+    const chartX = 10;
+    const chartY = 60;
+    const chartW = width - 20;
+    const chartH = height - 70;
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(chartX, chartY, chartW, chartH);
+    if (lossHistory.length > 1) {
+        const minLoss = Math.min(...lossHistory.map(h => h.loss));
+        const maxLoss = Math.max(...lossHistory.map(h => h.loss), minLoss + 1e-4);
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for (let i = 0; i < lossHistory.length; i++) {
+            const x = chartX + (i / (lossHistory.length - 1)) * chartW;
+            const normalizedY = (lossHistory[i].loss - minLoss) / (maxLoss - minLoss);
+            const y = chartY + chartH - normalizedY * (chartH - 8) - 4;
+            if (i === 0) {
+                ctx.moveTo(x, y);
+            }
+            else {
+                ctx.lineTo(x, y);
+            }
+        }
+        ctx.stroke();
+        const latest = lossHistory[lossHistory.length - 1];
+        ctx.fillStyle = '#38bdf8';
+        ctx.font = '9px monospace';
+        ctx.fillText(`Step ${latest.step}: Loss ${latest.loss.toFixed(4)}`, 14, chartY + 12);
+    }
+    else {
+        ctx.fillStyle = '#64748b';
+        ctx.font = '9px monospace';
+        ctx.fillText('Awaiting training steps...', chartX + 10, chartY + chartH / 2);
+    }
+    animationFrameId = requestAnimationFrame(renderHUD);
+}
+/**
+ * Mount floating DevTools HUD overlay into DOM
+ */
+function mountInspector(targetParent) {
+    if (inspectorContainer) {
+        return inspectorContainer;
+    }
+    const container = document.createElement('div');
+    container.id = 'ameva-forge-devtools';
+    container.style.position = 'fixed';
+    container.style.bottom = '16px';
+    container.style.right = '16px';
+    container.style.width = '280px';
+    container.style.height = '180px';
+    container.style.backgroundColor = '#0f172a';
+    container.style.border = '1px solid #334155';
+    container.style.borderRadius = '8px';
+    container.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.4)';
+    container.style.zIndex = '999999';
+    container.style.overflow = 'hidden';
+    container.style.fontFamily = 'monospace';
+    const canvas = document.createElement('canvas');
+    canvas.width = 280;
+    canvas.height = 180;
+    canvas.style.display = 'block';
+    container.appendChild(canvas);
+    const parent = targetParent || document.body;
+    parent.appendChild(container);
+    inspectorContainer = container;
+    canvasElement = canvas;
+    if (typeof requestAnimationFrame !== 'undefined') {
+        animationFrameId = requestAnimationFrame(renderHUD);
+    }
+    return container;
+}
+/**
+ * Unmount and destroy DevTools HUD
+ */
+function unmountInspector() {
+    if (animationFrameId !== null && typeof cancelAnimationFrame !== 'undefined') {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+    }
+    if (inspectorContainer && inspectorContainer.parentNode) {
+        inspectorContainer.parentNode.removeChild(inspectorContainer);
+    }
+    inspectorContainer = null;
+    canvasElement = null;
+}
+
+/**
+ * Created: 2026-08-12 12:14:52 +0900
+ * Modified:
+ *   - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
+ *   - 2026-08-17: Security Hardening: Enforce strict public API boundary, isolate raw GPUDevice
+ *
+ * WHAT: 라이브러리의 외부 공개용(Public) API를 모두 한 곳으로 모아 내보내는 진입점(엔트리포인트) 파일입니다.
+ * WHY: 패키지 사용자가 내부 디렉토리 구조를 일일이 알 필요 없이 일관된 단일 경로에서 모듈을 쉽게 임포트할 수 있도록 편의성을 제공하기 위함입니다.
+ * HOW: 내부의 여러 모듈들에 정의된 클래스, 타입, 함수 등을 export 및 re-export 키워드를 활용하여 다시 바깥으로 통합 추출합니다.
+ */
+/**
+ * WHAT: 테스트 환경(E2E / Jest)에서만 제어 가능한 결함 주입(Fault Injection) 훅입니다.
+ * WHY: 프로덕션 환경에 raw GPUDevice를 노출하지 않으면서도 OOM, Validation, Device Lost 복구력을 엄격히 검증하기 위함입니다.
+ */
+const __testing = ((typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'test') ||
+    (typeof globalThis !== 'undefined' && (globalThis.__AMEVA_TEST_MODE__ || globalThis.testReady))) ? Object.freeze({
+    destroyDevice: () => {
+        try {
+            getDevice().destroy();
+        }
+        catch { }
+        try {
+            _resetDeviceForTesting();
+        }
+        catch { }
+    },
+    triggerValidationError: async () => {
+        const dev = getDevice();
+        dev.pushErrorScope('validation');
+        try {
+            dev.createBuffer({
+                size: 1024,
+                usage: 0, // Usage 0 is an unconditional WebGPU validation fault
+            });
+        }
+        finally {
+            const err = await dev.popErrorScope();
+            if (err) {
+                throw new AMEVAForgeValidationError(`GPU Validation Error: ${err.message}`);
+            }
+        }
+    },
+    setQuotaLimit: (maxBytes) => {
+        _globalQuotaManager.setLimits(maxBytes, maxBytes);
+    },
+    getDeviceInternal: getDevice,
+}) : undefined;
+
+export { AMEVAForgeDTypeError, AMEVAForgeDeviceError, AMEVAForgeDeviceLostError, AMEVAForgeDisposedError, AMEVAForgeError, AMEVAForgeInternalGPUError, AMEVAForgeOutOfMemoryError, AMEVAForgeQuotaExceededError, AMEVAForgeSecurityError, AMEVAForgeShapeError, AMEVAForgeStaleHandleError, AMEVAForgeUnsupportedOpError, AMEVAForgeValidationError, AMEVAForgeWebGPUUnavailableError, KERNEL_REGISTRY, QuotaManager, __testing, add, assertAllowedKernelName, assertAllowedShaderConstant, assertSafeShaderIdentifier, assertStaticShaderSourceOnly, assertWasmRange, clearStepLossHistory, cloneToFloat32Array, dispose, ensureFloat32Array, executeGraph, getAllowedKernelNames, getQuotaSnapshot, getTensorInfo, init, initWebGPU, isAvailable, mapBufferAsync, matmul, mountInspector, mul, random, read, readMappedInto, recordStepLoss, registerKernelNames, registerPyodideBridge, relu, relu_backward, resetRuntimeMemory, transpose, unmountInspector, uploadFloat32Array, validateDType, validateShape, warmupKernels };
 //# sourceMappingURL=index.esm.js.map

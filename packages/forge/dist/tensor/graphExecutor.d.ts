@@ -14,11 +14,23 @@
  * NH-07 Fix: shaderGuard.assertAllowedKernelName() 실제 호출
  * NM-05 Fix: device.pushErrorScope()로 op별 에러 감지
  */
-import { TensorHandle } from "../types";
-/**
- * executeGraph — Python 레이지 그래프를 단일 FFI 호출로 GPU에 실행한다.
- * WHAT: Python 등 외부 환경에서 직렬화된 연산 그래프(JSON)를 받아 일괄적으로 GPU에서 실행하는 함수입니다.
- * WHY: 매 연산마다 JS와 WebAssembly/GPU 사이를 왕복(context switch)하면 극심한 오버헤드가 발생하므로, 한 번의 호출로 많은 명령을 처리(Transaction)하기 위해 설계되었습니다.
- * HOW: JSON을 파싱하고, 명령을 검증하며, 적절한 청크로 분할하여 WebGPU 커맨드 버퍼에 기록하고 제출(submit)합니다. 실패 시 트랜잭션을 롤백합니다.
- */
-export declare function executeGraph(instructionsJson: string, jsInputs: unknown): Promise<Record<number, TensorHandle>>;
+import { TensorRegistry } from "./tensorRegistry";
+import { TensorHandle, DType } from "../types";
+import { AllocationToken } from "../webgpu/quota";
+export interface PendingTensorRecord {
+    handle: TensorHandle;
+    buffer: GPUBuffer;
+    token: AllocationToken;
+    shape: number[];
+    dtype: DType;
+    byteLength: number;
+}
+export declare class GraphTransaction {
+    private readonly pending;
+    add(record: PendingTensorRecord): void;
+    get(handle: TensorHandle): PendingTensorRecord | undefined;
+    get handles(): TensorHandle[];
+    commit(registry: TensorRegistry): void;
+    rollback(): void;
+}
+export declare function executeGraph(instructionsJson: string, inputs: (Float32Array | any)[], outputIds?: number[]): Promise<Record<string, TensorHandle>>;
