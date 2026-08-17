@@ -7,6 +7,7 @@ graph.py - WebGPU 연산 그래프 빌더
   - Wed Aug 12 12:14:52 2026 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
 """
 import json
+import numpy as np
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -53,9 +54,19 @@ class GraphBuilder:
         왜: CPU 데이터를 초기 텐서 노드로 변환하기 위함이다.
         어떻게: 새 ID를 받고, shape의 각 차원을 int로 변환해 JSON 직렬화 가능하게 만들며, 데이터가 있으면 inputs 리스트에 추가한다.
         """
+        if not isinstance(shape, (tuple, list)):
+            raise TypeError(f"Shape must be a tuple or list of ints, got {type(shape)}")
+        clean_shape = []
+        for d in shape:
+            if not isinstance(d, (int, np.integer)) or int(d) < 0:
+                raise ValueError(f"Shape dimensions must be non-negative integers, got {d}")
+            clean_shape.append(int(d))
+            
+        if len(clean_shape) > 8:
+            raise ValueError(f"Shape dimensions cannot exceed 8, got {len(clean_shape)}")
+
         node_id = self.alloc_id()
-        # NM-01 Fix: shape dim을 int()로 변환하여 numpy.intp → JSON-safe Python int
-        self.nodes.append({"op": "upload", "id": node_id, "shape": [int(d) for d in shape]})
+        self.nodes.append({"op": "upload", "id": node_id, "shape": clean_shape})
         if data is not None:
             self.inputs.append(data)
         return node_id
@@ -66,12 +77,17 @@ class GraphBuilder:
         왜: 기존 캐싱된 메모리나 다른 파이프라인에서 생성된 리소스를 그래프 안으로 끌어오기 위함이다.
         어떻게: 새 ID를 발급받고 노드 정보(핸들 포함)를 기록한 뒤 해당 ID를 리턴한다.
         """
+        if not isinstance(handle, str) or not handle.strip():
+            raise ValueError(f"Handle must be a non-empty string, got {handle}")
+        if not isinstance(shape, (tuple, list)):
+            raise TypeError(f"Shape must be a tuple or list of ints, got {type(shape)}")
+        clean_shape = [int(d) for d in shape]
+        
         node_id = self.alloc_id()
-        # NM-01 Fix: shape dim int() 변환
         self.nodes.append({
             "op": "load",
             "id": node_id,
-            "shape": [int(d) for d in shape],
+            "shape": clean_shape,
             "handle": handle
         })
         return node_id
@@ -88,17 +104,47 @@ class GraphBuilder:
         왜: 사용자가 호출한 수학적 연산(add, mul 등)을 그래프에 기록하여 연산 순서를 정하기 위함이다.
         어떻게: 입력 노드 ID 리스트(in_ids)를 의존성으로 기록하고, 추가 파라미터가 있다면 JSON 포맷에 맞게 형변환하여 딕셔너리에 추가한다.
         """
+        if not isinstance(op_name, str) or not op_name.strip():
+            raise ValueError(f"op_name must be a valid non-empty string, got {op_name}")
+        if op_name in ("__proto__", "constructor", "prototype"):
+            raise ValueError(f"Prohibited op_name: {op_name}")
+            
+        if not isinstance(shape, (tuple, list)):
+            raise TypeError(f"Shape must be a tuple or list of ints, got {type(shape)}")
+        clean_shape = []
+        for d in shape:
+            if not isinstance(d, (int, np.integer)) or int(d) < 0:
+                raise ValueError(f"Shape dimensions must be non-negative integers, got {d}")
+            clean_shape.append(int(d))
+            
+        if len(clean_shape) > 8:
+            raise ValueError(f"Shape dimensions cannot exceed 8, got {len(clean_shape)}")
+
+        clean_in_ids = []
+        for i_id in in_ids:
+            if not isinstance(i_id, (int, np.integer)) or int(i_id) <= 0:
+                raise ValueError(f"in_ids must contain positive integers, got {i_id}")
+            clean_in_ids.append(int(i_id))
+
         node_id = self.alloc_id()
         node: Dict[str, Any] = {
             "op": op_name,
             "id": node_id,
-            # NM-01 Fix: shape dim int() 변환
-            "shape": [int(d) for d in shape],
-            "in": in_ids
+            "shape": clean_shape,
+            "in": clean_in_ids
         }
         if params is not None:
-            # NM-01 Fix: params 내 numpy 타입 → Python int/float 변환
-            node["params"] = [int(p) if hasattr(p, '__int__') else p for p in params]
+            clean_params = []
+            for p in params:
+                if isinstance(p, bool):
+                    clean_params.append(p)
+                elif isinstance(p, (float, np.floating)):
+                    clean_params.append(float(p))
+                elif isinstance(p, (int, np.integer)):
+                    clean_params.append(int(p))
+                else:
+                    clean_params.append(p)
+            node["params"] = clean_params
         self.nodes.append(node)
         return node_id
 
