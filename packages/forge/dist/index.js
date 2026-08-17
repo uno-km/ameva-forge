@@ -360,19 +360,11 @@
      */
     function _safeLog$2(msg) {
         try {
-            // VUL-015 Fix: Only log in development or explicit debug modes
+            // VUL-015 & L-03 Fix: Only log in development or explicit debug modes without CSP violations
             const isDev = (typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production') ||
                 (typeof globalThis.AMEVA_DEBUG !== 'undefined' && globalThis.AMEVA_DEBUG) ||
                 (typeof globalThis.__DEV__ !== 'undefined' && globalThis.__DEV__);
-            // Vite/ESBuild injects import.meta.env, wrap in try-catch to avoid syntax errors in older environments
-            let isViteDev = false;
-            try {
-                const getImportMeta = new Function('return import.meta');
-                const meta = getImportMeta();
-                isViteDev = meta && meta.env && meta.env.MODE !== 'production';
-            }
-            catch (e) { }
-            if (!isDev && !isViteDev)
+            if (!isDev)
                 return;
             if (typeof globalThis.log === 'function') {
                 globalThis.log(msg, 'system');

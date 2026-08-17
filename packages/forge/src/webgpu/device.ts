@@ -10,6 +10,7 @@
  */
 
 import { AMEVAForgeWebGPUUnavailableError, AMEVAForgeDeviceError } from "../errors";
+import { _globalQuotaManager } from "./quota";
 
 declare var process: any;
 
@@ -20,21 +21,13 @@ declare var process: any;
  */
 function _safeLog(msg: string) {
   try {
-    // VUL-015 Fix: Only log in development or explicit debug modes
+    // VUL-015 & L-03 Fix: Only log in development or explicit debug modes without CSP violations
     const isDev = 
       (typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production') ||
       (typeof (globalThis as any).AMEVA_DEBUG !== 'undefined' && (globalThis as any).AMEVA_DEBUG) ||
       (typeof (globalThis as any).__DEV__ !== 'undefined' && (globalThis as any).__DEV__);
-      
-    // Vite/ESBuild injects import.meta.env, wrap in try-catch to avoid syntax errors in older environments
-    let isViteDev = false;
-    try {
-      const getImportMeta = new Function('return import.meta');
-      const meta = getImportMeta();
-      isViteDev = meta && meta.env && meta.env.MODE !== 'production';
-    } catch (e) {}
 
-    if (!isDev && !isViteDev) return;
+    if (!isDev) return;
 
     if (typeof (globalThis as any).log === 'function') {
       (globalThis as any).log(msg, 'system');
@@ -95,8 +88,15 @@ export async function initWebGPU(options?: GPURequestAdapterOptions): Promise<vo
   }
   
   device = await adapter.requestDevice({ requiredLimits });
-  // F-013 Fix: Remove globalThis.__AMEVA_DEVICE__ to encapsulate GPUDevice
-  // (globalThis as any).__AMEVA_DEVICE__ = device;
+
+  if (device.limits && device.limits.maxStorageBufferBindingSize) {
+    const maxBinding = device.limits.maxStorageBufferBindingSize;
+    const adaptedHard = Math.max(1024 * 1024 * 1024, maxBinding * 2);
+    const adaptedSoft = Math.max(768 * 1024 * 1024, maxBinding);
+    try {
+      _globalQuotaManager.setLimits(adaptedHard, adaptedSoft);
+    } catch {}
+  }
 
   _safeLog(`[device.ts] initWebGPU finished. device successfully created.`);
 
@@ -153,6 +153,14 @@ export function getQueue(): GPUQueue {
  */
 export function isAvailable(): boolean {
   return device !== null;
+}
+
+export function _resetDeviceForTesting(): void {
+  device = null;
+  adapter = null;
+  if (onDeviceLostCallback) {
+    onDeviceLostCallback();
+  }
 }
 
 /**
