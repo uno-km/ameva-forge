@@ -327,6 +327,28 @@
             this.pendingReleaseBytes = 0;
             this.tokens.clear();
         }
+        /**
+         * WHAT: 자가 치유(Self-Healing) 함수: 실제 살아있는 토큰들의 상태를 스캔하여 쿼터 통계를 완벽히 정합시킵니다.
+         * WHY: 비동기 작업 예외나 누수로 인해 쿼터 카운터가 어긋났을 때 자동으로 카운터를 보정하기 위함입니다.
+         */
+        sanitizePendingBytes() {
+            let actualAllocated = 0;
+            let actualPending = 0;
+            for (const [id, token] of this.tokens.entries()) {
+                if (token.state === 'released') {
+                    this.tokens.delete(id);
+                }
+                else {
+                    actualAllocated += token.size;
+                    if (token.state === 'pending_release') {
+                        actualPending += token.size;
+                    }
+                }
+            }
+            this.allocatedBytes = actualAllocated;
+            this.pendingReleaseBytes = actualPending;
+            return { repairedAllocated: actualAllocated, repairedPending: actualPending };
+        }
     }
     /**
      * WHAT: 전역에서 사용할 수 있는 QuotaManager의 싱글톤 인스턴스입니다.
@@ -358,9 +380,14 @@
      * WHY: 불필요한 콘솔 출력을 프로덕션 환경에서 방지하고, 에러 없이 안전하게 로그를 남기기 위해 사용됩니다.
      * HOW: 현재 실행 환경이 개발 모드(NODE_ENV, AMEVA_DEBUG, __DEV__, Vite env 등)인지 확인하고 조건을 만족할 때만 `globalThis.log`를 통해 메시지를 출력합니다. 예외가 발생해도 시스템이 멈추지 않도록 try-catch로 감쌉니다.
      */
+    let _isLogging = false;
+    let _consecutiveLoggingErrors = 0;
+    let _lastSelfHealTimestamp = 0;
     function _safeLog$2(msg) {
+        if (_isLogging)
+            return;
+        _isLogging = true;
         try {
-            // VUL-015 & L-03 Fix: Only log in development or explicit debug modes without CSP violations
             const isDev = (typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production') ||
                 (typeof globalThis.AMEVA_DEBUG !== 'undefined' && globalThis.AMEVA_DEBUG) ||
                 (typeof globalThis.__DEV__ !== 'undefined' && globalThis.__DEV__);
@@ -370,7 +397,27 @@
                 globalThis.log(msg, 'system');
             }
         }
-        catch (e) { }
+        catch (err) {
+            _consecutiveLoggingErrors++;
+            const now = Date.now();
+            // 자가 치유(Self-Healing): 3회 연속 에러 시 쿼터 상태 자동 정합 및 치료
+            if (_consecutiveLoggingErrors >= 3 && now - _lastSelfHealTimestamp > 5000) {
+                _lastSelfHealTimestamp = now;
+                _consecutiveLoggingErrors = 0;
+                try {
+                    _globalQuotaManager.sanitizePendingBytes();
+                }
+                catch (sanitizeErr) {
+                    // Safe fallback
+                }
+            }
+            if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+                console.debug('[AMEVA-SafeLog-Fallback]', msg, err);
+            }
+        }
+        finally {
+            _isLogging = false;
+        }
     }
     /**
      * WHAT: 초기화된 논리적 WebGPU 디바이스(GPUDevice) 인스턴스를 저장하는 내부 변수입니다.
@@ -408,6 +455,13 @@
         }
         adapter = await navigator.gpu.requestAdapter(options);
         if (!adapter) {
+            // Try software fallback
+            adapter = await navigator.gpu.requestAdapter({ forceFallbackAdapter: true });
+            if (adapter) {
+                _safeLog$2('[AMEVA] WARNING: Using software fallback adapter. Performance will be severely degraded.');
+            }
+        }
+        if (!adapter) {
             throw new AMEVAForgeWebGPUUnavailableError("Failed to request a WebGPU adapter. " +
                 "Your GPU may not support WebGPU, or the browser has disabled it.");
         }
@@ -424,7 +478,7 @@
             try {
                 _globalQuotaManager.setLimits(adaptedHard, adaptedSoft);
             }
-            catch { }
+            catch (e) { /* intentionally empty: if quota limit set fails, rely on default limits rather than crashing initialization */ }
         }
         _safeLog$2(`[device.ts] initWebGPU finished. device successfully created.`);
         device.lost.then((info) => {
@@ -786,6 +840,31 @@
         }
         getQueue().writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength);
     }
+    // ── Staging Buffer Pool ──
+    const _stagingPool = new Map();
+    const STAGING_POOL_MAX_PER_SIZE = 4;
+    function acquireStagingBuffer(byteLength) {
+        const pool = _stagingPool.get(byteLength);
+        if (pool && pool.length > 0) {
+            const buffer = pool.pop();
+            // Pool buffers already have tokens tracked
+            return { buffer, token: null, fromPool: true };
+        }
+        const { buffer, token } = allocateBuffer(byteLength, GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST, 'staging', 'StagingPool');
+        return { buffer, token, fromPool: false };
+    }
+    function releaseStagingBuffer(buffer, token, byteLength, fromPool) {
+        const pool = _stagingPool.get(byteLength) ?? [];
+        if (pool.length < STAGING_POOL_MAX_PER_SIZE) {
+            pool.push(buffer);
+            _stagingPool.set(byteLength, pool);
+        }
+        else {
+            buffer.destroy();
+            if (!fromPool && token)
+                freeBuffer(buffer, token);
+        }
+    }
     /**
      * WHAT: GPU 버퍼의 데이터를 읽어서 CPU 메모리 상의 Float32Array로 반환합니다.
      * WHY: GPU에서 처리된 결과 데이터를 CPU로 가져와서 애플리케이션 수준에서 활용(예: 출력, 저장)하기 위해 존재합니다.
@@ -797,7 +876,7 @@
      */
     async function readBufferToFloat32Array(buffer, byteLength) {
         const device = getDevice();
-        const { buffer: stagingBuffer, token } = allocateBuffer(byteLength, GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST, 'staging');
+        const { buffer: stagingBuffer, token, fromPool } = acquireStagingBuffer(byteLength);
         try {
             const commandEncoder = device.createCommandEncoder();
             commandEncoder.copyBufferToBuffer(buffer, 0, stagingBuffer, 0, byteLength);
@@ -812,8 +891,7 @@
             }
         }
         finally {
-            stagingBuffer.destroy();
-            _globalQuotaManager.releaseToken(token);
+            releaseStagingBuffer(stagingBuffer, token, byteLength, fromPool);
         }
     }
     /**
@@ -4008,7 +4086,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             try {
                 freeBuffer(paramsBuffer, paramsToken);
             }
-            catch { }
+            catch (e) {
+                _safeLog$1(`[gpuCore] Failed to free params buffer: ${e}`);
+            }
         });
     }
     // ─────────────────────────────────────────────────────────────────────────────
@@ -4450,7 +4530,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 console.warn(msg);
             }
         }
-        catch { }
+        catch { /* intentionally empty: _safeLog is the outermost logging fallback, catching here prevents infinite recursion */ }
     }
     const _deferredGCQueue = [];
     /**
@@ -4471,11 +4551,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     try {
                         _globalQuotaManager.releaseToken(item.token);
                     }
-                    catch { }
+                    catch (e) {
+                        _safeLog(`[DeferredGC] releaseToken failed: ${e}`);
+                    }
                     _deferredGCQueue.splice(i, 1);
                     _safeLog(`[DeferredGC] Failed to destroy buffer after 3 attempts, token released: ${e}`);
                 }
             }
+        }
+        if (_deferredGCQueue.length > 100) {
+            _safeLog(`[DeferredGC] WARNING: ${_deferredGCQueue.length} items still pending after flush`);
         }
     }
     class GraphTransaction {
@@ -4669,6 +4754,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
     async function _executeGraphCore(instructionsJson, jsInputs) {
+        // Flush any pending deferred GC items before new execution
+        processDeferredGC();
         // ── 1. Parse ──
         /**
          * WHAT: JSON 문자열에서 파싱된 원시(unvalidated) 자바스크립트 객체 배열입니다.
@@ -5462,9 +5549,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             encoderHasCommands = false;
         }
         // ── 5. Commit / Rollback (Async) — await error scopes before returning ──
-        const internalError = await device.popErrorScope();
-        const oomError = await device.popErrorScope();
-        const validationError = await device.popErrorScope();
+        const [internalError, oomError, validationError] = await Promise.all([
+            device.popErrorScope(),
+            device.popErrorScope(),
+            device.popErrorScope(),
+        ]);
         // Check for GPU errors BEFORE returning handles
         const gpuError = internalError || oomError || validationError;
         if (gpuError) {
@@ -5644,7 +5733,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     dispose(handle);
                 }
                 catch (e) {
-                    /* Already disposed or invalid handle: safely ignore to not abort batch disposal */
+                    _safeLog$2(`[pyodideBridge] disposeBatch handle "${handle}" failed: ${e}`);
                 }
             }
         }
@@ -5680,7 +5769,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     await dev.queue.onSubmittedWorkDone();
                 }
                 catch (e) {
-                    // Device unavailable or queue error
+                    _safeLog$2(`[pyodideBridge] flushGC work done error: ${e}`);
                 }
             },
         };
@@ -5852,11 +5941,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             try {
                 getDevice().destroy();
             }
-            catch { }
+            catch (e) {
+                console.warn(`[__testing] destroyDevice failed: ${e}`);
+            }
             try {
                 _resetDeviceForTesting();
             }
-            catch { }
+            catch (e) {
+                console.warn(`[__testing] _resetDeviceForTesting failed: ${e}`);
+            }
         },
         triggerValidationError: async () => {
             const dev = getDevice();

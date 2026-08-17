@@ -151,6 +151,14 @@ export declare class QuotaManager {
      * HOW: 바이트 카운터들을 0으로 설정하고, 토큰 맵을 비웁니다(clear).
      */
     reset(): void;
+    /**
+     * WHAT: 자가 치유(Self-Healing) 함수: 실제 살아있는 토큰들의 상태를 스캔하여 쿼터 통계를 완벽히 정합시킵니다.
+     * WHY: 비동기 작업 예외나 누수로 인해 쿼터 카운터가 어긋났을 때 자동으로 카운터를 보정하기 위함입니다.
+     */
+    sanitizePendingBytes(): {
+        repairedAllocated: number;
+        repairedPending: number;
+    };
 }
 /**
  * WHAT: 전역에서 사용할 수 있는 QuotaManager의 싱글톤 인스턴스입니다.

@@ -255,6 +255,28 @@ export class QuotaManager {
     this.pendingReleaseBytes = 0;
     this.tokens.clear();
   }
+
+  /**
+   * WHAT: 자가 치유(Self-Healing) 함수: 실제 살아있는 토큰들의 상태를 스캔하여 쿼터 통계를 완벽히 정합시킵니다.
+   * WHY: 비동기 작업 예외나 누수로 인해 쿼터 카운터가 어긋났을 때 자동으로 카운터를 보정하기 위함입니다.
+   */
+  sanitizePendingBytes(): { repairedAllocated: number; repairedPending: number } {
+    let actualAllocated = 0;
+    let actualPending = 0;
+    for (const [id, token] of this.tokens.entries()) {
+      if (token.state === 'released') {
+        this.tokens.delete(id);
+      } else {
+        actualAllocated += token.size;
+        if (token.state === 'pending_release') {
+          actualPending += token.size;
+        }
+      }
+    }
+    this.allocatedBytes = actualAllocated;
+    this.pendingReleaseBytes = actualPending;
+    return { repairedAllocated: actualAllocated, repairedPending: actualPending };
+  }
 }
 
 /**
@@ -263,4 +285,19 @@ export class QuotaManager {
  * HOW: QuotaManager를 기본값(1GB/768MB)으로 인스턴스화하여 내보냅니다(export).
  */
 export const _globalQuotaManager = new QuotaManager();
+
+export interface QuotaSnapshot {
+  usedBytes: number;
+  maxBytes: number;
+  activeTokens: number;
+}
+
+export function getQuotaSnapshot(): QuotaSnapshot {
+  const usage = _globalQuotaManager.getUsage();
+  return Object.freeze({
+    usedBytes: usage.allocatedBytes,
+    maxBytes: usage.hardLimitBytes,
+    activeTokens: usage.activeTokens,
+  });
+}
 

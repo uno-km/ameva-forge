@@ -19,9 +19,15 @@ declare var process: any;
  * WHY: 불필요한 콘솔 출력을 프로덕션 환경에서 방지하고, 에러 없이 안전하게 로그를 남기기 위해 사용됩니다.
  * HOW: 현재 실행 환경이 개발 모드(NODE_ENV, AMEVA_DEBUG, __DEV__, Vite env 등)인지 확인하고 조건을 만족할 때만 `globalThis.log`를 통해 메시지를 출력합니다. 예외가 발생해도 시스템이 멈추지 않도록 try-catch로 감쌉니다.
  */
-function _safeLog(msg: string) {
+let _isLogging = false;
+let _consecutiveLoggingErrors = 0;
+let _lastSelfHealTimestamp = 0;
+
+export function _safeLog(msg: string) {
+  if (_isLogging) return;
+  _isLogging = true;
+
   try {
-    // VUL-015 & L-03 Fix: Only log in development or explicit debug modes without CSP violations
     const isDev = 
       (typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production') ||
       (typeof (globalThis as any).AMEVA_DEBUG !== 'undefined' && (globalThis as any).AMEVA_DEBUG) ||
@@ -32,7 +38,27 @@ function _safeLog(msg: string) {
     if (typeof (globalThis as any).log === 'function') {
       (globalThis as any).log(msg, 'system');
     }
-  } catch (e) {}
+  } catch (err) {
+    _consecutiveLoggingErrors++;
+    const now = Date.now();
+    
+    // 자가 치유(Self-Healing): 3회 연속 에러 시 쿼터 상태 자동 정합 및 치료
+    if (_consecutiveLoggingErrors >= 3 && now - _lastSelfHealTimestamp > 5000) {
+      _lastSelfHealTimestamp = now;
+      _consecutiveLoggingErrors = 0;
+      try {
+        _globalQuotaManager.sanitizePendingBytes();
+      } catch (sanitizeErr) {
+        // Safe fallback
+      }
+    }
+
+    if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+      console.debug('[AMEVA-SafeLog-Fallback]', msg, err);
+    }
+  } finally {
+    _isLogging = false;
+  }
 }
 
 /**
@@ -75,6 +101,14 @@ export async function initWebGPU(options?: GPURequestAdapterOptions): Promise<vo
 
   adapter = await navigator.gpu.requestAdapter(options);
   if (!adapter) {
+    // Try software fallback
+    adapter = await navigator.gpu.requestAdapter({ forceFallbackAdapter: true });
+    if (adapter) {
+      _safeLog('[AMEVA] WARNING: Using software fallback adapter. Performance will be severely degraded.');
+    }
+  }
+  
+  if (!adapter) {
     throw new AMEVAForgeWebGPUUnavailableError(
       "Failed to request a WebGPU adapter. " +
       "Your GPU may not support WebGPU, or the browser has disabled it."
@@ -95,7 +129,7 @@ export async function initWebGPU(options?: GPURequestAdapterOptions): Promise<vo
     const adaptedSoft = Math.max(768 * 1024 * 1024, maxBinding);
     try {
       _globalQuotaManager.setLimits(adaptedHard, adaptedSoft);
-    } catch {}
+    } catch (e) { /* intentionally empty: if quota limit set fails, rely on default limits rather than crashing initialization */ }
   }
 
   _safeLog(`[device.ts] initWebGPU finished. device successfully created.`);

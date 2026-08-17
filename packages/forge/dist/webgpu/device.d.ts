@@ -8,6 +8,7 @@
  * H-04 Fix: getAdapter() export 추가 → gpuCore.ts에서 adapter.limits 조회 가능
  * L-03 Fix: device lost 시 onDeviceLostCallback을 통해 pipelineCache도 무효화
  */
+export declare function _safeLog(msg: string): void;
 /**
  * WHAT: 시스템 환경에서 WebGPU 디바이스 및 어댑터를 비동기적으로 초기화합니다.
  * WHY: WebGPU API를 사용하기 위해 필수적인 하드웨어 어댑터(adapter)와 논리적 디바이스(device) 인스턴스를 확보하고 전역에서 접근할 수 있도록 캐싱하기 위해 존재합니다.
