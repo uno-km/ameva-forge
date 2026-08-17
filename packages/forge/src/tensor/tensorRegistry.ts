@@ -21,20 +21,28 @@ import { getDevice } from "../webgpu/device";
  * WHY: 생성된 텐서의 메타데이터와 WebGPU 버퍼를 중앙에서 추적하고 메모리 누수를 방지하기 위해 존재합니다.
  * HOW: Map 객체를 사용하여 고유한 핸들(TensorHandle)을 키로, 텐서 레코드(TensorRecord)를 값으로 저장 및 관리합니다.
  */
-class TensorRegistry {
-  /**
-   * WHAT: 텐서 핸들과 텐서 레코드를 매핑하여 저장하는 내부 상태 변수입니다.
-   * WHY: 생성된 모든 텐서에 빠르게 접근하고 상태를 업데이트하기 위해 해시맵(Map)을 사용합니다.
-   * HOW: TensorHandle(문자열)을 키로, TensorRecord 객체를 값으로 유지합니다.
-   */
+export class TensorRegistry {
   private records: Map<TensorHandle, TensorRecord> = new Map();
-
-  /**
-   * WHAT: 다음에 생성될 텐서에 부여될 단조 증가 식별자입니다.
-   * WHY: 타이밍 정보 노출(부채널 공격)을 방지하기 위해 Date.now() 대신 단순 증가 ID를 사용합니다.
-   * HOW: 텐서가 새로 등록될 때마다 1씩 증가하여 각 텐서 레코드의 createdAt 필드에 할당됩니다.
-   */
   private nextId: number = 1;
+
+  snapshotHandles(): string[] {
+    const list: string[] = [];
+    for (const [handle, record] of this.records.entries()) {
+      if (!record.disposed) list.push(handle);
+    }
+    return list;
+  }
+
+  registerRecord(record: Omit<TensorRecord, 'createdAt' | 'disposed'>): TensorHandle {
+    const fullRecord: TensorRecord = {
+      ...record,
+      disposed: false,
+      createdAt: this.nextId - 1,
+    };
+    this.records.set(record.handle, fullRecord);
+    this.nextId++;
+    return record.handle;
+  }
 
   /**
    * WHAT: 새로운 텐서를 레지스트리에 등록하고 고유 핸들을 반환하는 함수입니다.
@@ -125,11 +133,6 @@ class TensorRegistry {
         return; // TS-H04: 이중 dispose 방어 — 이미 해제된 핸들 무시
     }
     
-    /**
-     * WHAT: 폐기할 텐서의 레코드 객체입니다.
-     * WHY: 텐서의 WebGPU 버퍼와 할당 토큰(token)에 접근하여 실제 메모리를 해제하기 위해 필요합니다.
-     * HOW: this.records.get()으로 가져오며, 유효하지 않으면 조기 반환(return)합니다.
-     */
     const record = this.records.get(handle);
     if (!record || record.disposed) return;
 

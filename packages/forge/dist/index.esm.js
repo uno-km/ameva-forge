@@ -894,7 +894,6 @@ class TensorRegistry {
         return list;
     }
     registerRecord(record) {
-        console.warn(`[REGISTRY REGISTER_RECORD] handle=${record.handle}`);
         const fullRecord = {
             ...record,
             disposed: false,
@@ -980,7 +979,6 @@ class TensorRegistry {
      * HOW: 레코드를 disposed로 표시하고 맵에서 제거한 뒤, QuotaManager와 WebGPU 큐를 통해 버퍼를 해제합니다.
      */
     dispose(handle) {
-        console.warn(`[REGISTRY DISPOSE CALLED] handle=${handle}`);
         if (!this.records.has(handle)) {
             return; // TS-H04: 이중 dispose 방어 — 이미 해제된 핸들 무시
         }
@@ -4780,7 +4778,7 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 for (let i = 0; i < actualData.length; i++) {
                     if (!Number.isFinite(actualData[i])) {
                         actualData[i] = 0; // TDR 방지를 위해 0으로 클램프하거나, 경고 로깅 가능 (여기서는 0으로 마스킹)
-                        console.warn(`[GraphExecutor] NaN or Inf detected in upload input[${inputIdx - 1}], masked to 0`);
+                        _safeLog(`[GraphExecutor] NaN or Inf detected in upload input[${inputIdx - 1}], masked to 0`);
                     }
                 }
                 /**

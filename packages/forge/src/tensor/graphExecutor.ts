@@ -575,7 +575,7 @@ async function _executeGraphCore(
         for (let i = 0; i < actualData.length; i++) {
           if (!Number.isFinite(actualData[i])) {
             actualData[i] = 0; // TDR 방지를 위해 0으로 클램프하거나, 경고 로깅 가능 (여기서는 0으로 마스킹)
-            console.warn(`[GraphExecutor] NaN or Inf detected in upload input[${inputIdx - 1}], masked to 0`);
+            _safeLog(`[GraphExecutor] NaN or Inf detected in upload input[${inputIdx - 1}], masked to 0`);
           }
         }
 
