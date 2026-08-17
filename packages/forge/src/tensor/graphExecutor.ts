@@ -28,6 +28,7 @@ import { _globalPipelineCache } from "../webgpu/pipelineCache";
 
 // kernels
 import { MATMUL_WGSL } from "./kernels/matmul.wgsl";
+import { MATMUL_BIAS_RELU_WGSL } from "./kernels/matmul_bias_relu.wgsl";
 import { BATCHED_MATMUL_WGSL } from "./kernels/batched_matmul.wgsl";
 import { RELU_WGSL } from "./kernels/relu.wgsl";
 import { ADD_WGSL } from "./kernels/add.wgsl";
@@ -710,12 +711,12 @@ async function _executeGraphCore(
       let isMatmul = false;
       let B = 1, M = 1, N = 1, K = 1;
 
-      if (inst.op === 'matmul') {
+      if (inst.op === 'matmul' || inst.op === 'matmul_bias_relu') {
         if (!inst.params || inst.params.length < 3) {
-          throw new AMEVAForgeSecurityError(`matmul instruction missing params`);
+          throw new AMEVAForgeSecurityError(`${inst.op} instruction missing params`);
         }
         [M, N, K] = inst.params;
-        wgslCode = MATMUL_WGSL;
+        wgslCode = inst.op === 'matmul_bias_relu' ? MATMUL_BIAS_RELU_WGSL : MATMUL_WGSL;
         isMatmul = true;
         // TS-H01 Fix: matmul X축도 65535 클램핑 — 초과분은 Z 차원으로 분산
         const rawDispatchX = Math.ceil(N / 8);
@@ -1107,6 +1108,14 @@ async function _executeGraphCore(
           { binding: 2, resource: { buffer: idToBuffer[inst.in![1]] } },
           { binding: 3, resource: { buffer: outBuffer } },
         ];
+      } else if (inst.op === 'matmul_bias_relu') {
+        bindGroupEntries = [
+          { binding: 0, resource: { buffer: paramsBuffer } },
+          { binding: 1, resource: { buffer: idToBuffer[inst.in![0]] } },
+          { binding: 2, resource: { buffer: idToBuffer[inst.in![1]] } },
+          { binding: 3, resource: { buffer: idToBuffer[inst.in![2]] } },
+          { binding: 4, resource: { buffer: outBuffer } },
+        ];
       } else if (inst.op === 'where') {
         bindGroupEntries = [
           { binding: 0, resource: { buffer: paramsBuffer } },
@@ -1153,6 +1162,9 @@ async function _executeGraphCore(
         chunkY = Math.min(chunkY, 65535 * 8);
         chunkY = Math.min(M, chunkY);
 
+        const has_bias = inst.op === 'matmul_bias_relu' ? (inst.params?.[3] ?? 1) : 0;
+        const has_relu = inst.op === 'matmul_bias_relu' ? (inst.params?.[4] ?? 1) : 0;
+
         /**
          * WHAT: 행렬 곱셈 연산을 Y축(행) 기준으로 여러 청크(Chunk)로 분할 처리하는 루프입니다.
          * WHY: 단일 행렬 곱 연산이 너무 거대하여 GPU 실행 한계 시간(Timeout)을 초과하는 TDR 현상을 피하기 위해 작업을 작게 나눕니다.
@@ -1161,7 +1173,7 @@ async function _executeGraphCore(
         for (let offsetY = 0; offsetY < M; offsetY += chunkY) {
           const currentChunkY = Math.min(chunkY, M - offsetY);
           
-          device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([M, N, K, offsetY]));
+          device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([M, N, K, offsetY, has_bias, has_relu, 0, 0]));
           
           const passEncoder = commandEncoder.beginComputePass();
           passEncoder.setPipeline(pipeline);

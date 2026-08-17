@@ -13,16 +13,10 @@
 # WHY: 파라미터 리스트의 타입을 명시하여 정적 분석과 코드 가독성을 높이기 위함입니다.
 # HOW: 타입 힌트 어노테이션에 List를 사용합니다.
 from typing import List
-
-# WHAT: 내부 모듈에서 Tensor 클래스를 임포트합니다.
-# WHY: 옵티마이저가 최적화할 대상인 텐서(가중치 등)를 다루기 위해 필요합니다.
-# HOW: 파라미터 타입 명시 등에 사용됩니다.
-from .tensor import Tensor
-
-# WHAT: 수치 연산 라이브러리인 numpy를 임포트합니다.
-# WHY: 가중치 업데이트 시 행렬 및 벡터 단위의 빠른 수학적 연산을 수행하기 위함입니다.
-# HOW: np 접두사로 배열 생성, 사칙연산, 클리핑 등에 사용됩니다.
+import math
 import numpy as np
+from .tensor import Tensor
+from .errors import AMEVAForgeDeviceError, AMEVAForgeShapeError
 
 # WHAT: 모든 최적화 알고리즘의 베이스 클래스인 Optimizer입니다.
 # WHY: 다양한 옵티마이저(SGD, Adam 등)가 공통으로 가질 속성과 메서드 인터페이스를 정의하기 위함입니다.
@@ -48,17 +42,35 @@ class Optimizer:
     def step(self):
         raise NotImplementedError
     
+    def _active_devices(self):
+        return {
+            p.device
+            for p in self.params
+            if p.grad is not None
+        }
+
+    def _validate_param_grad_pair(self, p: Tensor) -> None:
+        """파라미터와 gradient의 장치, shape, dtype 계약을 검증한다."""
+        if p.grad is None:
+            return
+        if p.device != p.grad.device:
+            raise AMEVAForgeDeviceError(
+                f"Parameter/gradient device mismatch: {p.device} != {p.grad.device}"
+            )
+        if tuple(p.shape) != tuple(p.grad.shape):
+            raise AMEVAForgeShapeError(
+                f"Parameter/gradient shape mismatch: {p.shape} != {p.grad.shape}"
+            )
+        if p.dtype != p.grad.dtype:
+            raise AMEVAForgeDeviceError(
+                f"Parameter/gradient dtype mismatch: {p.dtype} != {p.grad.dtype}"
+            )
+
     # WHAT: 등록된 모든 파라미터의 그래디언트를 초기화(None)하는 메서드입니다.
     # WHY: 새로운 미니배치의 학습을 시작할 때 이전 배치의 누적된 그래디언트를 지우기 위함입니다.
     # HOW: 파라미터 리스트를 순회하며 grad 속성을 None으로 설정합니다.
     def zero_grad(self):
-        # WHAT: 옵티마이저에 등록된 모든 파라미터를 순회하는 루프입니다.
-        # WHY: 개별 파라미터의 그래디언트를 하나씩 접근하여 리셋하기 위함입니다.
-        # HOW: self.params 리스트를 순차적으로 방문합니다.
         for p in self.params:
-            # WHAT: 파라미터의 그래디언트를 None으로 설정합니다.
-            # WHY: 기존의 기울기 정보를 초기화하여 다음 역전파 시 새롭게 계산되도록 하기 위함입니다.
-            # HOW: p.grad 변수에 직접 None을 할당합니다.
             p.grad = None
 
 
@@ -66,68 +78,147 @@ class Optimizer:
 # WHY: 모멘텀(Momentum)이 적용될 수 있는 기본적인 기울기 하강 업데이트를 수행하기 위함입니다.
 # HOW: Optimizer를 상속받아 step 메서드를 구현하고, 속도를 추적하는 velocity 배열을 관리합니다.
 class SGD(Optimizer):
-    # WHAT: SGD 인스턴스를 초기화하는 메서드입니다.
-    # WHY: SGD의 학습률과 모멘텀 계수를 설정하고, 속도(velocity) 상태를 준비하기 위함입니다.
-    # HOW: 상위 클래스 초기화 후 속도 리스트를 파라미터 개수만큼 None으로 만듭니다.
     def __init__(self, params, lr=0.01, momentum=0.0):
         super().__init__(params, lr)
-        # WHAT: 모멘텀 계수입니다.
-        # WHY: 이전 스텝의 업데이트 방향을 유지하여 진동을 줄이고 수렴 속도를 높이기 위함입니다.
-        # HOW: 0.0 이상 1.0 미만의 실수값으로 저장되어 업데이트 식에 곱해집니다.
         self.momentum = momentum
-        
-        # WHAT: 각 파라미터별로 과거의 그래디언트 누적합(속도)을 저장하는 리스트입니다.
-        # WHY: 모멘텀 연산 시 이전 상태를 참조하여 현재 방향을 보정하기 위함입니다.
-        # HOW: 초기에는 None으로 채워두고, 파라미터 개수만큼 공간을 확보합니다.
         self.velocity = [None] * len(self.params)
     
-    # WHAT: SGD 파라미터 업데이트를 1스텝 진행하는 메서드입니다.
-    # WHY: 현재 계산된 그래디언트(와 모멘텀)를 바탕으로 실질적인 가중치 갱신을 수행하기 위함입니다.
-    # HOW: 그래디언트를 추출하여 모멘텀이 있다면 누적하고, 파라미터 데이터를 차감합니다.
     def step(self):
-        # WHAT: 파라미터 인덱스와 파라미터 객체를 순회하는 루프입니다.
-        # WHY: 등록된 각 가중치 텐서에 대해 순차적으로 업데이트 수식을 적용하기 위함입니다.
-        # HOW: enumerate를 통해 인덱스 i와 텐서 p를 가져옵니다.
+        """
+        CPU parameter 전용 동기 SGD step.
+
+        GPU parameter는 readback이 비동기이므로 이 메서드에서 처리하지 않는다.
+        GPU 학습에서는 반드시 `await optimizer.step_async()`를 사용한다.
+        """
         for i, p in enumerate(self.params):
             if p.grad is None:
                 continue
-                
-            # WHAT: 현재 파라미터의 그래디언트 데이터를 추출하는 변수입니다.
-            # WHY: Tensor 객체 내부에 숨겨진 실제 수치 데이터(NumPy 배열 등)를 계산에 사용하기 위함입니다.
-            # HOW: _data 속성이 있으면 이를 가져오고, 없으면 numpy()를 호출합니다.
-            grad_data = p.grad._data if hasattr(p.grad, '_data') and p.grad._data is not None else p.grad.numpy()
-            
-            # WHAT: 현재 파라미터의 실제 값(가중치 데이터)을 추출하는 변수입니다.
-            # WHY: 업데이트된 값을 새로 계산하기 위한 기준점으로 쓰기 위함입니다.
-            # HOW: _data가 존재하면 이를, 없으면 numpy() 배열을 가져옵니다.
-            param_data = p._data if hasattr(p, '_data') and p._data is not None else p.numpy()
-            
-            if self.momentum > 0:
+
+            self._validate_param_grad_pair(p)
+
+            if p.device == "gpu":
+                raise AMEVAForgeDeviceError(
+                    "SGD.step() is CPU-only for GPU-backed parameters. "
+                    "Use: await optimizer.step_async()"
+                )
+
+            grad_data = p.grad.numpy()
+            param_data = p.numpy()
+
+            if self.momentum > 0.0:
                 if self.velocity[i] is None:
-                    # WHAT: 초기 속도를 현재 그래디언트의 복사본으로 설정합니다.
-                    # WHY: 첫 업데이트 시에는 이전 속도가 없으므로 현재 그래디언트만 사용하기 위함입니다.
-                    # HOW: numpy 배열의 copy()를 통해 참조가 아닌 독립된 값으로 저장합니다.
                     self.velocity[i] = grad_data.copy()
                 else:
-                    # WHAT: 이전 속도에 모멘텀을 곱하고 현재 그래디언트를 더하여 속도를 갱신합니다.
-                    # WHY: 관성을 적용하여 학습의 방향성을 안정적으로 유지하기 위함입니다.
-                    # HOW: 수식 `v = m * v + g`를 적용합니다.
-                    self.velocity[i] = self.momentum * self.velocity[i] + grad_data
-                    
-                # WHAT: 모멘텀이 적용된 속도에 학습률을 곱해 파라미터를 업데이트합니다.
-                # WHY: 관성이 더해진 방향으로 가중치를 이동시키기 위함입니다.
-                # HOW: `p = p - lr * v` 식을 수행합니다.
-                param_data = param_data - self.lr * self.velocity[i]
+                    self.velocity[i] = (
+                        self.momentum * self.velocity[i] + grad_data
+                    )
+                update = self.velocity[i]
             else:
-                # WHAT: 모멘텀 없이 순수하게 현재 그래디언트로 파라미터를 업데이트합니다.
-                # WHY: 표준 SGD 방식을 사용하여 직관적인 하강을 수행하기 위함입니다.
-                # HOW: `p = p - lr * g` 식을 계산합니다.
-                param_data = param_data - self.lr * grad_data
-            
-            # WHAT: 갱신된 데이터를 다시 파라미터 텐서에 저장하고 기울기를 비웁니다.
-            # WHY: 업데이트 결과를 반영하고 다음 스텝을 위해 상태를 정리하기 위함입니다.
-            # HOW: _data에 값을 덮어씌우고 grad를 None으로 리셋합니다.
-            p._data = param_data.astype(np.float32)
+                update = grad_data
+
+            p._data = (param_data - self.lr * update).astype(np.float32)
+            p._version += 1
+            p.grad = None
+
+    async def step_async(self):
+        """
+        CPU와 GPU parameter를 모두 처리하는 공식 비동기 SGD step.
+
+        GPU parameter는 기존 AXPY WGSL을 통해 readback 없이 in-place 갱신한다.
+        Release 1에서는 GPU momentum을 지원하지 않으며, 단일 스텝 내 혼합 장치를 허용하지 않는다.
+        """
+        if not math.isfinite(self.lr) or self.lr <= 0.0:
+            raise ValueError(f"lr must be finite and > 0, got {self.lr}")
+
+        active_devices = self._active_devices()
+        if len(active_devices) > 1:
+            raise AMEVAForgeDeviceError(
+                "Mixed CPU/GPU parameters in one SGD step are not supported in Release 1. "
+                "Use one optimizer per device."
+            )
+
+        if self.momentum > 0.0 and any(
+            p.grad is not None and p.device == "gpu" for p in self.params
+        ):
+            raise AMEVAForgeDeviceError(
+                "GPU momentum SGD is outside Release 1. "
+                "Use momentum=0.0 or implement a GPU velocity tensor."
+            )
+
+        from .graph import GraphBuilder
+        from .bridge import js_execute_graph
+
+        cpu_updates = []
+        gpu_updates = []
+
+        for i, p in enumerate(self.params):
+            if p.grad is None:
+                continue
+
+            self._validate_param_grad_pair(p)
+
+            if p.device == "cpu":
+                grad_data = p.grad.numpy()
+                param_data = p.numpy()
+
+                if self.momentum > 0.0:
+                    if self.velocity[i] is None:
+                        self.velocity[i] = grad_data.copy()
+                    else:
+                        self.velocity[i] = (
+                            self.momentum * self.velocity[i] + grad_data
+                        )
+                    update = self.velocity[i]
+                else:
+                    update = grad_data
+
+                cpu_updates.append((p, param_data, update))
+                continue
+
+            await p.realize()
+            await p.grad.realize()
+
+            if p._handle is None or p.grad._handle is None:
+                raise AMEVAForgeDeviceError(
+                    "GPU SGD requires realized parameter and gradient handles."
+                )
+
+            num_elements = int(np.prod(p.shape, dtype=np.int64))
+            if num_elements <= 0:
+                raise AMEVAForgeShapeError(
+                    f"GPU SGD does not support empty parameter: shape={p.shape}"
+                )
+
+            builder = GraphBuilder()
+            grad_id = builder.add_load(p.grad.shape, p.grad._handle)
+            param_id = builder.add_load(p.shape, p._handle)
+            out_id = builder.add_op(
+                "axpy",
+                p.shape,
+                [grad_id, param_id],
+                [num_elements, float(self.lr)],
+            )
+            instructions, inputs = builder.compile()
+            gpu_updates.append((p, out_id, instructions, inputs))
+
+        # CPU 계산은 검증이 끝난 뒤 원자적으로 반영한다.
+        for p, param_data, update in cpu_updates:
+            p._data = (param_data - self.lr * update).astype(np.float32)
+            p._version += 1
+            p.grad = None
+
+        # GPU graph는 parameter별로 직렬 실행된다.
+        for p, out_id, instructions, inputs in gpu_updates:
+            result = await js_execute_graph(instructions, inputs)
+            returned_handle = result.get(str(out_id)) or result.get(out_id)
+
+            # axpy는 in-place 계약이므로 같은 parameter handle을 반환해야 한다.
+            if returned_handle != p._handle:
+                raise AMEVAForgeDeviceError(
+                    "AXPY contract violation: optimizer returned a different handle."
+                )
+
+            p._version += 1
             p.grad = None
 
 
@@ -180,6 +271,12 @@ class Adam(Optimizer):
         for i, p in enumerate(self.params):
             if p.grad is None:
                 continue
+
+            if p.device == "gpu":
+                raise AMEVAForgeDeviceError(
+                    "Adam.step() is CPU-only in Release 1. "
+                    "Move parameters to CPU or use SGD.step_async() for GPU optimization."
+                )
                 
             # WHAT: 그래디언트 및 파라미터 데이터 배열을 확보하는 변수들입니다.
             # WHY: 수학적 연산(numpy 배열 기반)을 수행하기 위함입니다.
@@ -215,6 +312,7 @@ class Adam(Optimizer):
             # WHY: 다음 스텝을 위해 상태를 최신화하기 위함입니다.
             # HOW: astype(np.float32)로 형변환 후 p._data에 할당하고 grad를 초기화합니다.
             p._data = param_data.astype(np.float32)
+            p._version += 1
             p.grad = None
 
 

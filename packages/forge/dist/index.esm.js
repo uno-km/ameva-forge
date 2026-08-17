@@ -4333,6 +4333,54 @@ function relu_backward(handleX, handleGrad) {
 }
 
 /**
+ * AMEVA-Forge Fused Linear Kernel: MatMul + BiasAdd + ReLU
+ * Computes C = ReLU(A @ B + Bias) in a single GPU compute pass.
+ */
+const MATMUL_BIAS_RELU_WGSL = `
+struct Params {
+  M: u32,
+  N: u32,
+  K: u32,
+  offsetY: u32,
+  has_bias: u32,
+  has_relu: u32,
+  pad1: u32,
+  pad2: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> a: array<f32>;
+@group(0) @binding(2) var<storage, read> b: array<f32>;
+@group(0) @binding(3) var<storage, read> bias: array<f32>;
+@group(0) @binding(4) var<storage, read_write> c: array<f32>;
+
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let col = global_id.x + global_id.z * 65535u * 8u;
+  let row = global_id.y + params.offsetY;
+
+  if (row >= params.M || col >= params.N) {
+    return;
+  }
+
+  var sum: f32 = 0.0;
+  for (var k: u32 = 0u; k < params.K; k = k + 1u) {
+    sum = sum + a[row * params.K + k] * b[k * params.N + col];
+  }
+
+  if (params.has_bias == 1u) {
+    sum = sum + bias[col];
+  }
+
+  if (params.has_relu == 1u) {
+    sum = max(sum, 0.0);
+  }
+
+  c[row * params.N + col] = sum;
+}
+`;
+
+/**
  * Created: 2026-08-12T12:14:52+09:00
  * Modified:
  *   - 2026-08-12T12:59:35+09:00: Feat: Introduce v3.0 features (CNN, Pooling, Dropout, Serialization)
@@ -4898,12 +4946,12 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
              */
             let isMatmul = false;
             let B = 1, M = 1, N = 1, K = 1;
-            if (inst.op === 'matmul') {
+            if (inst.op === 'matmul' || inst.op === 'matmul_bias_relu') {
                 if (!inst.params || inst.params.length < 3) {
-                    throw new AMEVAForgeSecurityError(`matmul instruction missing params`);
+                    throw new AMEVAForgeSecurityError(`${inst.op} instruction missing params`);
                 }
                 [M, N, K] = inst.params;
-                wgslCode = MATMUL_WGSL;
+                wgslCode = inst.op === 'matmul_bias_relu' ? MATMUL_BIAS_RELU_WGSL : MATMUL_WGSL;
                 isMatmul = true;
                 // TS-H01 Fix: matmul X축도 65535 클램핑 — 초과분은 Z 차원으로 분산
                 const rawDispatchX = Math.ceil(N / 8);
@@ -5289,6 +5337,15 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                     { binding: 3, resource: { buffer: outBuffer } },
                 ];
             }
+            else if (inst.op === 'matmul_bias_relu') {
+                bindGroupEntries = [
+                    { binding: 0, resource: { buffer: paramsBuffer } },
+                    { binding: 1, resource: { buffer: idToBuffer[inst.in[0]] } },
+                    { binding: 2, resource: { buffer: idToBuffer[inst.in[1]] } },
+                    { binding: 3, resource: { buffer: idToBuffer[inst.in[2]] } },
+                    { binding: 4, resource: { buffer: outBuffer } },
+                ];
+            }
             else if (inst.op === 'where') {
                 bindGroupEntries = [
                     { binding: 0, resource: { buffer: paramsBuffer } },
@@ -5334,6 +5391,8 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 // TS-H01 Fix: Ensure Y dispatch does not exceed 65535 workgroups
                 chunkY = Math.min(chunkY, 65535 * 8);
                 chunkY = Math.min(M, chunkY);
+                const has_bias = inst.op === 'matmul_bias_relu' ? (inst.params?.[3] ?? 1) : 0;
+                const has_relu = inst.op === 'matmul_bias_relu' ? (inst.params?.[4] ?? 1) : 0;
                 /**
                  * WHAT: 행렬 곱셈 연산을 Y축(행) 기준으로 여러 청크(Chunk)로 분할 처리하는 루프입니다.
                  * WHY: 단일 행렬 곱 연산이 너무 거대하여 GPU 실행 한계 시간(Timeout)을 초과하는 TDR 현상을 피하기 위해 작업을 작게 나눕니다.
@@ -5341,7 +5400,7 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                  */
                 for (let offsetY = 0; offsetY < M; offsetY += chunkY) {
                     const currentChunkY = Math.min(chunkY, M - offsetY);
-                    device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([M, N, K, offsetY]));
+                    device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([M, N, K, offsetY, has_bias, has_relu, 0, 0]));
                     const passEncoder = commandEncoder.beginComputePass();
                     passEncoder.setPipeline(pipeline);
                     passEncoder.setBindGroup(0, bindGroup);
