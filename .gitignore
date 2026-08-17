@@ -33,8 +33,23 @@ diff_utf8.txt
 # Build / Output directories
 /releases/
 /reports/**/*.txt
+/reports/**/*.log
+/reports/**/*.json
 /reports/tests/*.txt
 /reports/*.txt
+/reports/*.json
+*.log
+
+# Binary & Package Distribution Artifacts (WHL, TGZ, TAR.GZ)
+*.whl
+*.tar.gz
+*.tgz
+*.egg-info/
+packages/forge-py/build/
+packages/forge-py/dist/
+packages/forge-py/src/forge.egg-info/
+packages/forge/test-artifacts/
+packages/forge-py/tests/test_results.json
 
 # Large model weights
 mnist_weights.json
