@@ -5643,8 +5643,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 try {
                     dispose(handle);
                 }
-                catch {
-                    /* 이미 해제되었거나 유효하지 않은 경우 예외를 무시하여 전체 일괄 해제 프로세스가 중단되지 않게 합니다. */
+                catch (e) {
+                    /* Already disposed or invalid handle: safely ignore to not abort batch disposal */
                 }
             }
         }
@@ -5679,7 +5679,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     const dev = getDevice();
                     await dev.queue.onSubmittedWorkDone();
                 }
-                catch { }
+                catch (e) {
+                    // Device unavailable or queue error
+                }
             },
         };
         Object.freeze(api); // F-014 Fix: API 객체 동결하여 외부 변조 방지

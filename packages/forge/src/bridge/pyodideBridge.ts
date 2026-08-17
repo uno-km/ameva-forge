@@ -14,6 +14,8 @@
 import { init, read, dispose, getTensorInfo, mapBufferAsync, readMappedInto, warmupKernels } from "../tensor/gpuCore";
 import { executeGraph } from "../tensor/graphExecutor";
 import { _globalRegistry } from "../tensor/tensorRegistry";
+import { getQuotaSnapshot } from "../webgpu/quota";
+import { getDevice } from "../webgpu/device";
 import { TensorHandle } from "../types";
 
 /**
@@ -48,6 +50,9 @@ export interface AmevaTensorGlobalAPI {
    * HOW: 전달된 배열을 순회하며 개별 dispose를 호출.
    */
   disposeBatch: (handles: TensorHandle[]) => void;
+  getQuotaSnapshot: typeof getQuotaSnapshot;
+  snapshotHandles: () => string[];
+  flushGC: () => Promise<void> | void;
 }
 
 declare global {
@@ -81,8 +86,8 @@ function disposeBatch(handles: TensorHandle[]): void {
     if (handle) {
       try { 
         dispose(handle); 
-      } catch { 
-        /* 이미 해제되었거나 유효하지 않은 경우 예외를 무시하여 전체 일괄 해제 프로세스가 중단되지 않게 합니다. */ 
+      } catch (e) { 
+        /* Already disposed or invalid handle: safely ignore to not abort batch disposal */
       }
     }
   }
@@ -111,6 +116,16 @@ export function registerPyodideBridge(): AmevaTensorGlobalAPI {
     executeGraph,
     warmupKernels,
     disposeBatch,
+    getQuotaSnapshot,
+    snapshotHandles: () => _globalRegistry.snapshotHandles(),
+    flushGC: async () => {
+      try {
+        const dev = getDevice();
+        await dev.queue.onSubmittedWorkDone();
+      } catch (e) {
+        // Device unavailable or queue error
+      }
+    },
   };
 
   Object.freeze(api); // F-014 Fix: API 객체 동결하여 외부 변조 방지

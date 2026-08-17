@@ -273,6 +273,7 @@ class Tensor:
         # WHY: 이미 해제된 텐서에 접근하는 것을 막아 안전성을 확보하기 위함입니다.
         # HOW: False로 초기화합니다.
         self._disposed = False
+        self._version = 0
 
         # --- Autograd 상태 ---
         # WHAT: 역전파 시 활용될 컨텍스트 객체입니다.
@@ -334,12 +335,12 @@ class Tensor:
         WHY: 텐서 객체가 메모리에서 지워질 때 연결된 GPU 버퍼도 해제하여 메모리 누수를 방지하기 위함입니다.
         HOW: cell에 저장된 핸들 문자열을 _gc_queue에 추가하여 일괄 해제(Batch GC)를 준비합니다.
         """
-        # WHAT: 해제 대상 텐서의 핸들 값입니다.
-        # WHY: GPU 리소스 식별을 위해 필요합니다.
-        # HOW: cell.handle을 읽어옵니다.
         handle = cell.handle
         if handle is not None:
             _gc_queue.add(handle)
+            cell.handle = None
+            if len(_gc_queue) >= 16:
+                flush_gc()
 
     def _check_disposed(self) -> None:
         # WHAT: 텐서가 이미 해제되었는지 검사하는 내부 함수입니다.
@@ -354,9 +355,8 @@ class Tensor:
         WHY: 연산들을 모았다가 한 번에 수행하여 커널 호출 오버헤드를 줄이고 최적화 기회를 얻기 위함입니다.
         HOW: 위상 정렬된 노드들을 순회하며 명령(instruction) 목록을 만들고 브릿지를 통해 JS로 전달합니다.
         """
-        # WHAT: 이전에 밀려있는 리소스 해제 요청들을 모두 처리합니다.
-        # WHY: GPU 메모리가 부족해지기 전에 안 쓰는 버퍼를 정리하기 위함입니다.
-        # HOW: flush_gc 함수를 동기 호출합니다.
+        if len(_gc_queue) > 0:
+            flush_gc()
         flush_gc()
         if self.device == "cpu" or self._handle is not None:
             return
@@ -485,6 +485,45 @@ class Tensor:
 
         return out
 
+    def to(self, device: str) -> 'Tensor':
+        """
+        WHAT: CPU Tensor를 GPU lazy-upload Tensor로 이동하거나 장치를 변경합니다.
+        WHY: 텐서 데이터를 GPU 메모리로 업로드하기 위해 지연 업로드 노드를 생성합니다.
+        HOW: 새로운 GPU 장치 Tensor 객체를 생성하여 반환합니다.
+        """
+        self._check_disposed()
+        if device not in ("cpu", "gpu"):
+            raise AMEVAForgeDeviceError(f"Unsupported device: {device}")
+        if device == self.device:
+            return self
+        if device == "cpu":
+            if self._handle is not None:
+                raise AMEVAForgeDeviceError(
+                    "GPU to CPU transfer is asynchronous. Use await tensor.numpy_async()."
+                )
+            if self._data is not None:
+                return Tensor(
+                    shape=self.shape,
+                    dtype=self.dtype,
+                    device="cpu",
+                    requires_grad=self.requires_grad,
+                    data=self._data.astype(np.float32, copy=True),
+                )
+            raise AMEVAForgeDeviceError("Cannot move unallocated GPU tensor to CPU synchronously")
+        if self._data is None:
+            raise AMEVAForgeDeviceError("CPU tensor has no uploadable data")
+
+        return Tensor(
+            shape=self.shape,
+            dtype=self.dtype,
+            device="gpu",
+            requires_grad=self.requires_grad,
+            data=self._data.astype(np.float32, copy=True),
+            op="upload",
+            parents=(),
+            op_params=[],
+        )
+
     def dispose(self) -> None:
         """
         WHAT: 텐서와 연결된 리소스(GPU 버퍼 및 내부 데이터)를 즉시 해제하는 함수입니다.
@@ -496,6 +535,7 @@ class Tensor:
         if self.device == "gpu" and self._handle is not None:
             _gc_queue.add(self._handle)
             self._handle = None
+            flush_gc()
 
         self._data = None
         self._disposed = True
@@ -504,13 +544,18 @@ class Tensor:
         self._grad_parents = ()
         self._ctx = None
 
-    def backward(self, gradient: Optional['Tensor'] = None) -> None:
+    def backward(self, gradient: Optional['Tensor'] = None, retain_graph: bool = False) -> None:
         """
         WHAT: 역전파(Backpropagation)를 수행하여 이 텐서에 기여한 모든 부모 텐서들의 기울기(gradient)를 계산하는 함수입니다.
         WHY: 신경망을 학습시킬 때 손실 함수(Loss)로부터 파라미터 업데이트에 필요한 미분값을 구하기 위해서입니다.
         HOW: 위상 정렬의 역순으로 그래프를 탐색하며, 연산 클래스의 backward 함수에 체인 룰(Chain Rule)을 적용합니다.
         """
         self._check_disposed()
+        if retain_graph:
+            from .errors import AMEVAForgeUnsupportedOperationError
+            raise AMEVAForgeUnsupportedOperationError(
+                "retain_graph=True is outside Release 1"
+            )
         if not self.requires_grad:
             raise RuntimeError("Cannot call backward() on a tensor that does not require grad.")
 
@@ -544,8 +589,8 @@ class Tensor:
 
             # WHAT: 현재 노드(v)에 전달된 누적 기울기입니다.
             # WHY: 부모 노드들의 기울기를 구하기 위해 이 값을 곱해야(Chain Rule) 하기 때문입니다.
-            # HOW: grads 맵에서 꺼내옵니다.
-            grad_out = grads[id(v)]
+            # HOW: grads 맵에서 꺼내오고 메모리 해제를 위해 pop합니다.
+            grad_out = grads.pop(id(v))
 
             if v._ctx is None or v._op_cls is None:
                 if v.grad is None:
@@ -555,10 +600,10 @@ class Tensor:
                     v.grad = add(v.grad, grad_out)
                 continue
 
-            # WHAT: 현재 노드의 연산 클래스가 계산해 낸 부모 노드 방향의 기울기들입니다.
-            # WHY: 여러 입력을 받은 연산(예: 덧셈, 행렬곱)의 경우 각 입력에 대한 기울기가 다르기 때문입니다.
-            # HOW: _op_cls.backward 메서드에 컨텍스트와 grad_out을 넘겨 호출합니다.
+            v._ctx.validate_saved_tensor_versions()
             grad_inputs = v._op_cls.backward(v._ctx, grad_out)
+            v._ctx.saved_tensors = ()
+            v._ctx.saved_versions = ()
             if not isinstance(grad_inputs, tuple):
                 grad_inputs = (grad_inputs,)
 
@@ -577,6 +622,7 @@ class Tensor:
                     grads[pid] = add(grads[pid], g)
                 else:
                     grads[pid] = g
+        grads.clear()
 
 
 
