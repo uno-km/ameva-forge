@@ -352,7 +352,7 @@ function getQuotaSnapshot() {
  * WHY: 불필요한 콘솔 출력을 프로덕션 환경에서 방지하고, 에러 없이 안전하게 로그를 남기기 위해 사용됩니다.
  * HOW: 현재 실행 환경이 개발 모드(NODE_ENV, AMEVA_DEBUG, __DEV__, Vite env 등)인지 확인하고 조건을 만족할 때만 `globalThis.log`를 통해 메시지를 출력합니다. 예외가 발생해도 시스템이 멈추지 않도록 try-catch로 감쌉니다.
  */
-function _safeLog$1(msg) {
+function _safeLog$2(msg) {
     try {
         // VUL-015 Fix: Only log in development or explicit debug modes
         const isDev = (typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production') ||
@@ -401,7 +401,7 @@ let onDeviceLostCallback = null;
  *   3. 디바이스 손실(device.lost) 이벤트를 수신하여 리소스를 정리하고 등록된 콜백을 실행하도록 설정합니다.
  */
 async function initWebGPU(options) {
-    _safeLog$1(`[device.ts] initWebGPU started. current device=${device ? 'SET' : 'NULL'}`);
+    _safeLog$2(`[device.ts] initWebGPU started. current device=${device ? 'SET' : 'NULL'}`);
     if (device)
         return;
     if (typeof navigator === "undefined" || !navigator.gpu) {
@@ -428,11 +428,11 @@ async function initWebGPU(options) {
         }
         catch { }
     }
-    _safeLog$1(`[device.ts] initWebGPU finished. device successfully created.`);
+    _safeLog$2(`[device.ts] initWebGPU finished. device successfully created.`);
     device.lost.then((info) => {
         const msg = `[AMEVA] WebGPU Device Lost: ${info.message} (reason: ${info.reason})`;
         console.error(msg);
-        _safeLog$1(msg);
+        _safeLog$2(msg);
         device = null;
         // (globalThis as any).__AMEVA_DEVICE__ = null;
         adapter = null;
@@ -3716,7 +3716,7 @@ function resetRuntimeMemory() {
  * WHY: 글로벌 환경(예: Pyodide)에 주입된 로그 함수가 있을 때만 호출하여 콘솔 오염을 막고 안전한 디버깅을 하기 위함입니다.
  * HOW: globalThis에서 log 함수를 찾아 존재하면 호출하고 오류 발생 시 조용히 무시(catch)합니다.
  */
-function _safeLog(msg) {
+function _safeLog$1(msg) {
     try {
         if (typeof globalThis.log === 'function') {
             globalThis.log(msg, 'system');
@@ -3730,17 +3730,17 @@ function _safeLog(msg) {
  * HOW: initWebGPU를 호출하여 디바이스를 얻고, 디바이스 어댑터의 limits를 조회하여 메모리 할당 한도를 설정한 뒤, 모든 커널을 사전 컴파일(warmup)합니다.
  */
 async function init(options) {
-    _safeLog(`[gpuCore.ts] init started`);
+    _safeLog$1(`[gpuCore.ts] init started`);
     setDeviceLostCallback(() => {
         resetRuntimeMemory();
     });
     try {
-        _safeLog(`[gpuCore.ts] calling initWebGPU...`);
+        _safeLog$1(`[gpuCore.ts] calling initWebGPU...`);
         await initWebGPU(options);
-        _safeLog(`[gpuCore.ts] initWebGPU finished`);
+        _safeLog$1(`[gpuCore.ts] initWebGPU finished`);
     }
     catch (e) {
-        _safeLog(`[gpuCore.ts] initWebGPU threw error: ${e.message}`);
+        _safeLog$1(`[gpuCore.ts] initWebGPU threw error: ${e.message}`);
         throw e;
     }
     // NH-03: 실제 GPU 제한 조회 후 쿼터 조정
@@ -4389,6 +4389,40 @@ const WORKLOAD_BUDGET_ELEMENTS = 100_000_000; // 100M elements per submit
  * HOW: 256개 명령어마다 무조건 큐에 submit 하도록 강제합니다.
  */
 const MAX_OPS_PER_SUBMIT = 256; // 안전장치: element 수 관계없이 256 ops마다 강제 분할
+function _safeLog(msg) {
+    try {
+        if (typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'development') {
+            console.warn(msg);
+        }
+    }
+    catch { }
+}
+const _deferredGCQueue = [];
+/**
+ * WHAT: 롤백 과정에서 즉시 destroy에 실패한 GPU 버퍼들의 지연 해제를 재시도합니다.
+ * WHY: 일시적 GPU busy 상태 등으로 파괴 실패 시 유령 VRAM 누수를 방지합니다.
+ */
+function processDeferredGC() {
+    for (let i = _deferredGCQueue.length - 1; i >= 0; i--) {
+        const item = _deferredGCQueue[i];
+        try {
+            item.buffer.destroy();
+            _globalQuotaManager.releaseToken(item.token);
+            _deferredGCQueue.splice(i, 1);
+        }
+        catch (e) {
+            item.retries++;
+            if (item.retries >= 3) {
+                try {
+                    _globalQuotaManager.releaseToken(item.token);
+                }
+                catch { }
+                _deferredGCQueue.splice(i, 1);
+                _safeLog(`[DeferredGC] Failed to destroy buffer after 3 attempts, token released: ${e}`);
+            }
+        }
+    }
+}
 class GraphTransaction {
     pending = new Map();
     add(record) {
@@ -4413,14 +4447,19 @@ class GraphTransaction {
         for (const record of this.pending.values()) {
             try {
                 record.buffer.destroy();
-            }
-            catch { }
-            try {
                 _globalQuotaManager.releaseToken(record.token);
             }
-            catch { }
+            catch (e) {
+                _safeLog(`[GraphTransaction.rollback] Buffer destroy failed, queued for deferred GC: ${e}`);
+                _deferredGCQueue.push({
+                    buffer: record.buffer,
+                    token: record.token,
+                    retries: 0
+                });
+            }
         }
         this.pending.clear();
+        processDeferredGC();
     }
 }
 /**

@@ -25,6 +25,11 @@ export interface PendingTensorRecord {
     dtype: DType;
     byteLength: number;
 }
+/**
+ * WHAT: 롤백 과정에서 즉시 destroy에 실패한 GPU 버퍼들의 지연 해제를 재시도합니다.
+ * WHY: 일시적 GPU busy 상태 등으로 파괴 실패 시 유령 VRAM 누수를 방지합니다.
+ */
+export declare function processDeferredGC(): void;
 export declare class GraphTransaction {
     private readonly pending;
     add(record: PendingTensorRecord): void;

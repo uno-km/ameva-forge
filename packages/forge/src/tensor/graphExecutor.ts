@@ -130,6 +130,46 @@ export interface PendingTensorRecord {
   byteLength: number;
 }
 
+function _safeLog(msg: string): void {
+  try {
+    if (typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'development') {
+      console.warn(msg);
+    }
+  } catch {}
+}
+
+interface DeferredBufferRecord {
+  buffer: GPUBuffer;
+  token: AllocationToken;
+  retries: number;
+}
+
+const _deferredGCQueue: DeferredBufferRecord[] = [];
+
+/**
+ * WHAT: 롤백 과정에서 즉시 destroy에 실패한 GPU 버퍼들의 지연 해제를 재시도합니다.
+ * WHY: 일시적 GPU busy 상태 등으로 파괴 실패 시 유령 VRAM 누수를 방지합니다.
+ */
+export function processDeferredGC(): void {
+  for (let i = _deferredGCQueue.length - 1; i >= 0; i--) {
+    const item = _deferredGCQueue[i];
+    try {
+      item.buffer.destroy();
+      _globalQuotaManager.releaseToken(item.token);
+      _deferredGCQueue.splice(i, 1);
+    } catch (e) {
+      item.retries++;
+      if (item.retries >= 3) {
+        try {
+          _globalQuotaManager.releaseToken(item.token);
+        } catch {}
+        _deferredGCQueue.splice(i, 1);
+        _safeLog(`[DeferredGC] Failed to destroy buffer after 3 attempts, token released: ${e}`);
+      }
+    }
+  }
+}
+
 export class GraphTransaction {
   private readonly pending = new Map<TensorHandle, PendingTensorRecord>();
 
@@ -159,12 +199,18 @@ export class GraphTransaction {
     for (const record of this.pending.values()) {
       try {
         record.buffer.destroy();
-      } catch {}
-      try {
         _globalQuotaManager.releaseToken(record.token);
-      } catch {}
+      } catch (e) {
+        _safeLog(`[GraphTransaction.rollback] Buffer destroy failed, queued for deferred GC: ${e}`);
+        _deferredGCQueue.push({
+          buffer: record.buffer,
+          token: record.token,
+          retries: 0
+        });
+      }
     }
     this.pending.clear();
+    processDeferredGC();
   }
 }
 
