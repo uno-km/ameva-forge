@@ -1,6 +1,6 @@
 /**
- * graphTransaction.test.ts — Release 1 transaction lifecycle tests
- * 
+ * graphTransaction.test.ts ??Release 1 transaction lifecycle tests
+ *
  * Validates that executeGraph:
  * 1. Returns a Promise (async)
  * 2. Handles GPU error scopes before returning
@@ -11,7 +11,7 @@
 import { executeGraph } from '../src/tensor/graphExecutor';
 
 describe('executeGraph Transaction', () => {
-  
+
   describe('Return type', () => {
     it('should return a Promise', () => {
       // executeGraph should be an async function
@@ -19,7 +19,7 @@ describe('executeGraph Transaction', () => {
       // We just verify the function exists and has the right shape
       expect(typeof executeGraph).toBe('function');
     });
-    
+
     it('should be declared as async', () => {
       // The constructor name of an async function is 'AsyncFunction'
       expect(executeGraph.constructor.name).toBe('AsyncFunction');
@@ -38,7 +38,7 @@ describe('executeGraph Transaction', () => {
     it('should reject empty string', async () => {
       await expect(executeGraph('', [])).rejects.toThrow();
     });
-    
+
     it('should reject duplicate instruction IDs', async () => {
       const instructions = JSON.stringify([
         { id: 1, op: 'upload', shape: [2], in: [] },
@@ -59,13 +59,27 @@ describe('executeGraph Transaction', () => {
         require('path').join(__dirname, '../src/tensor/graphExecutor.ts'),
         'utf8'
       );
-      
+
       // Count occurrences of __ameva_last_gpu_error setting (not just reading)
       const settingPattern = /__ameva_last_gpu_error\s*=/g;
       const matches = graphExecutorSource.match(settingPattern);
-      
+
       // After hardening, there should be 0 occurrences of setting this global
       expect(matches).toBeNull();
+    });
+  });
+
+  describe('Concurrency Serializer Lock', () => {
+    it('should process concurrent executeGraph calls serially without error scope pollution', async () => {
+      const invalidGraph1 = executeGraph('invalid json', []);
+      const invalidGraph2 = executeGraph('{"a": 1}', []);
+
+      const [res1, res2] = await Promise.allSettled([invalidGraph1, invalidGraph2]);
+
+      expect(res1.status).toBe('rejected');
+      expect(res2.status).toBe('rejected');
+      expect((res1 as any).reason.message).toContain('invalid JSON');
+      expect((res2 as any).reason.message).toContain('must be a JSON array');
     });
   });
 });

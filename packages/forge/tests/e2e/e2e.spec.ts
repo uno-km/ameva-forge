@@ -37,9 +37,9 @@ test.describe('E2E Training Cycle (F-041)', () => {
         await forge.mapBufferAsync(outHandle);
         const outData = new Float32Array(4);
         forge.readMappedInto(outHandle, outData);
-        
+
         // Expected: [[1,2], [3,4]] * [[2,0], [1,2]] = [[2+2, 0+4], [6+4, 0+8]] = [[4, 4], [10, 8]]
-        
+
         // 5. Cleanup
         forge.dispose(handleA);
         forge.dispose(handleB);

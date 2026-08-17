@@ -5,7 +5,7 @@ describe("validateShape", () => {
   it("passes valid shape", () => {
     expect(validateShape([256, 256], "float32")).toBe(65536);
   });
-  
+
   it("passes scalar empty shape", () => {
     expect(validateShape([], "float32")).toBe(1);
   });

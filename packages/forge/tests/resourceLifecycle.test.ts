@@ -1,5 +1,5 @@
 /**
- * resourceLifecycle.test.ts — Release 1 resource lifecycle verification
+ * resourceLifecycle.test.ts ??Release 1 resource lifecycle verification
  *
  * Validates:
  * 1. No direct device.createBuffer in Release 1 graph execution path
@@ -24,7 +24,7 @@ describe('Resource Lifecycle - Source Contract', () => {
       // All allocations should go through allocateBuffer()
       const directCreatePattern = /device\.createBuffer\s*\(/g;
       const matches = graphExecutorSource.match(directCreatePattern);
-      
+
       // After Release 1 hardening, there should be 0 direct device.createBuffer calls
       expect(matches).toBeNull();
     });
@@ -32,7 +32,7 @@ describe('Resource Lifecycle - Source Contract', () => {
     it('should use allocateBuffer for all allocations', () => {
       const allocatePattern = /allocateBuffer\s*\(/g;
       const matches = graphExecutorSource.match(allocatePattern);
-      
+
       // There should be multiple allocateBuffer calls (tensor, uniform, temporary)
       expect(matches).not.toBeNull();
       expect(matches!.length).toBeGreaterThanOrEqual(3);

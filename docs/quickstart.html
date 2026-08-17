@@ -95,9 +95,8 @@ outputs = model(inputs)
 loss = criterion(outputs, targets)
 
 loss.backward()
-optimizer.step()
-
-print(f"Step Loss: {loss.item()}")</code></pre>
+    loss_val = await loss.numpy_async()
+    print(f"Step {epoch} Loss: {loss_val.mean()}")</code></pre>
             
             <p>For detailed architectural implementation specifications, proceed to the <a href="api-reference.html">API Reference</a>.</p>
         </main>

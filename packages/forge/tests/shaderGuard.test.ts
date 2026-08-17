@@ -1,7 +1,7 @@
-import { 
-  assertAllowedKernelName, 
-  assertSafeShaderIdentifier, 
-  assertStaticShaderSourceOnly, 
+import {
+  assertAllowedKernelName,
+  assertSafeShaderIdentifier,
+  assertStaticShaderSourceOnly,
 } from "../src/webgpu/shaderGuard";
 import { AMEVAForgeSecurityError } from "../src/errors";
 

@@ -50,12 +50,12 @@ test.describe('Numerical Gradient Validation (F-040)', () => {
         // 4. Compare
         const analytic = Array.from(analyticGrad);
         const numerical = Array.from(numericalGrad);
-        
+
         let maxError = 0;
         for (let i = 0; i < 5; i++) {
           // Skip x=0 because ReLU is non-differentiable there and numerical grad will be 0.5
           if (xArray[i] === 0.0) continue;
-          
+
           const err = Math.abs(analytic[i] - numerical[i]);
           if (err > maxError) maxError = err;
         }

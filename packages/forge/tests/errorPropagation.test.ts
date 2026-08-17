@@ -1,6 +1,6 @@
 /**
- * errorPropagation.test.ts — Release 1 error type verification
- * 
+ * errorPropagation.test.ts ??Release 1 error type verification
+ *
  * Validates that:
  * 1. All required error types exist and extend AMEVAForgeError
  * 2. Error types are properly exported

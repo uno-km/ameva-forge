@@ -9,19 +9,19 @@ describe("Stress and Security Test (F-039)", () => {
 
   it("handles boundary values correctly", () => {
     const q = new QuotaManager(1024, 1024);
-    
+
     // Exactly at limit should pass
     const t1 = q.reserveToken(1024, 'tensor', '');
     expect(q.getUsage().allocatedBytes).toBe(1024);
     q.releaseToken(t1);
-    
+
     // One byte over limit should fail
     expect(() => q.reserveToken(1025, 'tensor', '')).toThrow(AMEVAForgeQuotaExceededError);
   });
 
   it("prevents async race conditions on allocation", async () => {
     const q = new QuotaManager(1000, 1000);
-    
+
     // Attempt 100 concurrent allocations of 10 bytes each
     const promises = Array.from({ length: 100 }, async (_, i) => {
       // Simulate async delay
@@ -46,10 +46,10 @@ describe("Stress and Security Test (F-039)", () => {
     // Usage should remain 0
     expect(q.getUsage().allocatedBytes).toBe(0);
   });
-  
+
   it("OOM safety when allocating extremely large tensors", () => {
     const q = new QuotaManager(1000000, 1000000); // 1MB limit
-    
+
     // Allocate 2GB (exceeds limit)
     expect(() => q.reserveToken(2 * 1024 * 1024 * 1024, 'tensor', '')).toThrow(AMEVAForgeQuotaExceededError);
   });
