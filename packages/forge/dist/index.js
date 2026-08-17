@@ -781,6 +781,9 @@
      * HOW: WebGPU 큐(`device.queue.writeBuffer`)를 사용하여 주어진 데이터의 전체 크기만큼 지정된 버퍼의 오프셋 0부터 복사합니다.
      */
     function writeFloat32Array(buffer, data) {
+        if (data.byteLength > buffer.size) {
+            throw new AMEVAForgeValidationError(`writeFloat32Array overflow: data size (${data.byteLength}B) exceeds buffer capacity (${buffer.size}B)`);
+        }
         getQueue().writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength);
     }
     /**
@@ -3902,6 +3905,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             else {
                 actualData = outArray;
             }
+            // H-02 Fix: WASM 메모리 바운드 사전 검증
+            if (actualData && actualData.buffer) {
+                assertWasmRange(actualData.byteOffset, actualData.byteLength, actualData.buffer.byteLength);
+            }
             // F-009 Fix: 대상 배열 크기와 원본 텐서 크기 검증
             const record = _globalRegistry.get(handle);
             if (actualData.byteLength !== record.byteLength) {
@@ -4073,6 +4080,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         else {
             actualData = data;
+        }
+        // H-02 Fix: WASM 메모리 바운드 사전 검증
+        if (actualData && actualData.buffer) {
+            assertWasmRange(actualData.byteOffset, actualData.byteLength, actualData.buffer.byteLength);
         }
         /**
          * WHAT: 입력된 형태(shape)가 지녀야 할 원소 총 개수입니다.
@@ -4618,9 +4629,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
          */
         let rawInstructions;
         try {
-            rawInstructions = JSON.parse(instructionsJson);
+            rawInstructions = JSON.parse(instructionsJson, (key, value) => {
+                // M-01 Fix: JSON Prototype Pollution 방어
+                if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+                    throw new AMEVAForgeSecurityError(`Forbidden property name in JSON: ${key}`);
+                }
+                return value;
+            });
         }
-        catch {
+        catch (e) {
+            if (e instanceof AMEVAForgeSecurityError)
+                throw e;
             throw new AMEVAForgeSecurityError("executeGraph: invalid JSON in instructionsJson");
         }
         if (!Array.isArray(rawInstructions)) {
@@ -4766,6 +4785,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     }
                     else {
                         throw new AMEVAForgeSecurityError(`upload input[${inputIdx - 1}] is not a Float32Array`);
+                    }
+                    // H-02 Fix: WASM 메모리 바운드 사전 검증
+                    if (actualData && actualData.buffer) {
+                        assertWasmRange(actualData.byteOffset, actualData.byteLength, actualData.buffer.byteLength);
                     }
                     // VUL-018: NaN / Inf 방어
                     /**
@@ -5359,13 +5382,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         catch (err) {
             // ── 5. Rollback on Sync Error ──
-            console.error(`[AMEVA Forge] Transaction Sync Failed. Rolling back...`, err);
+            _safeLog(`[AMEVA Forge] Transaction Sync Failed. Rolling back... ${err}`);
             transaction.rollback();
             for (const alloc of paramsAllocations) {
                 try {
                     freeBuffer(alloc.buffer, alloc.token);
                 }
-                catch { }
+                catch (e) {
+                    _safeLog(`[GraphExecutor] Error freeing param buffer: ${e}`);
+                }
             }
             // pop scopes to prevent leak
             void device.popErrorScope();
@@ -5384,13 +5409,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Check for GPU errors BEFORE returning handles
         const gpuError = internalError || oomError || validationError;
         if (gpuError) {
-            console.error(`[AMEVA Forge] GPU error detected. Rolling back transaction...`, gpuError);
+            _safeLog(`[AMEVA Forge] GPU error detected. Rolling back transaction... ${gpuError}`);
             transaction.rollback();
             for (const alloc of paramsAllocations) {
                 try {
                     freeBuffer(alloc.buffer, alloc.token);
                 }
-                catch { }
+                catch (e) {
+                    _safeLog(`[GraphExecutor] Error freeing param buffer during rollback: ${e}`);
+                }
             }
             // Determine error type
             if (internalError) {
@@ -5412,14 +5439,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     try {
                         freeBuffer(alloc.buffer, alloc.token);
                     }
-                    catch { }
+                    catch (e) {
+                        _safeLog(`[GraphExecutor] Error freeing submitted buffer: ${e}`);
+                    }
                 }
-            }).catch(() => {
+            }).catch((e) => {
+                _safeLog(`[GraphExecutor] onSubmittedWorkDone error: ${e}`);
                 for (const alloc of paramsAllocations) {
                     try {
                         freeBuffer(alloc.buffer, alloc.token);
                     }
-                    catch { }
+                    catch (err) {
+                        _safeLog(`[GraphExecutor] Error freeing submitted buffer on error: ${err}`);
+                    }
                 }
             });
         }

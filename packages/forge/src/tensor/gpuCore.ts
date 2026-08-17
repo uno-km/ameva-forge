@@ -32,6 +32,7 @@ import { TensorHandle, DType, TensorInfo } from "../types";
 import { AMEVAForgeShapeError, AMEVAForgeDTypeError } from "../errors";
 import { validateShape } from "./validateShape";
 import { validateDType } from "./validateDType";
+import { assertWasmRange } from "../webgpu/validateWasmRange";
 
 import { MATMUL_WGSL } from "./kernels/matmul.wgsl";
 import { RELU_WGSL } from "./kernels/relu.wgsl";
@@ -115,6 +116,7 @@ registerKernelNames(KERNEL_REGISTRY.keys());
  * HOW: 텐서 핸들(문자열)을 키로, 매핑된 GPUBuffer와 AllocationToken 객체를 값으로 유지합니다.
  */
 const _pendingStagingBuffers = new Map<TensorHandle, { stagingBuffer: GPUBuffer, token: AllocationToken }>();
+const _inFlightMapPromises = new Map<TensorHandle, Promise<void>>();
 
 /**
  * WHAT: GPU 코어의 런타임 메모리와 모든 캐시된 리소스를 초기화(해제)하는 함수입니다.
@@ -125,6 +127,7 @@ export function resetRuntimeMemory(): void {
   _globalRegistry.clear();
   _globalQuotaManager.reset();
   _globalPipelineCache.clear();  // L-03 Fix: device lost 시 파이프라인 캐시도 무효화
+  _inFlightMapPromises.clear();
   
   /**
    * WHAT: 스테이징 버퍼 맵에 남아있는 모든 엔트리를 순회하여 파괴하는 루프입니다.
@@ -294,23 +297,28 @@ export function read(handle: TensorHandle): Promise<Float32Array> {
  * HOW: 레지스트리에서 버퍼를 조회한 뒤 맵핑을 수행하고 반환된 스테이징 버퍼를 _pendingStagingBuffers에 저장합니다.
  */
 export async function mapBufferAsync(handle: TensorHandle): Promise<void> {
+  // If already staged and mapped, return immediately
   if (_pendingStagingBuffers.has(handle)) {
-    throw new Error(`[AMEVA] A readback is already pending for handle "${handle}".`);
+    return;
   }
-  /**
-   * WHAT: 매핑할 원본 텐서 레코드입니다.
-   * WHY: 복사 소스가 될 GPUBuffer와 크기 정보를 제공하기 위해 참조됩니다.
-   * HOW: 레지스트리에서 핸들 키를 통해 가져옵니다.
-   */
+  // If a mapping operation is already in-flight for this handle, coalesce with existing promise
+  const inFlight = _inFlightMapPromises.get(handle);
+  if (inFlight) {
+    return inFlight;
+  }
+
   const record = _globalRegistry.get(handle);
-  
-  /**
-   * WHAT: 원본 버퍼에서 복사된 후 매핑 상태가 될 스테이징 버퍼와 메모리 할당 토큰입니다.
-   * WHY: 이 버퍼를 통해 CPU에서 안전하게 데이터를 읽어갈 수 있으므로 필요합니다.
-   * HOW: _mapBufferAsync 헬퍼 함수를 호출하여 비동기적으로 얻습니다.
-   */
-  const { stagingBuffer, token } = await _mapBufferAsync(record.buffer, record.byteLength);
-  _pendingStagingBuffers.set(handle, { stagingBuffer, token });
+  const promise = (async () => {
+    try {
+      const { stagingBuffer, token } = await _mapBufferAsync(record.buffer, record.byteLength);
+      _pendingStagingBuffers.set(handle, { stagingBuffer, token });
+    } finally {
+      _inFlightMapPromises.delete(handle);
+    }
+  })();
+
+  _inFlightMapPromises.set(handle, promise);
+  return promise;
 }
 
 /**
@@ -350,6 +358,11 @@ export function readMappedInto(handle: TensorHandle, outArray: any): void {
       actualData = bufProxy.data;
     } else {
       actualData = outArray as Float32Array;
+    }
+    
+    // H-02 Fix: WASM 메모리 바운드 사전 검증
+    if (actualData && actualData.buffer) {
+      assertWasmRange(actualData.byteOffset, actualData.byteLength, actualData.buffer.byteLength);
     }
     
     // F-009 Fix: 대상 배열 크기와 원본 텐서 크기 검증
@@ -563,6 +576,11 @@ export function uploadFloat32Array(data: any, shape: number[]): TensorHandle {
     actualData = bufProxy.data;
   } else {
     actualData = data as Float32Array;
+  }
+  
+  // H-02 Fix: WASM 메모리 바운드 사전 검증
+  if (actualData && actualData.buffer) {
+    assertWasmRange(actualData.byteOffset, actualData.byteLength, actualData.buffer.byteLength);
   }
   
   /**

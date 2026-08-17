@@ -20,9 +20,10 @@ import { _globalRegistry, TensorRegistry } from "./tensorRegistry";
 import { TensorHandle, DType } from "../types";
 import { allocateBuffer, writeFloat32Array, freeBuffer } from "../webgpu/buffers";
 import { _globalQuotaManager, AllocationToken } from "../webgpu/quota";
-import { _globalPipelineCache } from "../webgpu/pipelineCache";
 import { AMEVAForgeShapeError, AMEVAForgeSecurityError, AMEVAForgeUnsupportedOpError, AMEVAForgeValidationError, AMEVAForgeOutOfMemoryError, AMEVAForgeInternalGPUError } from "../errors";
 import { assertAllowedKernelName } from "../webgpu/shaderGuard";
+import { assertWasmRange } from "../webgpu/validateWasmRange";
+import { _globalPipelineCache } from "../webgpu/pipelineCache";
 
 
 // kernels
@@ -402,8 +403,15 @@ async function _executeGraphCore(
    */
   let rawInstructions: unknown[];
   try {
-    rawInstructions = JSON.parse(instructionsJson);
-  } catch {
+    rawInstructions = JSON.parse(instructionsJson, (key, value) => {
+      // M-01 Fix: JSON Prototype Pollution 방어
+      if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+        throw new AMEVAForgeSecurityError(`Forbidden property name in JSON: ${key}`);
+      }
+      return value;
+    });
+  } catch (e) {
+    if (e instanceof AMEVAForgeSecurityError) throw e;
     throw new AMEVAForgeSecurityError("executeGraph: invalid JSON in instructionsJson");
   }
 
@@ -564,6 +572,11 @@ async function _executeGraphCore(
           actualData = converted instanceof Float32Array ? converted : new Float32Array(converted);
         } else {
           throw new AMEVAForgeSecurityError(`upload input[${inputIdx - 1}] is not a Float32Array`);
+        }
+
+        // H-02 Fix: WASM 메모리 바운드 사전 검증
+        if (actualData && actualData.buffer) {
+          assertWasmRange(actualData.byteOffset, actualData.byteLength, actualData.buffer.byteLength);
         }
 
         // VUL-018: NaN / Inf 방어
@@ -1186,12 +1199,16 @@ async function _executeGraphCore(
 
   } catch (err: any) {
     // ── 5. Rollback on Sync Error ──
-    console.error(`[AMEVA Forge] Transaction Sync Failed. Rolling back...`, err);
+    _safeLog(`[AMEVA Forge] Transaction Sync Failed. Rolling back... ${err}`);
     
     transaction.rollback();
     
     for (const alloc of paramsAllocations) {
-      try { freeBuffer(alloc.buffer, alloc.token); } catch {}
+      try { 
+        freeBuffer(alloc.buffer, alloc.token); 
+      } catch (e) { 
+        _safeLog(`[GraphExecutor] Error freeing param buffer: ${e}`); 
+      }
     }
     // pop scopes to prevent leak
     void device.popErrorScope();
@@ -1213,10 +1230,14 @@ async function _executeGraphCore(
   // Check for GPU errors BEFORE returning handles
   const gpuError = internalError || oomError || validationError;
   if (gpuError) {
-    console.error(`[AMEVA Forge] GPU error detected. Rolling back transaction...`, gpuError);
+    _safeLog(`[AMEVA Forge] GPU error detected. Rolling back transaction... ${gpuError}`);
     transaction.rollback();
     for (const alloc of paramsAllocations) {
-      try { freeBuffer(alloc.buffer, alloc.token); } catch {}
+      try { 
+        freeBuffer(alloc.buffer, alloc.token); 
+      } catch (e) { 
+        _safeLog(`[GraphExecutor] Error freeing param buffer during rollback: ${e}`); 
+      }
     }
     // Determine error type
     if (internalError) {
@@ -1235,11 +1256,20 @@ async function _executeGraphCore(
   if (paramsAllocations.length > 0) {
     device.queue.onSubmittedWorkDone().then(() => {
       for (const alloc of paramsAllocations) {
-        try { freeBuffer(alloc.buffer, alloc.token); } catch {}
+        try { 
+          freeBuffer(alloc.buffer, alloc.token); 
+        } catch (e) { 
+          _safeLog(`[GraphExecutor] Error freeing submitted buffer: ${e}`); 
+        }
       }
-    }).catch(() => {
+    }).catch((e) => {
+      _safeLog(`[GraphExecutor] onSubmittedWorkDone error: ${e}`);
       for (const alloc of paramsAllocations) {
-        try { freeBuffer(alloc.buffer, alloc.token); } catch {}
+        try { 
+          freeBuffer(alloc.buffer, alloc.token); 
+        } catch (err) { 
+          _safeLog(`[GraphExecutor] Error freeing submitted buffer on error: ${err}`); 
+        }
       }
     });
   }

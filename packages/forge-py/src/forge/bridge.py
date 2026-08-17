@@ -15,6 +15,7 @@ M-06 Fix: batch dispose 구현
 """
 from typing import Any, List, Optional
 import sys
+import warnings
 
 from .errors import (
     AMEVAForgeValidationError,
@@ -133,9 +134,8 @@ def js_dispose(handle: str) -> None:
         core = get_js_core()
         # 해당 핸들이 가리키는 버퍼 리소스를 해제하도록 요청합니다.
         core.dispose(handle)
-    except Exception:
-        # 해제 중 발생하는 예외는 스레드 안전성이나 기 해제 문제일 수 있으므로 무시합니다.
-        pass
+    except Exception as e:
+        warnings.warn(f"[AMEVA Bridge] GPU handle disposal failed for {handle}: {e}", RuntimeWarning)
 
 
 def js_dispose_batch(handles: list) -> None:

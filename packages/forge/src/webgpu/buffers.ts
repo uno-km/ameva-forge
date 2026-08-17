@@ -14,6 +14,7 @@
 
 import { getDevice, getQueue } from "./device";
 import { _globalQuotaManager, AllocationKind, AllocationToken } from "./quota";
+import { AMEVAForgeValidationError } from "../errors";
 
 /**
  * WHAT: 지정된 크기와 용도에 맞게 GPU 버퍼를 할당합니다.
@@ -42,6 +43,11 @@ export function allocateBuffer(
  * HOW: WebGPU 큐(`device.queue.writeBuffer`)를 사용하여 주어진 데이터의 전체 크기만큼 지정된 버퍼의 오프셋 0부터 복사합니다.
  */
 export function writeFloat32Array(buffer: GPUBuffer, data: Float32Array): void {
+  if (data.byteLength > buffer.size) {
+    throw new AMEVAForgeValidationError(
+      `writeFloat32Array overflow: data size (${data.byteLength}B) exceeds buffer capacity (${buffer.size}B)`
+    );
+  }
   getQueue().writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength);
 }
 
