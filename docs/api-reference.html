@@ -1,184 +1,158 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="AMEVA-Forge API Reference for Tensor, nn, functional, and optim modules.">
-  <title>API Reference — AMEVA-Forge</title>
-  <link rel="stylesheet" href="style.css">
-  <script src="./dist/index.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AMEVA-Forge: API Reference</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="./dist/index.js"></script>
 </head>
 <body>
-  <header class="site-header">
-    <a href="index.html" class="brand-area">
-      <div class="brand-logo">A</div>
-      <span class="brand-title">AMEVA-Forge</span>
-      <span class="brand-badge">v1.0.0</span>
-    </a>
-    <div class="header-actions">
-      <a href="demo.html" class="cta-button">⚡ Try Live Studio</a>
-      <a href="https://github.com/uno-km/ameva-forge" target="_blank" class="cta-button" style="background-color: var(--bg-tertiary);">GitHub</a>
+    <header>
+        <h1>AMEVA-Forge Documentation</h1>
+        <div class="header-badge-group">
+            <span class="apache-tag">Release 1.0.0</span>
+            <a href="demo.html"><strong>[ Live WebGPU Studio ]</strong></a>
+            <a href="https://github.com/uno-km/ameva-forge" target="_blank">[ GitHub Repository ]</a>
+        </div>
+    </header>
+
+    <div class="container">
+        <nav class="sidebar">
+            <h3>Interactive</h3>
+            <ul>
+                <li><a href="demo.html">Live WebGPU Studio</a></li>
+            </ul>
+            <h3>Documentation</h3>
+            <ul>
+                <li><a href="index.html">Home</a></li>
+                <li><a href="installation.html">Installation</a></li>
+                <li><a href="quickstart.html">Quickstart</a></li>
+                <li><a href="api-reference.html" class="active"><strong>API Reference</strong></a></li>
+            </ul>
+            <h3>Concepts</h3>
+            <ul>
+                <li><a href="what-is-forge.html">What is Forge?</a></li>
+                <li><a href="forge-vs-pytorch.html">Forge vs PyTorch</a></li>
+            </ul>
+        </nav>
+
+        <main class="content">
+            <h2>API Reference (Release 1.0.0)</h2>
+            <p>Complete documentation for all modules, classes, and methods supported in AMEVA-Forge Release 1.0.</p>
+
+            <h3>1. Core Tensor (<code>forge.Tensor</code>)</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 30%;">Method / Attribute</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>forge.tensor(data, requires_grad=False, device='cpu')</code></td>
+                        <td>Creates a new multi-dimensional tensor from array or nested lists.</td>
+                    </tr>
+                    <tr>
+                        <td><code>tensor.to(device)</code> / <code>tensor.move_to_(device)</code></td>
+                        <td>Transfers tensor storage between CPU and WebGPU in-place preserving parameter identity.</td>
+                    </tr>
+                    <tr>
+                        <td><code>tensor.backward(gradient=None)</code></td>
+                        <td>Computes vector-Jacobian products (VJP) across the autograd graph.</td>
+                    </tr>
+                    <tr>
+                        <td><code>await tensor.numpy_async()</code></td>
+                        <td>Asynchronously reads back GPU buffer to NumPy array without blocking browser UI.</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>2. Neural Network Modules (<code>forge.nn</code>)</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 30%;">Module</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>nn.Linear(in_features, out_features, bias=True)</code></td>
+                        <td>Applies an affine linear transformation \(y = xA^T + b\).</td>
+                    </tr>
+                    <tr>
+                        <td><code>nn.LayerNorm(normalized_shape, eps=1e-5)</code></td>
+                        <td>Applies Layer Normalization over the specified normalized shape.</td>
+                    </tr>
+                    <tr>
+                        <td><code>nn.BatchNorm2d(num_features, eps=1e-5, momentum=0.1)</code></td>
+                        <td>Applies 2D Batch Normalization with train/eval state tracking.</td>
+                    </tr>
+                    <tr>
+                        <td><code>nn.PositionalEncoding(d_model, max_len=5000)</code></td>
+                        <td>Sinusoidal positional encoding with LRU dynamic caching.</td>
+                    </tr>
+                    <tr>
+                        <td><code>nn.Dropout(p=0.5)</code></td>
+                        <td>Applies randomized zeroing during training mode; identity during eval.</td>
+                    </tr>
+                    <tr>
+                        <td><code>nn.Sequential(*layers)</code></td>
+                        <td>Sequential container for chaining neural network modules.</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>3. Functional & Loss Operations (<code>forge.functional</code>)</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 30%;">Function</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>F.scaled_dot_product_attention(q, k, v, is_causal=False)</code></td>
+                        <td>Computes attention \(\text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V\) with optional causal masking.</td>
+                    </tr>
+                    <tr>
+                        <td><code>F.cross_entropy(input, target)</code></td>
+                        <td>Computes Cross-Entropy loss with mathematically exact closed-form GPU derivative.</td>
+                    </tr>
+                    <tr>
+                        <td><code>F.softmax(input, dim=-1)</code></td>
+                        <td>Applies numerically stabilized softmax along the specified dimension.</td>
+                    </tr>
+                    <tr>
+                        <td><code>nn.MSELoss()</code></td>
+                        <td>Measures mean squared error between prediction and ground truth.</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>4. Optimizers (<code>forge.optim</code>)</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 30%;">Optimizer</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>optim.SGD(params, lr=0.01, momentum=0.0)</code></td>
+                        <td>Stochastic Gradient Descent optimizer supporting asynchronous WebGPU in-place AXPY kernel updates.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </main>
     </div>
-  </header>
 
-  <div class="container">
-    <nav class="sidebar">
-      <div class="nav-group">
-        <h3>Playground</h3>
-        <ul>
-          <li><a href="demo.html">⚡ Live WebGPU Studio</a></li>
-        </ul>
-      </div>
-      <div class="nav-group">
-        <h3>Documentation</h3>
-        <ul>
-          <li><a href="index.html">🏠 Home</a></li>
-          <li><a href="installation.html">📦 Installation</a></li>
-          <li><a href="quickstart.html">🚀 Quickstart Guide</a></li>
-          <li><a href="api-reference.html" class="active">📖 API Reference</a></li>
-        </ul>
-      </div>
-      <div class="nav-group">
-        <h3>Concepts & Architecture</h3>
-        <ul>
-          <li><a href="what-is-forge.html">🎯 What is Forge?</a></li>
-          <li><a href="forge-vs-pytorch.html">⚖️ Forge vs PyTorch</a></li>
-        </ul>
-      </div>
-    </nav>
-
-    <main class="content">
-      <h1>API Reference</h1>
-      <p>Comprehensive reference for all core classes and functions exported by <code>forge</code> in Release 1.0.</p>
-
-      <h2>1. <code>forge.Tensor</code></h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Method / Property</th>
-            <th>Description</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><code>forge.tensor(data, device='cpu', requires_grad=False)</code></td>
-            <td>Creates a tensor from numpy arrays or nested lists.</td>
-          </tr>
-          <tr>
-            <td><code>forge.randn(shape, device='cpu', requires_grad=False)</code></td>
-            <td>Creates a tensor with standard normal distribution.</td>
-          </tr>
-          <tr>
-            <td><code>tensor.to(device)</code></td>
-            <td>Transfers tensor state between <code>'cpu'</code> and <code>'gpu'</code>.</td>
-          </tr>
-          <tr>
-            <td><code>tensor.backward(gradient=None)</code></td>
-            <td>Accumulates reverse gradients into <code>tensor.grad</code>.</td>
-          </tr>
-          <tr>
-            <td><code>await tensor.realize()</code></td>
-            <td>Forces execution of lazy GPU computation graphs.</td>
-          </tr>
-          <tr>
-            <td><code>await tensor.numpy_async()</code></td>
-            <td>Asynchronously reads back GPU tensor data to a NumPy array.</td>
-          </tr>
-          <tr>
-            <td><code>tensor.dispose()</code></td>
-            <td>Immediately frees associated GPU buffers and returns quota.</td>
-          </tr>
-        </tbody>
-      </table>
-
-      <h2>2. <code>forge.nn</code> Modules</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Module</th>
-            <th>Description</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><code>nn.Linear(in_features, out_features, bias=True)</code></td>
-            <td>Fully connected linear transformation layer.</td>
-          </tr>
-          <tr>
-            <td><code>nn.LayerNorm(normalized_shape, eps=1e-5)</code></td>
-            <td>Layer normalization across feature dimensions.</td>
-          </tr>
-          <tr>
-            <td><code>nn.BatchNorm2d(num_features, eps=1e-5, momentum=0.1)</code></td>
-            <td>Batch normalization with running mean and variance tracking.</td>
-          </tr>
-          <tr>
-            <td><code>nn.PositionalEncoding(d_model, max_len=5000)</code></td>
-            <td>Sinusoidal positional encoding with bounded LRU tensor cache.</td>
-          </tr>
-          <tr>
-            <td><code>nn.Dropout(p=0.5)</code></td>
-            <td>Deterministic or pseudo-random dropout masking.</td>
-          </tr>
-          <tr>
-            <td><code>nn.Sequential(*layers)</code></td>
-            <td>Sequential container of neural network modules.</td>
-          </tr>
-        </tbody>
-      </table>
-
-      <h2>3. <code>forge.functional</code> (F)</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Function</th>
-            <th>Description</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><code>F.scaled_dot_product_attention(q, k, v, is_causal=False)</code></td>
-            <td>Scaled dot-product attention with optional causal triangular masking.</td>
-          </tr>
-          <tr>
-            <td><code>F.softmax(x, axis=-1)</code></td>
-            <td>Numerically stable softmax activation along specified axis.</td>
-          </tr>
-          <tr>
-            <td><code>F.log_softmax(x, axis=-1)</code></td>
-            <td>Numerically stable log-softmax using max-subtraction.</td>
-          </tr>
-          <tr>
-            <td><code>F.cross_entropy(predictions, targets)</code></td>
-            <td>CrossEntropy loss with closed-form $(P - Y)/N$ backward gradient.</td>
-          </tr>
-          <tr>
-            <td><code>F.relu(x)</code></td>
-            <td>Rectified linear unit activation function.</td>
-          </tr>
-        </tbody>
-      </table>
-
-      <h2>4. <code>forge.optim</code></h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Class</th>
-            <th>Description</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><code>optim.SGD(params, lr=0.01)</code></td>
-            <td>In-place stochastic gradient descent optimizer using WebGPU AXPY kernel.</td>
-          </tr>
-        </tbody>
-      </table>
-    </main>
-  </div>
-
-  <footer class="site-footer">
-    &copy; 2026 AMEVA-Forge Team. Released under Apache-2.0 License.
-  </footer>
+    <footer>
+        &copy; 2026 AMEVA-Forge Team. Released under the Apache-2.0 License.
+    </footer>
 </body>
 </html>

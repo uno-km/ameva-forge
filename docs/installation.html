@@ -1,67 +1,57 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Installation instructions for AMEVA-Forge in Python, Node.js, and browser environments.">
-  <title>Installation — AMEVA-Forge</title>
-  <link rel="stylesheet" href="style.css">
-  <script src="./dist/index.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AMEVA-Forge: Installation</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="./dist/index.js"></script>
 </head>
 <body>
-  <header class="site-header">
-    <a href="index.html" class="brand-area">
-      <div class="brand-logo">A</div>
-      <span class="brand-title">AMEVA-Forge</span>
-      <span class="brand-badge">v1.0.0</span>
-    </a>
-    <div class="header-actions">
-      <a href="demo.html" class="cta-button">⚡ Try Live Studio</a>
-      <a href="https://github.com/uno-km/ameva-forge" target="_blank" class="cta-button" style="background-color: var(--bg-tertiary);">GitHub</a>
-    </div>
-  </header>
+    <header>
+        <h1>AMEVA-Forge Documentation</h1>
+        <div class="header-badge-group">
+            <span class="apache-tag">Release 1.0.0</span>
+            <a href="demo.html"><strong>[ Live WebGPU Studio ]</strong></a>
+            <a href="https://github.com/uno-km/ameva-forge" target="_blank">[ GitHub Repository ]</a>
+        </div>
+    </header>
 
-  <div class="container">
-    <nav class="sidebar">
-      <div class="nav-group">
-        <h3>Playground</h3>
-        <ul>
-          <li><a href="demo.html">⚡ Live WebGPU Studio</a></li>
-        </ul>
-      </div>
-      <div class="nav-group">
-        <h3>Documentation</h3>
-        <ul>
-          <li><a href="index.html">🏠 Home</a></li>
-          <li><a href="installation.html" class="active">📦 Installation</a></li>
-          <li><a href="quickstart.html">🚀 Quickstart Guide</a></li>
-          <li><a href="api-reference.html">📖 API Reference</a></li>
-        </ul>
-      </div>
-      <div class="nav-group">
-        <h3>Concepts & Architecture</h3>
-        <ul>
-          <li><a href="what-is-forge.html">🎯 What is Forge?</a></li>
-          <li><a href="forge-vs-pytorch.html">⚖️ Forge vs PyTorch</a></li>
-        </ul>
-      </div>
-    </nav>
+    <div class="container">
+        <nav class="sidebar">
+            <h3>Interactive</h3>
+            <ul>
+                <li><a href="demo.html">Live WebGPU Studio</a></li>
+            </ul>
+            <h3>Documentation</h3>
+            <ul>
+                <li><a href="index.html">Home</a></li>
+                <li><a href="installation.html" class="active"><strong>Installation</strong></a></li>
+                <li><a href="quickstart.html">Quickstart</a></li>
+                <li><a href="api-reference.html">API Reference</a></li>
+            </ul>
+            <h3>Concepts</h3>
+            <ul>
+                <li><a href="what-is-forge.html">What is Forge?</a></li>
+                <li><a href="forge-vs-pytorch.html">Forge vs PyTorch</a></li>
+            </ul>
+        </nav>
 
-    <main class="content">
-      <h1>Installation & Environment Setup</h1>
-      <p>AMEVA-Forge supports multiple execution targets: pure Python (CPython for testing/prototyping), TypeScript/JavaScript for web apps, and in-browser Pyodide with WebGPU.</p>
+        <main class="content">
+            <h2>Installation & Setup</h2>
+            <p>AMEVA-Forge supports multiple execution targets: pure Python (CPython for testing/prototyping), TypeScript/JavaScript for web apps, and in-browser Pyodide with WebGPU.</p>
 
-      <h2>1. Python Package Installation</h2>
-      <p>Install the Python wheel package directly via pip:</p>
-      <pre><code># Build and install the wheel locally
+            <h3>1. Python Package Installation (Wheel)</h3>
+            <p>Install the Python package directly via pip:</p>
+            <pre><code># Install from local wheel artifact
 pip install forge-0.1.0-py3-none-any.whl</code></pre>
 
-      <h2>2. NPM Package for Web & Node Applications</h2>
-      <pre><code>npm install @ameva/forge</code></pre>
+            <h3>2. NPM Package for Node / Webpack</h3>
+            <pre><code>npm install @ameva/forge</code></pre>
 
-      <h2>3. Web Browser & Pyodide Integration</h2>
-      <p>Include the TypeScript bundle and load Pyodide from CDN:</p>
-      <pre><code>&lt;!-- Load AMEVA-Forge WebGPU Backend --&gt;
+            <h3>3. In-Browser Pyodide Integration</h3>
+            <p>Include the TypeScript bundle and load Pyodide from CDN:</p>
+            <pre><code>&lt;!-- Load AMEVA-Forge WebGPU Backend --&gt;
 &lt;script src="https://cdn.jsdelivr.net/npm/@ameva/forge/dist/index.js"&gt;&lt;/script&gt;
 
 &lt;!-- Load Pyodide WASM Runtime --&gt;
@@ -75,27 +65,27 @@ pip install forge-0.1.0-py3-none-any.whl</code></pre>
     const pyodide = await loadPyodide();
     await pyodide.loadPackage("micropip");
     const micropip = pyodide.pyimport("micropip");
-    await micropip.install("https://your-domain.com/pkg/forge-0.1.0-py3-none-any.whl");
+    await micropip.install("https://uno-km.github.io/ameva-forge/pkg/forge-0.1.0-py3-none-any.whl");
     
-    // 3. Ready to train models!
+    // 3. Ready to train models on GPU!
     await pyodide.runPythonAsync(`
       import forge as torch
-      print("Forge initialized on WebGPU:", torch.tensor([1.0, 2.0], device="gpu"))
+      print("Forge WebGPU ready:", torch.tensor([1.0, 2.0], device="gpu"))
     `);
   }
   setup();
 &lt;/script&gt;</code></pre>
 
-      <h2>Browser Hardware Requirements</h2>
-      <ul>
-        <li><strong>WebGPU Compatible Browser:</strong> Chrome 113+, Edge 113+, Safari 18+ (macOS Sonoma / iOS 17+), or Firefox Nightly with WebGPU flag enabled.</li>
-        <li><strong>GPU Backend:</strong> Metal (macOS/iOS), DirectX 12 / Vulkan (Windows/Linux).</li>
-      </ul>
-    </main>
-  </div>
+            <h3>Browser Hardware Requirements</h3>
+            <ul>
+                <li><strong>WebGPU Compatible Browser:</strong> Chrome 113+, Edge 113+, Safari 18+ (macOS Sonoma / iOS 17+), or Firefox Nightly.</li>
+                <li><strong>GPU Backend:</strong> Metal (macOS/iOS), DirectX 12 / Vulkan (Windows/Linux).</li>
+            </ul>
+        </main>
+    </div>
 
-  <footer class="site-footer">
-    &copy; 2026 AMEVA-Forge Team. Released under Apache-2.0 License.
-  </footer>
+    <footer>
+        &copy; 2026 AMEVA-Forge Team. Released under the Apache-2.0 License.
+    </footer>
 </body>
 </html>

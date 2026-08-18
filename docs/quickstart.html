@@ -1,59 +1,49 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Quickstart guide for AMEVA-Forge. Learn how to train models on WebGPU.">
-  <title>Quickstart Guide — AMEVA-Forge</title>
-  <link rel="stylesheet" href="style.css">
-  <script src="./dist/index.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AMEVA-Forge: Quickstart Guide</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="./dist/index.js"></script>
 </head>
 <body>
-  <header class="site-header">
-    <a href="index.html" class="brand-area">
-      <div class="brand-logo">A</div>
-      <span class="brand-title">AMEVA-Forge</span>
-      <span class="brand-badge">v1.0.0</span>
-    </a>
-    <div class="header-actions">
-      <a href="demo.html" class="cta-button">⚡ Try Live Studio</a>
-      <a href="https://github.com/uno-km/ameva-forge" target="_blank" class="cta-button" style="background-color: var(--bg-tertiary);">GitHub</a>
-    </div>
-  </header>
+    <header>
+        <h1>AMEVA-Forge Documentation</h1>
+        <div class="header-badge-group">
+            <span class="apache-tag">Release 1.0.0</span>
+            <a href="demo.html"><strong>[ Live WebGPU Studio ]</strong></a>
+            <a href="https://github.com/uno-km/ameva-forge" target="_blank">[ GitHub Repository ]</a>
+        </div>
+    </header>
 
-  <div class="container">
-    <nav class="sidebar">
-      <div class="nav-group">
-        <h3>Playground</h3>
-        <ul>
-          <li><a href="demo.html">⚡ Live WebGPU Studio</a></li>
-        </ul>
-      </div>
-      <div class="nav-group">
-        <h3>Documentation</h3>
-        <ul>
-          <li><a href="index.html">🏠 Home</a></li>
-          <li><a href="installation.html">📦 Installation</a></li>
-          <li><a href="quickstart.html" class="active">🚀 Quickstart Guide</a></li>
-          <li><a href="api-reference.html">📖 API Reference</a></li>
-        </ul>
-      </div>
-      <div class="nav-group">
-        <h3>Concepts & Architecture</h3>
-        <ul>
-          <li><a href="what-is-forge.html">🎯 What is Forge?</a></li>
-          <li><a href="forge-vs-pytorch.html">⚖️ Forge vs PyTorch</a></li>
-        </ul>
-      </div>
-    </nav>
+    <div class="container">
+        <nav class="sidebar">
+            <h3>Interactive</h3>
+            <ul>
+                <li><a href="demo.html">Live WebGPU Studio</a></li>
+            </ul>
+            <h3>Documentation</h3>
+            <ul>
+                <li><a href="index.html">Home</a></li>
+                <li><a href="installation.html">Installation</a></li>
+                <li><a href="quickstart.html" class="active"><strong>Quickstart</strong></a></li>
+                <li><a href="api-reference.html">API Reference</a></li>
+            </ul>
+            <h3>Concepts</h3>
+            <ul>
+                <li><a href="what-is-forge.html">What is Forge?</a></li>
+                <li><a href="forge-vs-pytorch.html">Forge vs PyTorch</a></li>
+            </ul>
+        </nav>
 
-    <main class="content">
-      <h1>Quickstart Guide</h1>
-      <p>This guide provides a rapid introduction to defining a neural network, performing forward passes, backpropagation, and updating weights using AMEVA-Forge on CPU and WebGPU.</p>
+        <main class="content">
+            <h2>Quickstart Guide</h2>
+            <p>This guide provides a rapid introduction to defining a neural network, performing forward passes, backpropagation, and updating weights using AMEVA-Forge on CPU and WebGPU.</p>
 
-      <h2>1. Tensor Creation and Operations</h2>
-      <p>AMEVA-Forge's fundamental data structure is the <code>Tensor</code>. Tensor operations are recorded dynamically for automatic differentiation.</p>
-      <pre><code>import forge as torch
+            <h3>1. Tensor Creation and Operations</h3>
+            <p>AMEVA-Forge's fundamental data structure is the <code>Tensor</code>. Tensor operations are recorded dynamically for automatic differentiation.</p>
+            <pre><code>import forge as torch
 
 # Define standard tensors with autograd enabled
 x = torch.tensor([[1.0, 2.0], [3.0, 4.0]], requires_grad=True)
@@ -63,9 +53,9 @@ y = torch.tensor([[5.0, 6.0], [7.0, 8.0]])
 z = x @ y
 print("Forward Result:\n", z.numpy())</code></pre>
 
-      <h2>2. Reverse-Mode Autograd</h2>
-      <p>Calling <code>.backward()</code> computes gradients for all descendant tensors where <code>requires_grad=True</code>.</p>
-      <pre><code># Compute a scalar loss
+            <h3>2. Reverse-Mode Autograd</h3>
+            <p>Calling <code>.backward()</code> computes gradients for all descendant tensors where <code>requires_grad=True</code>.</p>
+            <pre><code># Compute a scalar loss
 loss = z.sum()
 
 # Execute reverse accumulation
@@ -73,8 +63,8 @@ loss.backward()
 
 print("Gradient of x:\n", x.grad.numpy())</code></pre>
 
-      <h2>3. Building Neural Networks with <code>forge.nn</code></h2>
-      <pre><code>import forge.nn as nn
+            <h3>3. Building Neural Networks with <code>forge.nn</code></h3>
+            <pre><code>import forge.nn as nn
 import forge.optim as optim
 
 class SimpleMLP(nn.Module):
@@ -90,9 +80,9 @@ class SimpleMLP(nn.Module):
 model = SimpleMLP()
 print(model)</code></pre>
 
-      <h2>4. Browser WebGPU Training Loop</h2>
-      <p>Move the entire model to WebGPU using <code>.to("gpu")</code> and utilize async methods for non-blocking browser execution.</p>
-      <pre><code>model = SimpleMLP().to("gpu")
+            <h3>4. Browser WebGPU Training Loop</h3>
+            <p>Move the entire model to WebGPU using <code>.to("gpu")</code> and utilize async methods for non-blocking browser execution.</p>
+            <pre><code>model = SimpleMLP().to("gpu")
 optimizer = optim.SGD(model.parameters(), lr=0.05)
 criterion = nn.MSELoss()
 
@@ -111,12 +101,12 @@ for step in range(50):
     await optimizer.step_async()
     
     if step % 10 == 0:
-        print(f"Step {step} | GPU Loss: {float(loss_val):.5f}")</code></pre>
-    </main>
-  </div>
+        print(f"Step {step:02d} | GPU Loss: {float(loss_val):.5f}")</code></pre>
+        </main>
+    </div>
 
-  <footer class="site-footer">
-    &copy; 2026 AMEVA-Forge Team. Released under Apache-2.0 License.
-  </footer>
+    <footer>
+        &copy; 2026 AMEVA-Forge Team. Released under the Apache-2.0 License.
+    </footer>
 </body>
 </html>
