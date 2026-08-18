@@ -8,7 +8,7 @@ class TestMassiveCPU(unittest.IsolatedAsyncioTestCase):
     async def test_massive_add_100_million(self):
         """1억 개(100 Million) 엘리먼트 벡터 덧셈 (약 400MB + 400MB = 800MB 메모리 사용)"""
         size = 100_000_000
-        print(f"\n--- 🐘 MASSIVE CPU: {size:,} elements Addition ---")
+        print(f"\n--- [MASSIVE] CPU: {size:,} elements Addition ---")
         
         t0 = time.time()
         # 1억 개의 랜덤 float32 배열 생성 (순수 CPU 메모리)
@@ -32,7 +32,7 @@ class TestMassiveCPU(unittest.IsolatedAsyncioTestCase):
     async def test_massive_matmul_10_million(self):
         """3162 x 3162 (약 1000만 개 엘리먼트) 행렬곱. 연산량: 약 316억 번 (O(N^3))"""
         dim = 3162
-        print(f"\n--- 🐘 MASSIVE CPU: {dim}x{dim} (~10M elements) MatMul ---")
+        print(f"\n--- [MASSIVE] CPU: {dim}x{dim} (~10M elements) MatMul ---")
         
         t0 = time.time()
         a = at.random((dim, dim), device='cpu')

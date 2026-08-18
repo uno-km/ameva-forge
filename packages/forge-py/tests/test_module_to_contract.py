@@ -29,7 +29,7 @@ class NestedModel(nn.Module):
         return self.block2(self.block1(x))
 
 
-def test_module_to_gpu_replaces_registered_parameters():
+def test_module_to_gpu_preserves_registered_parameter_identities():
     model = MLP()
     previous = list(model.parameters())
     returned = model.to("gpu")
@@ -37,7 +37,7 @@ def test_module_to_gpu_replaces_registered_parameters():
     assert returned is model
     assert all(parameter.device == "gpu" for parameter in current)
     assert all(
-        old_parameter is not new_parameter
+        old_parameter is new_parameter
         for old_parameter, new_parameter in zip(previous, current)
     )
 

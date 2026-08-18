@@ -8,6 +8,11 @@ import sys
 # sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 if __name__ == '__main__':
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
     tests_dir = os.path.dirname(os.path.abspath(__file__))
     loader = unittest.TestLoader()
     suite = loader.discover(tests_dir, pattern='test_*.py')
