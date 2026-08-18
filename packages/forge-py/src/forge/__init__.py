@@ -61,7 +61,7 @@ from .ops import sum_op as sum, mean_op as mean, exp_op as exp, log_op as log
 from .ops import sigmoid, tanh_op as tanh, reshape, sum_axis
 # 신경망 구성 요소가 있는 nn 서브모듈과 관련 레이어 임포트
 from . import nn
-from .nn import BatchNorm2d, Dropout, LayerNorm, MultiheadAttention, TransformerEncoderLayer, PositionalEncoding, RNNCell, LSTMCell, RNN, LSTM, RMSNorm, RotaryEmbedding, SwiGLU
+from .nn import BatchNorm2d, Dropout, LayerNorm, MultiheadAttention, TransformerEncoderLayer, PositionalEncoding, RNNCell, LSTMCell, RNN, LSTM, RMSNorm, RotaryEmbedding, SwiGLU, ModuleList
 # 최적화 알고리즘이 있는 optim 서브모듈과 학습률 스케줄러 임포트
 from . import optim  
 from .optim import clip_grad_norm, clip_grad_value, StepLR, CosineAnnealingLR, ReduceLROnPlateau
@@ -72,6 +72,10 @@ from . import functional as F
 from .functional import batch_norm2d, scaled_dot_product_attention, rms_norm, swiglu, rope
 # 데이터 로드 유틸리티 임포트
 from .data import DataLoader
+# 고수준 AI 모델, 강화학습, 파이프라인 모듈 임포트
+from . import models
+from . import rl
+from .pipeline import pipeline
 
 # WHAT: 외부에서 `from forge import *`를 호출할 때 노출될 이름들의 리스트입니다.
 # WHY: 패키지 내부에서만 쓰이는 숨겨진(private) 모듈이나 변수가 실수로 노출되지 않도록 제어하기 위해 사용합니다.
@@ -98,6 +102,9 @@ __all__ = [
     "sum_axis",
     "nn",
     "optim",
+    "models",
+    "rl",
+    "pipeline",
     "F",
     "DataLoader",
     "ones",

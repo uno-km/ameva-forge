@@ -4308,9 +4308,10 @@ struct Params {
 @group(0) @binding(3) var<storage, read> v: array<f32>;
 @group(0) @binding(4) var<storage, read_write> o: array<f32>;
 
-// 워크그룹 공유 메모리: 쿼리 벡터(s_q), 키 벡터(s_k), 내적 트리 리덕션(s_dot)
+// 워크그룹 공유 메모리: 쿼리 벡터(s_q), 키 벡터(s_k), 밸류 벡터(s_v), 내적 트리 리덕션(s_dot)
 var<workgroup> s_q: array<f32, 256>;
 var<workgroup> s_k: array<f32, 256>;
+var<workgroup> s_v: array<f32, 256>;
 var<workgroup> s_dot: array<f32, 64>;
 
 @compute @workgroup_size(64, 1, 1)
@@ -4364,7 +4365,6 @@ fn main(
   // Causal Masking 적용 시 최대 키 인덱스 계산 (KV 캐시 오프셋 고려)
   var max_k_len: u32 = params.N_kv;
   if (params.is_causal == 1u) {
-    // 디코딩 단계에서는 전체 캐시된 KV에 대해 어텐션 가능
     let causal_limit = params.N_kv - params.N_q + q_idx + 1u;
     max_k_len = min(params.N_kv, causal_limit);
   }
@@ -4374,13 +4374,14 @@ fn main(
     let k_token_offset = k_head_offset + j * params.d;
     let v_token_offset = v_head_offset + j * params.d;
 
-    // K 벡터를 워크그룹 공유 메모리에 협력 로드 (Cooperative SRAM Cache)
+    // K, V 벡터를 워크그룹 공유 메모리에 동시 협력 로드 (단 1회 동기화)
     for (var c: u32 = thread_id; c < params.d; c = c + 64u) {
       s_k[c] = k[k_token_offset + c];
+      s_v[c] = v[v_token_offset + c];
     }
     workgroupBarrier();
 
-    // Step A: 병렬 내적 Score S_ij = scale * sum_{c} Q[c] * K[j, c] (Tree Reduction)
+    // Step A: 스레드별 부분 내적 계산 및 s_dot 기록
     var part_dot: f32 = 0.0;
     if (dim_idx0 < params.d) { part_dot = part_dot + s_q[dim_idx0] * s_k[dim_idx0]; }
     if (dim_idx1 < params.d) { part_dot = part_dot + s_q[dim_idx1] * s_k[dim_idx1]; }
@@ -4389,17 +4390,19 @@ fn main(
     s_dot[thread_id] = part_dot;
     workgroupBarrier();
 
-    if (thread_id < 32u) { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 32u]; }
+    // 2단 병렬 리덕션 (32 -> 1)
+    if (thread_id < 32u) {
+      s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 32u];
+    }
     workgroupBarrier();
-    if (thread_id < 16u) { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 16u]; }
-    workgroupBarrier();
-    if (thread_id < 8u)  { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 8u]; }
-    workgroupBarrier();
-    if (thread_id < 4u)  { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 4u]; }
-    workgroupBarrier();
-    if (thread_id < 2u)  { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 2u]; }
-    workgroupBarrier();
-    if (thread_id < 1u)  { s_dot[0] = s_dot[0] + s_dot[1]; }
+
+    if (thread_id == 0u) {
+      var total_dot: f32 = 0.0;
+      for (var r: u32 = 0u; r < 32u; r = r + 1u) {
+        total_dot = total_dot + s_dot[r];
+      }
+      s_dot[0] = total_dot;
+    }
     workgroupBarrier();
 
     let score = s_dot[0] * params.scale;
@@ -4412,18 +4415,18 @@ fn main(
     l_prev = l_prev * alpha + p;
     m_prev = m_new;
 
-    // Step C: Running Output Rescale & Value Accumulation
+    // Step C: Running Output Rescale & Value Accumulation (온칩 s_v 캐시 활용)
     if (dim_idx0 < params.d) {
-      thread_acc0 = thread_acc0 * alpha + p * v[v_token_offset + dim_idx0];
+      thread_acc0 = thread_acc0 * alpha + p * s_v[dim_idx0];
     }
     if (dim_idx1 < params.d) {
-      thread_acc1 = thread_acc1 * alpha + p * v[v_token_offset + dim_idx1];
+      thread_acc1 = thread_acc1 * alpha + p * s_v[dim_idx1];
     }
     if (dim_idx2 < params.d) {
-      thread_acc2 = thread_acc2 * alpha + p * v[v_token_offset + dim_idx2];
+      thread_acc2 = thread_acc2 * alpha + p * s_v[dim_idx2];
     }
     if (dim_idx3 < params.d) {
-      thread_acc3 = thread_acc3 * alpha + p * v[v_token_offset + dim_idx3];
+      thread_acc3 = thread_acc3 * alpha + p * s_v[dim_idx3];
     }
     workgroupBarrier();
   }
@@ -4477,17 +4480,17 @@ fn main(
   @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
   let thread_id = local_id.x;
-  let token_idx = workgroup_id.x; // 0 .. N-1
-  let head_idx = workgroup_id.y;  // 0 .. H-1
-  let batch_idx = workgroup_id.z; // 0 .. B-1
+  let flat_token_idx = workgroup_id.x + workgroup_id.y * 65535u;
+  let total_tokens = params.B * params.H * params.N;
 
-  if (token_idx >= params.N || head_idx >= params.H || batch_idx >= params.B) {
+  if (flat_token_idx >= total_tokens) {
     return;
   }
 
+  let token_idx = flat_token_idx % params.N;
   let half_d = params.d / 2u;
   let pos = f32(token_idx + params.offset_pos);
-  let tensor_offset = ((batch_idx * params.H + head_idx) * params.N + token_idx) * params.d;
+  let tensor_offset = flat_token_idx * params.d;
 
   for (var pair_idx: u32 = thread_id; pair_idx < half_d; pair_idx = pair_idx + 64u) {
     let freq_exponent = -2.0 * f32(pair_idx) / f32(params.d);
@@ -5547,15 +5550,16 @@ function rope(handleX, baseFreq = 10000.0, offsetPos = 0) {
     u32View[5] = offsetPos;
     u32View[6] = 0;
     u32View[7] = 0;
+    const totalTokens = B * H * N;
+    const { dispatchX, dispatchY } = computeDispatch2D(totalTokens);
     dispatchKernel({
         opKey: 'rope',
         wgslCode: ROPE_WGSL,
         paramsData: u32View,
         inputBuffers: [x.buffer],
         outBuffer,
-        dispatchX: N,
-        dispatchY: H,
-        dispatchZ: B,
+        dispatchX,
+        dispatchY,
     });
     return _globalRegistry.register({ buffer: outBuffer, token, shape: [B, H, N, d], dtype: "float32", byteLength });
 }
@@ -6574,9 +6578,11 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 u32view[5] = offsetPos;
                 u32view[6] = 0;
                 u32view[7] = 0;
-                dispatchX = N;
-                dispatchY = H;
-                dispatchZ = B;
+                const totalTokens = B * H * N;
+                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(totalTokens);
+                dispatchX = dx;
+                dispatchY = dy;
+                dispatchZ = 1;
                 device.queue.writeBuffer(paramsBuffer, 0, u32view);
             }
             else if (inst.op === 'rmsnorm') {

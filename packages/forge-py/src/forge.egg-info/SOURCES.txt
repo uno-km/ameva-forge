@@ -14,6 +14,7 @@ src/forge/nn.pyi
 src/forge/ops.py
 src/forge/optim.py
 src/forge/optim.pyi
+src/forge/pipeline.py
 src/forge/py.typed
 src/forge/serialization.py
 src/forge/tensor.py
@@ -25,6 +26,11 @@ src/forge.egg-info/requires.txt
 src/forge.egg-info/top_level.txt
 src/forge/generated/__init__.py
 src/forge/generated/op_schema.py
+src/forge/models/__init__.py
+src/forge/models/llama.py
+src/forge/models/nanogpt.py
+src/forge/rl/__init__.py
+src/forge/rl/cartpole.py
 tests/test_activation_functions.py
 tests/test_arithmetic_ops.py
 tests/test_autograd.py
@@ -42,6 +48,7 @@ tests/test_finite_difference.py
 tests/test_generated_schema.py
 tests/test_gpu_sgd_contract.py
 tests/test_graph_monster.py
+tests/test_hub_models_and_rl.py
 tests/test_loss_functions.py
 tests/test_machine_gun.py
 tests/test_massive_cpu.py
@@ -53,7 +60,7 @@ tests/test_ops_slice.py
 tests/test_optimizer_versioning_contract.py
 tests/test_optimizers.py
 tests/test_reduction_ops.py
-tests/test_run_all.py
+tests/test_release2_llm_modules.py
 tests/test_security.py
 tests/test_shape_ops.py
 tests/test_stress.py

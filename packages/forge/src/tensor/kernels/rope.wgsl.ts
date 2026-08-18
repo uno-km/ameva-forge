@@ -30,17 +30,17 @@ fn main(
   @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
   let thread_id = local_id.x;
-  let token_idx = workgroup_id.x; // 0 .. N-1
-  let head_idx = workgroup_id.y;  // 0 .. H-1
-  let batch_idx = workgroup_id.z; // 0 .. B-1
+  let flat_token_idx = workgroup_id.x + workgroup_id.y * 65535u;
+  let total_tokens = params.B * params.H * params.N;
 
-  if (token_idx >= params.N || head_idx >= params.H || batch_idx >= params.B) {
+  if (flat_token_idx >= total_tokens) {
     return;
   }
 
+  let token_idx = flat_token_idx % params.N;
   let half_d = params.d / 2u;
   let pos = f32(token_idx + params.offset_pos);
-  let tensor_offset = ((batch_idx * params.H + head_idx) * params.N + token_idx) * params.d;
+  let tensor_offset = flat_token_idx * params.d;
 
   for (var pair_idx: u32 = thread_id; pair_idx < half_d; pair_idx = pair_idx + 64u) {
     let freq_exponent = -2.0 * f32(pair_idx) / f32(params.d);

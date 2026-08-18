@@ -48,3 +48,47 @@ class TestRelease2LLMModules:
         out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
         assert out.shape == (B, H, N, d)
         assert np.all(np.isfinite(out.numpy()))
+
+    def test_gpu_rmsnorm_lazy_dag(self):
+        x = forge.tensor(np.random.randn(2, 10, 64).astype(np.float32), device='gpu')
+        w = forge.tensor(np.ones(64, dtype=np.float32), device='gpu')
+        out = F.rms_norm(x, w, eps=1e-5)
+        
+        assert out.device == 'gpu'
+        assert out.shape == (2, 10, 64)
+        assert out._lazy_op == 'rmsnorm'
+        assert len(out._parents) == 2
+        assert out._lazy_params == [1e-5]
+
+    def test_gpu_rope_lazy_dag(self):
+        x = forge.tensor(np.random.randn(2, 4, 16, 64).astype(np.float32), device='gpu')
+        out = F.rope(x, base_freq=10000.0, offset_pos=4)
+        
+        assert out.device == 'gpu'
+        assert out.shape == (2, 4, 16, 64)
+        assert out._lazy_op == 'rope'
+        assert len(out._parents) == 1
+        assert out._lazy_params == [10000.0, 4.0]
+
+    def test_gpu_swiglu_lazy_dag(self):
+        gate = forge.tensor(np.random.randn(4, 128).astype(np.float32), device='gpu')
+        up = forge.tensor(np.random.randn(4, 128).astype(np.float32), device='gpu')
+        out = F.swiglu(gate, up)
+        
+        assert out.device == 'gpu'
+        assert out.shape == (4, 128)
+        assert out._lazy_op == 'swiglu'
+        assert len(out._parents) == 2
+
+    def test_gpu_sdpa_lazy_dag(self):
+        B, H, N, d = 2, 4, 8, 32
+        q = forge.tensor(np.random.randn(B, H, N, d).astype(np.float32), device='gpu')
+        k = forge.tensor(np.random.randn(B, H, N, d).astype(np.float32), device='gpu')
+        v = forge.tensor(np.random.randn(B, H, N, d).astype(np.float32), device='gpu')
+        
+        out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        assert out.device == 'gpu'
+        assert out.shape == (B, H, N, d)
+        assert out._lazy_op == 'flash_attention'
+        assert len(out._parents) == 3
+        assert out._lazy_params[2] == 1.0  # is_causal flag

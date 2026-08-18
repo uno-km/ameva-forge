@@ -1133,9 +1133,11 @@ async function _executeGraphCore(
         u32view[6] = 0;
         u32view[7] = 0;
 
-        dispatchX = N;
-        dispatchY = H;
-        dispatchZ = B;
+        const totalTokens = B * H * N;
+        const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(totalTokens);
+        dispatchX = dx;
+        dispatchY = dy;
+        dispatchZ = 1;
         device.queue.writeBuffer(paramsBuffer, 0, u32view);
       } else if (inst.op === 'rmsnorm') {
         wgslCode = RMSNORM_WGSL;

@@ -164,6 +164,7 @@ describe('SCRUM-209 ~ SCRUM-213: FlashAttention-2 Architectural & Numerical Cont
       expect(FLASH_ATTENTION_WGSL).toContain('if (params.is_causal == 1u)');
       expect(FLASH_ATTENTION_WGSL).toContain('causal_limit = params.N_kv - params.N_q + q_idx + 1u;');
       expect(FLASH_ATTENTION_WGSL).toContain('var<workgroup> s_k: array<f32, 256>;');
+      expect(FLASH_ATTENTION_WGSL).toContain('var<workgroup> s_v: array<f32, 256>;');
       expect(FLASH_ATTENTION_WGSL).toContain('var<workgroup> s_dot: array<f32, 64>;');
     });
 

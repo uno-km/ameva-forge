@@ -41,6 +41,24 @@ def is_pyodide() -> bool:
     return sys.platform == 'emscripten'
 
 
+def is_webgpu_available() -> bool:
+    """
+    [WHAT] 
+    현재 런타임 환경에서 WebGPU FFI 브릿지를 사용할 수 있는지 검사합니다.
+    
+    [WHY]
+    Python 프론트엔드에서 GPU 연산 그래프를 브릿지로 발행하기 전에 WebGPU 런타임 가용성을 확인하기 위함입니다.
+    
+    [HOW]
+    Pyodide 환경 및 CPython FFI 모의 브릿지에서 globalThis.amevaForge 가용성을 검사합니다.
+    """
+    try:
+        import js
+        return hasattr(js.globalThis, 'amevaForge')
+    except (ImportError, Exception):
+        return False
+
+
 def get_js_core() -> Any:
     """
     [WHAT] 

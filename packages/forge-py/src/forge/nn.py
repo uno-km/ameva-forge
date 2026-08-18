@@ -348,6 +348,34 @@ class Sequential(Module):
         return len(self._modules)
 
 
+class ModuleList(Module):
+    """
+    Holds submodules in a list.
+    """
+    def __init__(self, modules=None):
+        super().__init__()
+        if modules is not None:
+            for i, module in enumerate(modules):
+                self._modules[str(i)] = module
+
+    def append(self, module):
+        self._modules[str(len(self._modules))] = module
+        return self
+
+    def __getitem__(self, idx):
+        if isinstance(idx, slice):
+            return list(self._modules.values())[idx]
+        if idx < 0:
+            idx += len(self._modules)
+        return self._modules[str(idx)]
+
+    def __len__(self):
+        return len(self._modules)
+
+    def __iter__(self):
+        return iter(self._modules.values())
+
+
 class MSELoss(Module):
     """
     Mean Squared Error loss module.

@@ -1039,15 +1039,17 @@ export function rope(handleX: TensorHandle, baseFreq = 10000.0, offsetPos = 0): 
   u32View[6] = 0;
   u32View[7] = 0;
 
+  const totalTokens = B * H * N;
+  const { dispatchX, dispatchY } = computeDispatch2D(totalTokens);
+
   dispatchKernel({
     opKey: 'rope',
     wgslCode: ROPE_WGSL,
     paramsData: u32View,
     inputBuffers: [x.buffer],
     outBuffer,
-    dispatchX: N,
-    dispatchY: H,
-    dispatchZ: B,
+    dispatchX,
+    dispatchY,
   });
 
   return _globalRegistry.register({ buffer: outBuffer, token, shape: [B, H, N, d], dtype: "float32", byteLength });

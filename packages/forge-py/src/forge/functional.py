@@ -503,35 +503,35 @@ def layer_norm(x, normalized_shape, weight=None, bias=None, eps=1e-5):
         
     return out
 
-def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, training=False):
+def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, training=False):
     """
     무엇을: 스케일드 닷 프로덕트 어텐션(Scaled Dot-Product Attention)을 계산한다.
     왜: 트랜스포머 구조에서 토큰 간의 연관성(Attention weight)을 구하고 정보를 집계하기 위함이다.
     어떻게: Q와 K의 전치를 내적하고 스케일링한 후, Softmax를 통과시켜 V와 가중합을 계산한다.
     """
-    from .ops import bmm, transpose, div, full, reshape, dropout
+    from .ops import bmm, transpose, div, full, reshape, dropout, permute, matmul, add, mul
     import math
     
     orig_shape = query.shape
-    if len(orig_shape) == 4 and query.device == 'gpu' and hasattr(query, '_handle') and query._handle is not None and dropout_p == 0.0 and attn_mask is None:
-        from .bridge import is_webgpu_available
-        if is_webgpu_available():
-            from .graph import trace_or_execute
-            B, H, N_q, d = query.shape
-            H_kv = key.shape[1]
-            scale = 1.0 / math.sqrt(d)
-            return trace_or_execute(
-                'flash_attention',
-                [query, key, value],
-                query.shape,
-                params=[float(H_kv), float(scale), 1.0 if is_causal else 0.0]
-            )
+    d_k = orig_shape[-1]
+    effective_scale = scale if scale is not None else (1.0 / math.sqrt(d_k))
+    
+    if len(orig_shape) == 4 and query.device == 'gpu' and key.device == 'gpu' and value.device == 'gpu' and dropout_p == 0.0 and attn_mask is None:
+        from .tensor import Tensor
+        B, H, N_q, d = query.shape
+        H_kv = key.shape[1]
+        return Tensor(
+            shape=query.shape,
+            dtype=query.dtype,
+            device='gpu',
+            op='flash_attention',
+            parents=(query, key, value),
+            op_params=[float(H_kv), float(effective_scale), 1.0 if is_causal else 0.0],
+            requires_grad=query.requires_grad or key.requires_grad or value.requires_grad
+        )
             
     if len(orig_shape) == 4:
         B, H, L, D = orig_shape
-        # 무엇을: 배치와 헤드 차원을 하나로 합친다.
-        # 왜: bmm(Batch Matrix Multiplication)을 3차원 텐서에 대해 쉽게 적용하기 위함이다.
-        # 어떻게: reshape 연산을 통해 (B*H, L, D) 형태로 변환한다.
         query = reshape(query, (B * H, L, D))
         key = reshape(key, (B * H, key.shape[2], D))
         value = reshape(value, (B * H, value.shape[2], value.shape[3]))
@@ -540,15 +540,8 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     query_t = query
     key_t = permute(key, (0, 2, 1)) if len(key.shape) == 3 else permute(key, (0, 1, 3, 2))
     
-    # 무엇을: Q와 K^T의 내적을 통해 어텐션 스코어를 구한다.
-    # 왜: 토큰 간의 유사도를 측정하기 위함이다.
-    # 어떻게: 차원에 따라 bmm 또는 matmul을 사용한다.
     scores = bmm(query_t, key_t) if len(query_t.shape) == 3 else matmul(query_t, key_t)
-    
-    # 무엇을: 스코어를 sqrt(d_k)로 나눈다.
-    # 왜: 차원이 클수록 내적값이 커져 Softmax 기울기가 소실되는 것을 방지하기 위한 스케일링 작업이다.
-    # 어떻게: full 텐서를 만들고 div 연산을 적용한다.
-    scores = div(scores, full(scores.shape, math.sqrt(d_k), device=query.device))
+    scores = mul(scores, full(scores.shape, effective_scale, device=query.device))
     
     if is_causal:
         from .ops import tensor
@@ -567,9 +560,6 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     out = bmm(attn, value)
     
     if len(orig_shape) == 4:
-        # 무엇을: 출력 형태를 원래의 4차원으로 복구한다.
-        # 왜: 다중 헤드 어텐션(Multi-Head Attention)의 다음 단계 처리를 위해 형태를 맞춰주기 위함이다.
-        # 어떻게: 저장해둔 orig_shape로 reshape한다.
         out = reshape(out, orig_shape)
         
     return out
@@ -581,11 +571,11 @@ def rms_norm(x, weight=None, eps=1e-5):
     어떻게: x / sqrt(mean(x^2) + eps) * weight
     """
     if x.device == 'gpu':
-        from .bridge import is_webgpu_available
-        if is_webgpu_available():
-            from .graph import trace_or_execute
-            inputs = [x] if weight is None else [x, weight]
-            return trace_or_execute('rmsnorm', inputs, x.shape, params=[float(eps)])
+        from .tensor import Tensor
+        parents = (x,) if weight is None else (x, weight)
+        return Tensor(shape=x.shape, dtype=x.dtype, device='gpu',
+                      op='rmsnorm', parents=parents, op_params=[float(eps)],
+                      requires_grad=x.requires_grad or (weight.requires_grad if weight is not None else False))
     
     # CPU Reference Math
     from .ops import tensor
@@ -604,11 +594,11 @@ def swiglu(gate, up):
     왜: LLaMA 및 Gemma 등의 최신 FFN 아키텍처 비선형성을 효율적으로 제공하기 위함이다.
     어떻게: (gate * sigmoid(gate)) * up
     """
-    if gate.device == 'gpu':
-        from .bridge import is_webgpu_available
-        if is_webgpu_available():
-            from .graph import trace_or_execute
-            return trace_or_execute('swiglu', [gate, up], gate.shape)
+    if gate.device == 'gpu' and up.device == 'gpu':
+        from .tensor import Tensor
+        return Tensor(shape=gate.shape, dtype=gate.dtype, device='gpu',
+                      op='swiglu', parents=(gate, up),
+                      requires_grad=gate.requires_grad or up.requires_grad)
             
     # CPU Reference Math
     from .ops import tensor
@@ -616,7 +606,7 @@ def swiglu(gate, up):
     u_data = up.numpy()
     swish_g = g_data / (1.0 + np.exp(-g_data))
     out_np = swish_g * u_data
-    return tensor(out_np, device=gate.device, dtype=gate.dtype, requires_grad=gate.requires_grad)
+    return tensor(out_np, device=gate.device, dtype=gate.dtype, requires_grad=gate.requires_grad or up.requires_grad)
 
 def rope(x, base_freq=10000.0, offset_pos=0):
     """
@@ -624,10 +614,10 @@ def rope(x, base_freq=10000.0, offset_pos=0):
     왜: 토큰 위치 정보를 Query와 Key 벡터에 인플레이스로 주입하기 위함이다.
     """
     if x.device == 'gpu':
-        from .bridge import is_webgpu_available
-        if is_webgpu_available():
-            from .graph import trace_or_execute
-            return trace_or_execute('rope', [x], x.shape, params=[float(base_freq), float(offset_pos)])
+        from .tensor import Tensor
+        return Tensor(shape=x.shape, dtype=x.dtype, device='gpu',
+                      op='rope', parents=(x,), op_params=[float(base_freq), float(offset_pos)],
+                      requires_grad=x.requires_grad)
     
     # CPU Reference Math
     from .ops import tensor
