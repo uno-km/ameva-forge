@@ -1202,3 +1202,57 @@ class LSTM(Module):
             out = permute(out, (1, 0, 2))
             
         return out, (h, c)
+
+class RMSNorm(Module):
+    """
+    Root Mean Square Layer Normalization (RMSNorm).
+    LLaMA, Gemma, Mistral 등 현대 LLM 표준 정규화 모듈입니다.
+    """
+    def __init__(self, normalized_shape, eps=1e-5, elementwise_affine=True):
+        super().__init__()
+        if isinstance(normalized_shape, int):
+            normalized_shape = (normalized_shape,)
+        self.normalized_shape = tuple(normalized_shape)
+        self.eps = eps
+        self.elementwise_affine = elementwise_affine
+        
+        if self.elementwise_affine:
+            from .ops import ones
+            self.weight = ones(self.normalized_shape, requires_grad=True)
+        else:
+            self.weight = None
+            
+    def forward(self, x):
+        from .functional import rms_norm
+        return rms_norm(x, weight=self.weight, eps=self.eps)
+
+class RotaryEmbedding(Module):
+    """
+    Rotary Position Embedding (RoPE) 모듈입니다.
+    """
+    def __init__(self, dim, base_freq=10000.0):
+        super().__init__()
+        self.dim = dim
+        self.base_freq = base_freq
+        
+    def forward(self, x, offset_pos=0):
+        from .functional import rope
+        return rope(x, base_freq=self.base_freq, offset_pos=offset_pos)
+
+class SwiGLU(Module):
+    """
+    Swish Gated Linear Unit (SwiGLU) Fused Feed-Forward Network Block.
+    """
+    def __init__(self, in_features, hidden_features):
+        super().__init__()
+        self.gate_proj = Linear(in_features, hidden_features, bias=False)
+        self.up_proj = Linear(in_features, hidden_features, bias=False)
+        self.down_proj = Linear(hidden_features, in_features, bias=False)
+        
+    def forward(self, x):
+        from .functional import swiglu
+        g = self.gate_proj(x)
+        u = self.up_proj(x)
+        act = swiglu(g, u)
+        return self.down_proj(act)
+

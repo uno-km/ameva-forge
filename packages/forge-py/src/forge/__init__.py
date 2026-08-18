@@ -61,7 +61,7 @@ from .ops import sum_op as sum, mean_op as mean, exp_op as exp, log_op as log
 from .ops import sigmoid, tanh_op as tanh, reshape, sum_axis
 # 신경망 구성 요소가 있는 nn 서브모듈과 관련 레이어 임포트
 from . import nn
-from .nn import BatchNorm2d, Dropout, LayerNorm, MultiheadAttention, TransformerEncoderLayer, PositionalEncoding, RNNCell, LSTMCell, RNN, LSTM
+from .nn import BatchNorm2d, Dropout, LayerNorm, MultiheadAttention, TransformerEncoderLayer, PositionalEncoding, RNNCell, LSTMCell, RNN, LSTM, RMSNorm, RotaryEmbedding, SwiGLU
 # 최적화 알고리즘이 있는 optim 서브모듈과 학습률 스케줄러 임포트
 from . import optim  
 from .optim import clip_grad_norm, clip_grad_value, StepLR, CosineAnnealingLR, ReduceLROnPlateau
@@ -69,7 +69,7 @@ from .optim import clip_grad_norm, clip_grad_value, StepLR, CosineAnnealingLR, R
 from .serialization import save_model, load_model
 # 함수형 API 묶음 임포트
 from . import functional as F
-from .functional import batch_norm2d
+from .functional import batch_norm2d, scaled_dot_product_attention, rms_norm, swiglu, rope
 # 데이터 로드 유틸리티 임포트
 from .data import DataLoader
 
@@ -108,6 +108,9 @@ __all__ = [
     "BatchNorm2d",
     "Dropout",
     "LayerNorm",
+    "RMSNorm",
+    "RotaryEmbedding",
+    "SwiGLU",
     "MultiheadAttention",
     "TransformerEncoderLayer",
     "PositionalEncoding",
@@ -116,6 +119,10 @@ __all__ = [
     "RNN",
     "LSTM",
     "batch_norm2d",
+    "scaled_dot_product_attention",
+    "rms_norm",
+    "swiglu",
+    "rope",
     "dropout",
     "bmm",
     # 연산

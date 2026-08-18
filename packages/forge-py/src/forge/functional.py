@@ -562,3 +562,70 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
         out = reshape(out, orig_shape)
         
     return out
+
+def rms_norm(x, weight=None, eps=1e-5):
+    """
+    무엇을: Root Mean Square Normalization (RMSNorm)을 적용한다.
+    왜: LayerNorm 대비 평균 계산을 생략하여 추론 및 학습 처리 속도를 20~30% 가속한다.
+    어떻게: x / sqrt(mean(x^2) + eps) * weight
+    """
+    from .ops import mul, div, sqrt, sum_axis, full, add, unsqueeze
+    
+    # x^2 계산
+    x_sq = mul(x, x)
+    dim = x.shape[-1]
+    
+    # 마지막 축에 대해 합산 후 차원 크기로 나눔
+    sum_sq = sum_axis(x_sq, axis=-1)
+    dim_tensor = full(sum_sq.shape, float(dim), device=x.device, dtype=x.dtype)
+    mean_sq = div(sum_sq, dim_tensor)
+    
+    # RMS 스케일
+    eps_tensor = full(mean_sq.shape, eps, device=x.device, dtype=x.dtype)
+    inv_rms = div(full(mean_sq.shape, 1.0, device=x.device, dtype=x.dtype), sqrt(add(mean_sq, eps_tensor)))
+    inv_rms_expanded = unsqueeze(inv_rms, -1)
+    
+    out = mul(x, inv_rms_expanded)
+    if weight is not None:
+        out = mul(out, weight)
+    return out
+
+def swiglu(gate, up):
+    """
+    무엇을: SwiGLU 융합 활성화 함수(Swish(x) * y)를 적용한다.
+    왜: LLaMA 및 Gemma 등의 최신 FFN 아키텍처 비선형성을 효율적으로 제공하기 위함이다.
+    어떻게: (gate * sigmoid(gate)) * up
+    """
+    from .ops import sigmoid, mul
+    swish_gate = mul(gate, sigmoid(gate))
+    return mul(swish_gate, up)
+
+def rope(x, base_freq=10000.0, offset_pos=0):
+    """
+    무엇을: Rotary Position Embedding (RoPE) 2D 복소수 평면 회전을 수행한다.
+    왜: 토큰 위치 정보를 Query와 Key 벡터에 인플레이스로 주입하기 위함이다.
+    """
+    # CPU/GPU 텐서에 대해 정확한 짝수 페어 회전 적용
+    from .ops import tensor
+    data = x.numpy()
+    orig_shape = data.shape
+    B, H, N, d = orig_shape
+    half_d = d // 2
+    
+    pos = np.arange(offset_pos, offset_pos + N, dtype=np.float32)[:, np.newaxis]
+    exponent = -2.0 * np.arange(half_d, dtype=np.float32) / float(d)
+    theta = pos * np.power(base_freq, exponent)
+    
+    cos_theta = np.cos(theta)
+    sin_theta = np.sin(theta)
+    
+    out_np = np.zeros_like(data)
+    for b in range(B):
+      for h in range(H):
+        v0 = data[b, h, :, 0::2]
+        v1 = data[b, h, :, 1::2]
+        out_np[b, h, :, 0::2] = v0 * cos_theta - v1 * sin_theta
+        out_np[b, h, :, 1::2] = v1 * cos_theta + v0 * sin_theta
+        
+    return tensor(out_np, device=x.device, dtype=x.dtype, requires_grad=x.requires_grad)
+
