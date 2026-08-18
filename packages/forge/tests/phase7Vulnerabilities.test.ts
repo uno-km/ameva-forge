@@ -226,8 +226,9 @@ describe("Phase 7 Deep Vulnerabilities Unit Test Suite (SCRUM-153 ~ SCRUM-164)",
       // Verify writeBuffer was called with 112-byte paramsData (28 uint32 elements)
       const writeCalls = mockDevice.queue.writeBuffer.mock.calls;
       const lastCall = writeCalls[writeCalls.length - 1];
-      const paramsArray = lastCall[2];
-      expect(paramsArray.byteLength).toBe(112);
+      const paramsArrayBuffer = lastCall[2];
+      expect(paramsArrayBuffer.byteLength).toBe(112);
+      const paramsArray = new Uint32Array(paramsArrayBuffer);
       expect(paramsArray.length).toBe(28);
       expect(paramsArray[0]).toBe(6); // numElements = 2 * 3
       expect(paramsArray[2]).toBe(2); // rank = 2

@@ -73,6 +73,19 @@ import { PERMUTE_WGSL } from "./kernels/permute.wgsl";
 import { BATCHED_MATMUL_WGSL } from "./kernels/batched_matmul.wgsl";
 import { MATMUL_BIAS_RELU_WGSL } from "./kernels/matmul_bias_relu.wgsl";
 
+// WebGPU Buffer Usage bitmasks with Node.js environment fallback
+const BUFFER_USAGE_STORAGE_SRC = typeof GPUBufferUsage !== 'undefined'
+  ? (GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC)
+  : (0x0080 | 0x0004);
+
+const BUFFER_USAGE_STORAGE_COPY = typeof GPUBufferUsage !== 'undefined'
+  ? (GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST)
+  : (0x0080 | 0x0004 | 0x0008);
+
+const BUFFER_USAGE_UNIFORM_COPY = typeof GPUBufferUsage !== 'undefined'
+  ? (GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST)
+  : (0x0040 | 0x0008);
+
 /**
  * WHAT: 모든 WGSL 셰이더 코드를 커널 이름에 매핑하여 저장하는 전역 읽기 전용 레지스트리 맵입니다.
  * WHY: 런타임에 셰이더 코드를 이름으로 조회하고 파이프라인 캐시 초기화 시 한 번에 반영하기 위해 존재합니다.
@@ -470,7 +483,7 @@ function dispatchKernel(opts: KernelDispatchOptions): void {
    */
   const { buffer: paramsBuffer, token: paramsToken } = allocateBuffer(
     Math.max(16, opts.paramsData.byteLength), // 최소 16바이트 (WebGPU uniform 정렬)
-    GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    BUFFER_USAGE_UNIFORM_COPY,
     'uniform',
     `dispatchKernel_${opts.opKey}`
   );
@@ -581,7 +594,7 @@ export function random(shape: number[], dtype: DType = "float32"): TensorHandle 
    */
   const { buffer, token } = allocateBuffer(
     byteLength,
-    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+    BUFFER_USAGE_STORAGE_COPY
   );
   writeFloat32Array(buffer, data);
   return _globalRegistry.register({ buffer, token, shape, dtype, byteLength });
@@ -633,7 +646,7 @@ export function uploadFloat32Array(data: any, shape: number[]): TensorHandle {
   const byteLength = elements * 4;
   const { buffer, token } = allocateBuffer(
     byteLength,
-    GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
+    BUFFER_USAGE_STORAGE_COPY
   );
   writeFloat32Array(buffer, actualData);
   if (bufProxy) bufProxy.release();
@@ -679,7 +692,7 @@ export function matmul(handleA: TensorHandle, handleB: TensorHandle): TensorHand
    * HOW: 행 크기(M)와 열 크기(N)를 곱한 값에 float32 크기인 4를 곱합니다.
    */
   const byteLength = M * N * 4;
-  const { buffer: cBuffer, token } = allocateBuffer(byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const { buffer: cBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_SRC);
 
   dispatchKernel({
     opKey: 'matmul',
@@ -715,7 +728,7 @@ export function relu(handle: TensorHandle): TensorHandle {
    * HOW: 총 바이트 길이를 4로 나누어 구합니다.
    */
   const numElements = x.byteLength / 4;
-  const { buffer: outBuffer, token } = allocateBuffer(x.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const { buffer: outBuffer, token } = allocateBuffer(x.byteLength, BUFFER_USAGE_STORAGE_SRC);
   const dispatch = computeDispatch2D(numElements, 64);
 
   dispatchKernel({
@@ -745,7 +758,7 @@ export function add(handleA: TensorHandle, handleB: TensorHandle): TensorHandle 
     throw new AMEVAForgeDTypeError("Add requires float32");
 
   const numElements = a.byteLength / 4;
-  const { buffer: outBuffer, token } = allocateBuffer(a.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const { buffer: outBuffer, token } = allocateBuffer(a.byteLength, BUFFER_USAGE_STORAGE_SRC);
 
   const { dOut, effSA, effSB } = computeBroadcastParams(a.shape, a.shape, b.shape);
   const dispatch = computeDispatch2D(numElements, 64);
@@ -785,7 +798,7 @@ export function mul(handleA: TensorHandle, handleB: TensorHandle): TensorHandle 
     throw new AMEVAForgeDTypeError("Mul requires float32");
 
   const numElements = a.byteLength / 4;
-  const { buffer: outBuffer, token } = allocateBuffer(a.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const { buffer: outBuffer, token } = allocateBuffer(a.byteLength, BUFFER_USAGE_STORAGE_SRC);
 
   const { dOut, effSA, effSB } = computeBroadcastParams(a.shape, a.shape, b.shape);
   const dispatch = computeDispatch2D(numElements, 64);
@@ -824,7 +837,7 @@ export function transpose(handle: TensorHandle): TensorHandle {
     throw new AMEVAForgeDTypeError("Transpose requires float32");
 
   const M = x.shape[0], N = x.shape[1];
-  const { buffer: outBuffer, token } = allocateBuffer(x.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const { buffer: outBuffer, token } = allocateBuffer(x.byteLength, BUFFER_USAGE_STORAGE_SRC);
 
   dispatchKernel({
     opKey: 'transpose',
@@ -851,7 +864,7 @@ export function relu_backward(handleX: TensorHandle, handleGrad: TensorHandle): 
     throw new AMEVAForgeShapeError("ReLU backward: shape mismatch");
 
   const numElements = x.byteLength / 4;
-  const { buffer: outBuffer, token } = allocateBuffer(x.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const { buffer: outBuffer, token } = allocateBuffer(x.byteLength, BUFFER_USAGE_STORAGE_SRC);
   const dispatch = computeDispatch2D(numElements, 64);
 
   dispatchKernel({

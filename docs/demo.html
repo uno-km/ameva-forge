@@ -37,7 +37,7 @@
                 <li><a href="quickstart.html" data-i18n="common.nav.quickstart">Quickstart</a></li>
                 <li><a href="api-reference.html" data-i18n="common.nav.apiReference">API Reference</a></li>
             </ul>
-            <h3>Concepts</h3>
+            <h3 data-i18n="common.nav.concepts">Concepts</h3>
             <ul>
                 <li><a href="what-is-forge.html" data-i18n="common.nav.whatIsForge">What is Forge?</a></li>
                 <li><a href="forge-vs-pytorch.html" data-i18n="common.nav.forgeVsPytorch">Forge vs PyTorch</a></li>
@@ -69,7 +69,7 @@
                     <h4 data-i18n="demo.editorTitle">Python Execution Script (Pyodide WebGPU)</h4>
                     <textarea id="pythonEditor" class="editor-textarea" spellcheck="false"></textarea>
                     <div style="margin-top: 10px; display: flex; gap: 8px;">
-                        <button id="btnRun" class="classic-btn" data-i18n="demo.btnRun">▶ Run Experiment</button>
+                        <button id="btnRun" class="classic-btn" disabled data-i18n="demo.btnRun">▶ Run Experiment</button>
                         <button id="btnReset" class="classic-btn-secondary" data-i18n="demo.btnReset">↺ Reset Code</button>
                     </div>
                 </div>
@@ -81,6 +81,9 @@
                     <div id="consoleOutput" class="log-box" data-i18n="demo.initLog">Initializing Python 3.11 & WebGPU runtime...</div>
                 </div>
             </div>
+
+            <!-- Dynamic Technical & Mathematical Deep-Dive Zone -->
+            <div id="presetExplanationZone" class="explanation-zone"></div>
 
             <h3 data-i18n="demo.archTitle">Technical Execution Architecture</h3>
             <ul>
@@ -138,7 +141,7 @@ for epoch in range(1, 31):
     if epoch % 5 == 0 or epoch == 1:
         print(f"Epoch {epoch:02d}/30 | GPU Loss: {loss_val:.5f}")
 
-print("Training finished! Final loss:", losses[-1])
+print("Training Complete! Final Loss:", losses[-1])
 
 # Clean up memory
 del model, optimizer, inputs, targets, preds, loss
@@ -236,6 +239,53 @@ import gc; gc.collect()
 
         editor.value = PRESETS.mlp;
 
+        function renderPresetExplanation() {
+            const expZone = document.getElementById('presetExplanationZone');
+            if (!expZone) return;
+            const presetKey = presetSelect.value || 'mlp';
+            
+            let exp = null;
+            if (window.forgeI18n) {
+                const currentLang = window.forgeI18n.currentLanguage || 'en';
+                const trans = window.forgeI18n.translations[currentLang] || window.forgeI18n.translations['en'];
+                if (trans && trans.demo && trans.demo.presetExplanations) {
+                    exp = trans.demo.presetExplanations[presetKey];
+                }
+            }
+            if (!exp && window.__FORGE_I18N_PENDING_TRANSLATIONS__) {
+                exp = window.__FORGE_I18N_PENDING_TRANSLATIONS__['en']?.demo?.presetExplanations?.[presetKey];
+            }
+            if (!exp) return;
+
+            expZone.innerHTML = `
+                <div class="explanation-header">
+                    <h3>${exp.title}</h3>
+                    <span class="explanation-badge">${exp.badge}</span>
+                </div>
+                <div class="explanation-summary">
+                    ${exp.summary}
+                </div>
+                <div class="explanation-grid">
+                    <div class="explanation-card">
+                        <h4>${exp.sec1Title}</h4>
+                        ${exp.sec1Content}
+                    </div>
+                    <div class="explanation-card">
+                        <h4>${exp.sec2Title}</h4>
+                        ${exp.sec2Content}
+                    </div>
+                </div>
+                <div class="explanation-card-full">
+                    <h4>${exp.sec3Title}</h4>
+                    ${exp.sec3Content}
+                </div>
+                <div class="explanation-experiment-guide">
+                    <h4>${exp.sec4Title}</h4>
+                    ${exp.sec4Content}
+                </div>
+            `;
+        }
+
         function resetCanvasAndMetrics() {
             ctx.clearRect(0, 0, lossCanvas.width, lossCanvas.height);
             metricLoss.textContent = '--';
@@ -248,14 +298,18 @@ import gc; gc.collect()
         presetSelect.addEventListener('change', (e) => {
             editor.value = PRESETS[e.target.value] || PRESETS.mlp;
             resetCanvasAndMetrics();
+            renderPresetExplanation();
             consoleOut.textContent = `Preset switched to: ${presetSelect.options[presetSelect.selectedIndex].text}`;
         });
 
         btnReset.addEventListener('click', () => {
             editor.value = PRESETS[presetSelect.value] || PRESETS.mlp;
             resetCanvasAndMetrics();
+            renderPresetExplanation();
             consoleOut.textContent = `Code reset to default preset.`;
         });
+
+        window.addEventListener('i18n:languageChanged', renderPresetExplanation);
 
         function log(msg) {
             consoleOut.textContent += msg + '\n';
@@ -461,6 +515,7 @@ import forge as torch
 print(f"[Ready] forge v0.1.0 ready on Pyodide. WebGPU bridge active.")
 `);
                 log('[Ready] Studio initialized. Click "▶ Run Experiment" to start!');
+                btnRun.disabled = false;
             } catch (err) {
                 log('[Pyodide Error] ' + err.message);
                 console.error(err);
@@ -471,6 +526,10 @@ print(f"[Ready] forge v0.1.0 ready on Pyodide. WebGPU bridge active.")
             if (!pyodideInstance) {
                 log('[Error] Pyodide runtime is still initializing. Please wait...');
                 return;
+            }
+
+            if (window.forge && typeof window.forge.init === 'function') {
+                try { await window.forge.init(); } catch (e) {}
             }
 
             btnRun.disabled = true;
@@ -512,7 +571,10 @@ print(f"[Ready] forge v0.1.0 ready on Pyodide. WebGPU bridge active.")
             }
         });
 
-        window.addEventListener('DOMContentLoaded', initEnvironment);
+        window.addEventListener('DOMContentLoaded', () => {
+            renderPresetExplanation();
+            initEnvironment();
+        });
     </script>
 </body>
 </html>

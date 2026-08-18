@@ -1,11 +1,25 @@
 import { _stagingPool, acquireStagingBuffer, releaseStagingBuffer, clearStagingPool } from '../src/webgpu/buffers';
 import { _globalUniformPool } from '../src/webgpu/uniformPool';
-import { _resetDeviceForTesting } from '../src/webgpu/device';
+import { _setDeviceForTesting } from '../src/webgpu/device';
 
 describe('Staging & Uniform Buffer Pooling Resilience', () => {
+  const mockDevice: any = {
+    createBuffer: jest.fn(() => ({ destroy: jest.fn() })),
+    queue: {
+      writeBuffer: jest.fn(),
+      submit: jest.fn(),
+      onSubmittedWorkDone: jest.fn().mockResolvedValue(undefined),
+    },
+  };
+
   beforeEach(() => {
+    _setDeviceForTesting(mockDevice);
     clearStagingPool();
     _globalUniformPool.clear();
+  });
+
+  afterAll(() => {
+    _setDeviceForTesting(null);
   });
 
   it('reuses staging buffers within pool limit instead of creating new GPUBuffer instances', () => {

@@ -24,7 +24,7 @@
     "build": "rollup -c rollup.config.mjs",
     "typecheck": "tsc --noEmit",
     "test": "jest",
-    "test:unit": "jest --testPathPattern=tests/(?!e2e)",
+    "test:unit": "jest --testPathIgnorePatterns=tests/e2e",
     "test:e2e": "playwright test",
     "pack:check": "npm pack --dry-run"
   },

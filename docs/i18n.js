@@ -73,14 +73,79 @@
             });
         }
 
+        /**
+         * Smart Geo & Locale Auto-Detector for First-Time Visitors
+         */
+        detectLocaleFromEnvironment(customEnv = {}) {
+            // 1. Inspect navigator.languages priority list
+            try {
+                const nav = customEnv.navigator || (typeof navigator !== 'undefined' ? navigator : {});
+                const navLanguages = nav.languages || [nav.language || nav.userLanguage || ''];
+                for (const fullLang of navLanguages) {
+                    if (!fullLang) continue;
+                    const lang = fullLang.toLowerCase();
+                    if (lang.startsWith('ko')) return 'ko';
+                    if (lang.startsWith('ja')) return 'ja';
+                    if (lang.startsWith('zh')) return 'zh';
+                    if (lang.startsWith('hi')) return 'hi';
+                    if (lang.startsWith('es')) return 'es';
+                    if (lang.startsWith('en')) return 'en';
+                }
+            } catch (e) {}
+
+            // 2. Inspect Client Timezone
+            try {
+                const intlObj = customEnv.Intl || (typeof Intl !== 'undefined' ? Intl : null);
+                const tz = intlObj?.DateTimeFormat?.()?.resolvedOptions?.()?.timeZone;
+                if (tz) {
+                    if (tz === 'Asia/Seoul' || tz === 'Asia/Pyongyang') return 'ko';
+                    if (tz === 'Asia/Tokyo') return 'ja';
+                    if (tz.includes('Shanghai') || tz.includes('Beijing') || tz.includes('Chongqing') || tz.includes('Hong_Kong') || tz.includes('Taipei')) return 'zh';
+                    if (tz.includes('Kolkata') || tz.includes('Calcutta')) return 'en'; // Developer/Tech standard in India
+                    if (tz.includes('Madrid') || tz.includes('Mexico') || tz.includes('Bogota') || tz.includes('Buenos_Aires') || tz.includes('Santiago') || tz.includes('Lima') || tz.includes('Caracas')) return 'es';
+                }
+            } catch (e) {}
+
+            return DEFAULT_LANG;
+        }
+
+        /**
+         * Asynchronous Country Code IP Detection (Optional fallback for first visit)
+         */
+        async detectCountryFromIpAsync() {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 1200); // 1.2s fast timeout
+                const res = await fetch('https://api.country.is/', { signal: controller.signal });
+                clearTimeout(timeoutId);
+                if (res.ok) {
+                    const data = await res.json();
+                    const country = (data.country || '').toUpperCase();
+                    const COUNTRY_MAP = {
+                        'KR': 'ko',
+                        'JP': 'ja',
+                        'CN': 'zh', 'TW': 'zh', 'HK': 'zh', 'MO': 'zh',
+                        'IN': 'en', // Developer/Tech standard in India
+                        'ES': 'es', 'MX': 'es', 'AR': 'es', 'CO': 'es', 'CL': 'es', 'PE': 'es',
+                        'VE': 'es', 'EC': 'es', 'GT': 'es', 'CU': 'es', 'BO': 'es', 'DO': 'es',
+                        'HN': 'es', 'PY': 'es', 'SV': 'es', 'NI': 'es', 'CR': 'es', 'PR': 'es', 'PA': 'es', 'UY': 'es'
+                    };
+                    if (COUNTRY_MAP[country]) {
+                        return COUNTRY_MAP[country];
+                    }
+                }
+            } catch (e) {}
+            return null;
+        }
+
         getSync() {
-            // 1. Check LocalStorage
+            // 1. Check LocalStorage (Explicit User Choice)
             try {
                 const val = localStorage.getItem(STORAGE_KEY);
                 if (val && SUPPORTED_LANGUAGES[val]) return val;
             } catch (e) {}
 
-            // 2. Check Cookie
+            // 2. Check Cookie (Explicit User Choice)
             try {
                 const match = document.cookie.match(new RegExp('(^| )' + STORAGE_KEY + '=([^;]+)'));
                 if (match && SUPPORTED_LANGUAGES[match[2]]) return match[2];
@@ -92,42 +157,43 @@
                 if (val && SUPPORTED_LANGUAGES[val]) return val;
             } catch (e) {}
 
-            // 4. Fallback to Browser Navigator Language
-            try {
-                const navLang = (navigator.language || navigator.userLanguage || '').toLowerCase();
-                for (const code of Object.keys(SUPPORTED_LANGUAGES)) {
-                    if (navLang.startsWith(code)) return code;
-                }
-            } catch (e) {}
-
-            return DEFAULT_LANG;
+            // 4. First-time visit: Auto-detect based on browser languages and timezone
+            const detected = this.detectLocaleFromEnvironment();
+            // Automatically persist detected first-time language
+            this.set(detected);
+            return detected;
         }
 
         async getAsync() {
-            const syncVal = this.getSync();
-            if (syncVal !== DEFAULT_LANG) return syncVal;
+            // 1. If explicit choice exists in storage, return it immediately
+            try {
+                const val = localStorage.getItem(STORAGE_KEY);
+                if (val && SUPPORTED_LANGUAGES[val]) return val;
+            } catch (e) {}
 
-            // Try reading from IndexedDB
+            // 2. Try reading from IndexedDB
             try {
                 const db = await this.dbPromise;
                 if (db) {
-                    return new Promise((resolve) => {
+                    const idbVal = await new Promise((resolve) => {
                         const tx = db.transaction([DB_STORE_NAME], 'readonly');
                         const store = tx.objectStore(DB_STORE_NAME);
                         const req = store.get(STORAGE_KEY);
-                        req.onsuccess = () => {
-                            if (req.result && SUPPORTED_LANGUAGES[req.result.value]) {
-                                resolve(req.result.value);
-                            } else {
-                                resolve(syncVal);
-                            }
-                        };
-                        req.onerror = () => resolve(syncVal);
+                        req.onsuccess = () => resolve(req.result?.value || null);
+                        req.onerror = () => resolve(null);
                     });
+                    if (idbVal && SUPPORTED_LANGUAGES[idbVal]) return idbVal;
                 }
             } catch (e) {}
 
-            return syncVal;
+            // 3. If first visit, attempt IP country detection
+            const ipLang = await this.detectCountryFromIpAsync();
+            if (ipLang && SUPPORTED_LANGUAGES[ipLang]) {
+                this.set(ipLang);
+                return ipLang;
+            }
+
+            return this.getSync();
         }
 
         set(lang) {

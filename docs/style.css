@@ -405,3 +405,149 @@ footer {
     }
 }
 
+/* ── Preset Deep-Dive Explanation Zone (Apache Tomcat Classic) ── */
+.explanation-zone {
+    margin-top: 25px;
+    background-color: #ffffff;
+    border: 1px solid #003399;
+    border-radius: 4px;
+    padding: 20px 24px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+}
+
+.explanation-header {
+    border-bottom: 2px solid #003399;
+    padding-bottom: 10px;
+    margin-bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.explanation-header h3 {
+    margin: 0;
+    color: #003399;
+    font-size: 1.25em;
+    font-weight: bold;
+}
+
+.explanation-badge {
+    background-color: #e6ecf5;
+    color: #003399;
+    padding: 4px 10px;
+    border: 1px solid #b8cce4;
+    border-radius: 3px;
+    font-size: 0.85em;
+    font-family: Consolas, monospace;
+    font-weight: bold;
+}
+
+.explanation-summary {
+    font-size: 0.95em;
+    color: #444444;
+    margin-bottom: 18px;
+    font-style: italic;
+    background-color: #f8fafc;
+    padding: 10px 16px;
+    border-left: 4px solid #003399;
+}
+
+.explanation-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+@media (max-width: 900px) {
+    .explanation-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.explanation-card {
+    background-color: #fcfcfc;
+    border: 1px solid #dddddd;
+    border-radius: 3px;
+    padding: 14px 16px;
+}
+
+.explanation-card h4 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: #003399;
+    font-size: 1.02em;
+    border-bottom: 1px solid #e0e0e0;
+    padding-bottom: 5px;
+}
+
+.explanation-card p {
+    margin: 0 0 8px 0;
+    font-size: 0.9em;
+    line-height: 1.5;
+    color: #333333;
+}
+
+.explanation-card pre {
+    margin: 8px 0;
+    padding: 8px 12px;
+    background-color: #f4f6f9;
+    border: 1px solid #d0d7de;
+    border-radius: 3px;
+    font-size: 0.85em;
+    font-family: Consolas, monospace;
+    overflow-x: auto;
+}
+
+.explanation-card code {
+    font-family: Consolas, monospace;
+    color: #003399;
+}
+
+.explanation-card-full {
+    background-color: #fcfcfc;
+    border: 1px solid #dddddd;
+    border-radius: 3px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+}
+
+.explanation-card-full h4 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: #003399;
+    font-size: 1.02em;
+    border-bottom: 1px solid #e0e0e0;
+    padding-bottom: 5px;
+}
+
+.explanation-card-full p {
+    margin: 0 0 8px 0;
+    font-size: 0.9em;
+    line-height: 1.5;
+    color: #333333;
+}
+
+.explanation-experiment-guide {
+    background-color: #eef4ff;
+    border: 1px solid #b3c9f2;
+    border-left: 4px solid #003399;
+    padding: 14px 18px;
+    border-radius: 3px;
+}
+
+.explanation-experiment-guide h4 {
+    margin: 0 0 6px 0;
+    color: #003399;
+    font-size: 1em;
+}
+
+.explanation-experiment-guide p {
+    margin: 0;
+    font-size: 0.9em;
+    color: #222222;
+}
+
+

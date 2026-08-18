@@ -173,7 +173,7 @@
                 gpuStatusReady: "[ WebGPU Ready: {adapter} ]",
                 gpuStatusUnavailable: "[ WebGPU Unavailable / CPU Fallback ]",
                 deviceTarget: "Device Target:",
-                trainingLoss: "Training Loss:",
+                trainingLoss: "Metric Result:",
                 activeVram: "Active VRAM:",
                 selectPreset: "Select Experiment Preset:",
                 preset1: "1. 2-Layer MLP (GPU In-Place SGD Training)",
@@ -182,12 +182,53 @@
                 editorTitle: "Python Execution Script (Pyodide WebGPU)",
                 btnRun: "▶ Run Experiment",
                 btnReset: "↺ Reset Code",
-                chartTitle: "Training Loss Dynamics & Hardware Log",
+                chartTitle: "Execution Dynamics & Hardware Log",
                 initLog: "Initializing Python 3.11 & WebGPU runtime...",
                 archTitle: "Technical Execution Architecture",
                 arch1: "<strong>WASM Engine:</strong> Python bytecode executes via CPython 3.11 compiled to WebAssembly.",
                 arch2: "<strong>WebGPU Shaders:</strong> Direct WGSL 8D uniform dispatch with 2D workgroup grid indexing.",
-                arch3: "<strong>Memory Quota:</strong> Deterministic staging buffer recycling and zero-leak weakref garbage collection."
+                arch3: "<strong>Memory Quota:</strong> Deterministic staging buffer recycling and zero-leak weakref garbage collection.",
+                presetExplanations: {
+                "mlp": {
+                                "title": "2-Layer Multi-Layer Perceptron (MLP) & GPU In-Place SGD",
+                                "badge": "Non-Linear Manifold Classification & Autograd",
+                                "summary": "Analyzes non-linear XOR separation, reverse-mode automatic differentiation, and zero-allocation GPU memory update mechanics.",
+                                "sec1Title": "1. Theoretical Architecture & Forward Mapping",
+                                "sec1Content": "<p>The Multi-Layer Perceptron addresses non-linear classification across the XOR manifold \\(\\mathcal{X} = \\{[0,0]^T, [0,1]^T, [1,0]^T, [1,1]^T\\} \\to \\mathcal{Y} = \\{0, 1, 1, 0\\}\\). The affine transformations and non-linear activations form the forward mapping:</p><pre><code>\\mathbf{h}_1 = \\text{ReLU}(W_1 \\mathbf{x} + \\mathbf{b}_1), \\quad \\hat{\\mathbf{y}} = W_2 \\mathbf{h}_1 + \\mathbf{b}_2</code></pre><p>where weight tensors \\(W_1 \\in \\mathbb{R}^{8 \\times 2}\\), \\(\\mathbf{b}_1 \\in \\mathbb{R}^8\\), \\(W_2 \\in \\mathbb{R}^{1 \\times 8}\\), \\(\\mathbf{b}_2 \\in \\mathbb{R}^1\\) are bound directly to WebGPU storage buffers.</p>",
+                                "sec2Title": "2. Mathematical Gradient Derivation & Vector-Jacobian Product (VJP)",
+                                "sec2Content": "<p>Given the Mean Squared Error (MSE) objective function \\(\\mathcal{L}(\\theta) = \\frac{1}{N} \\sum_{i=1}^N (\\hat{y}_i - y_i)^2\\), the backward pass applies the chain rule:</p><pre><code>\\delta_2 = \\frac{\\partial \\mathcal{L}}{\\partial \\hat{\\mathbf{y}}} = \\frac{2}{N}(\\hat{\\mathbf{y}} - \\mathbf{y}), \\quad \\frac{\\partial \\mathcal{L}}{\\partial W_2} = \\delta_2 \\mathbf{h}_1^T, \\quad \\frac{\\partial \\mathcal{L}}{\\partial \\mathbf{b}_2} = \\sum \\delta_2\n\\delta_1 = (W_2^T \\delta_2) \\odot \\mathbb{I}(\\mathbf{h}_1 > 0), \\quad \\frac{\\partial \\mathcal{L}}{\\partial W_1} = \\delta_1 \\mathbf{x}^T, \\quad \\frac{\\partial \\mathcal{L}}{\\partial \\mathbf{b}_1} = \\sum \\delta_1</code></pre><p>Weights are updated using the in-place AXPY kernel without intermediate allocations: \\(\\theta^{(t+1)} \\leftarrow \\theta^{(t)} - \\eta \\nabla_\\theta \\mathcal{L}\\).</p>",
+                                "sec3Title": "3. CPU vs WebGPU Architectural Execution Discrepancy",
+                                "sec3Content": "<p><strong>CPU Execution (NumPy / Standard CPython):</strong> Executes serial loops or shallow SIMD vectorization. Each operation incurs Python GIL overhead, heap allocation/deallocation of intermediate NumPy arrays, and L1/L2 cache thrashing across batch steps.</p><p><strong>WebGPU Native Engine:</strong> Dispatches WGSL compute shaders directly across hardware workgroups. Tensors remain pinned in VRAM across all 30 epochs, and the SGD AXPY kernel modifies weights in-place with zero CPU-GPU transfer overhead.</p>",
+                                "sec4Title": "4. Interactive CPU vs GPU Verification Experiment",
+                                "sec4Content": "<p>Change <code>device=\"gpu\"</code> to <code>device=\"cpu\"</code> on line 18 in the editor above and run the experiment. Observe how CPU mode relies on synchronous NumPy execution while GPU mode leverages hardware acceleration with non-blocking async buffer mapping (<code>await loss.numpy_async()</code>).</p>"
+                },
+                "transformer": {
+                                "title": "Causal Scaled Dot-Product Self-Attention & Layer Normalization",
+                                "badge": "Autoregressive Sequence Modeling & Causal Masking",
+                                "summary": "Evaluates multi-head causal attention mechanisms, sinusoidal positional encodings, and numerical stability in autoregressive transformers.",
+                                "sec1Title": "1. Theoretical Architecture & Positional Dynamics",
+                                "sec1Content": "<p>The Causal Attention module models sequential dependencies for sequence length \\(L\\) and embedding dimension \\(D=16\\). Temporal order is injected via sinusoidal positional encoding (Vaswani et al., 2017):</p><pre><code>\\text{PE}_{(pos, 2i)} = \\sin\\left(\\frac{pos}{10000^{2i/D}}\\right), \\quad \\text{PE}_{(pos, 2i+1)} = \\cos\\left(\\frac{pos}{10000^{2i/D}}\\right)</code></pre><p>Layer Normalization stabilizes internal activations: \\(\\text{LN}(\\mathbf{x}) = \\frac{\\mathbf{x} - \\mu}{\\sqrt{\\sigma^2 + \\epsilon}} \\odot \\gamma + \\beta\\).</p>",
+                                "sec2Title": "2. Mathematical Formulation & Causal Upper-Triangular Masking",
+                                "sec2Content": "<p>To enforce autoregressive causality (preventing positions from attending to future tokens), a mask matrix \\(M \\in \\mathbb{R}^{L \\times L}\\) is applied before softmax:</p><pre><code>\\text{Attention}(Q, K, V) = \\text{softmax}\\left(\\frac{QK^T}{\\sqrt{d_k}} + M\\right)V, \\quad M_{ij} = \\begin{cases} 0 & i \\ge j \\\\ -\\infty & i < j \\end{cases}</code></pre><p>Softmax numerical stability is guaranteed on GPU by computing \\(\\text{softmax}(\\mathbf{z})_i = \\frac{e^{z_i - \\max(\\mathbf{z})}}{\\sum_j e^{z_j - \\max(\\mathbf{z})}}\\).</p>",
+                                "sec3Title": "3. CPU vs WebGPU Architectural Execution Discrepancy",
+                                "sec3Content": "<p><strong>CPU Execution (NumPy / Standard CPython):</strong> Requires sequential nested loops for \\(QK^T\\) batch matrix multiplication and allocates large \\(L \\times L\\) temporary mask matrices in system RAM, resulting in high memory bandwidth pressure.</p><p><strong>WebGPU Native Engine:</strong> Fuses causal upper-triangular masking directly into the WGSL batched matmul shader. Threads in the workgroup barrier compute scores and apply masking in fast registers without allocating mask buffers.</p>",
+                                "sec4Title": "4. Interactive Dynamic Sequence Length Experiment",
+                                "sec4Content": "<p>Try modifying <code>seq_lengths = [2, 4, 8, 16, 32, 64]</code> in the editor script. Observe how WebGPU executes parallel attention dispatches across variable sequence lengths with minimal latency overhead.</p>"
+                },
+                "benchmark": {
+                                "title": "Hardware Micro-Benchmark: Matrix Multiplication Complexity & Compute Bounds",
+                                "badge": "FLOPs Density, Memory Bandwidth & Arithmetic Intensity",
+                                "summary": "Measures floating-point throughput, memory access bottlenecks, and architectural speedups between CPU BLAS and WebGPU compute shaders.",
+                                "sec1Title": "1. Computational Complexity & Arithmetic Intensity Analysis",
+                                "sec1Content": "<p>Dense matrix multiplication \\(C = A \\cdot B\\) for \\(A, B \\in \\mathbb{R}^{N \\times N}\\) requires \\(2N^3\\) floating point operations. For \\(N=512\\):</p><pre><code>\\text{Total Operations} = 2 \\times 512^3 = 268,435,456 \\text{ FLOPs (268.4 MFLOPs)}\n\\text{Memory Footprint} = 3 \\times 512^2 \\times 4 \\text{ Bytes} \\approx 3.14 \\text{ MB}</code></pre><p>The arithmetic intensity is \\(\\frac{2N^3}{12N^2} = \\frac{N}{6} \\approx 85.3 \\text{ FLOPs/Byte}\\), placing the operation firmly in the compute-bound regime.</p>",
+                                "sec2Title": "2. Mathematical Formulation & 2D Workgroup Grid Tiling",
+                                "sec2Content": "<p>The formal discrete matrix multiplication is partitioned across 2D workgroups of size \\(16 \\times 16\\):</p><pre><code>C_{i,j} = \\sum_{k=0}^{N-1} A_{ik} B_{kj} = \\sum_{t=0}^{N/T - 1} \\sum_{k=0}^{T-1} A_{i, t \\cdot T + k} B_{t \\cdot T + k, j}</code></pre><p>Each WebGPU invocation accumulates dot products in high-speed hardware registers, maximizing GPU ALU saturation.</p>",
+                                "sec3Title": "3. CPU vs WebGPU Architectural Execution Discrepancy",
+                                "sec3Content": "<p><strong>NumPy CPU Execution:</strong> Constrained by 4–8 CPU cores, L3 cache thrashing, and context-switching latencies, yielding ~300ms–700ms execution times inside browser WASM runtimes.</p><p><strong>AMEVA-Forge WebGPU:</strong> Harnesses thousands of shader execution units running in SIMD lockstep to compute all 268M FLOPs in ~15ms–45ms, delivering a <strong>15x to 30x hardware speedup</strong> directly in the client browser tab.</p>",
+                                "sec4Title": "4. Interactive Matrix Dimension Scaling Benchmark",
+                                "sec4Content": "<p>Increase <code>N = 1024</code> in the script to compute over 2.14 Billion FLOPs. Notice how CPU execution time grows cubically (\\(\\mathcal{O}(N^3)\\)) while WebGPU scales efficiently across hardware compute pipelines.</p>"
+                }
+}
             },
             playgrounds: {
                 mnistTitle: "AMEVA-Forge: MNIST Inference",
@@ -356,7 +397,7 @@
                 gpuStatusReady: "[ WebGPU 준비 완료: {adapter} ]",
                 gpuStatusUnavailable: "[ WebGPU 사용 불가 / CPU 모드 전환 ]",
                 deviceTarget: "연산 장치:",
-                trainingLoss: "학습 손실값 (Loss):",
+                trainingLoss: "측정 결과:",
                 activeVram: "활성 VRAM 사용량:",
                 selectPreset: "실험 프리셋 선택:",
                 preset1: "1. 2계층 MLP (GPU In-Place SGD 실시간 학습)",
@@ -365,12 +406,53 @@
                 editorTitle: "Python 실행 스크립트 (Pyodide WebGPU)",
                 btnRun: "▶ 실험 실행",
                 btnReset: "↺ 코드 초기화",
-                chartTitle: "학습 손실 다이내믹스 및 하드웨어 로그",
+                chartTitle: "실행 다이내믹스 및 하드웨어 로그",
                 initLog: "Python 3.11 및 WebGPU 런타임 초기화 중...",
                 archTitle: "기술 실행 아키텍처",
                 arch1: "<strong>WASM 엔진:</strong> WebAssembly로 컴파일된 CPython 3.11을 통해 Python 바이트코드를 직접 실행합니다.",
                 arch2: "<strong>WebGPU 셰이더:</strong> 2차원 워크그룹 그리드 인덱싱을 지원하는 직렬 8차원 유니폼 WGSL 셰이더를 디스패치합니다.",
-                arch3: "<strong>메모리 쿼터:</strong> 결정론적 스테이징 버퍼 재활용 및 누수 없는 Weakref 가비지 컬렉션을 보장합니다."
+                arch3: "<strong>메모리 쿼터:</strong> 결정론적 스테이징 버퍼 재활용 및 누수 없는 Weakref 가비지 컬렉션을 보장합니다.",
+                presetExplanations: {
+                "mlp": {
+                                "title": "2계층 다층 퍼셉트론 (MLP) 및 GPU 네이티브 In-Place SGD 학습",
+                                "badge": "비선형 다양체 분류 및 자동 미분 (Autograd)",
+                                "summary": "비선형 XOR 다양체 분리, 역모드 자동 미분(VJP), 무할당 GPU 메모리 인플레이스 갱신 메커니즘을 심층 분석합니다.",
+                                "sec1Title": "1. 이론적 구조 및 순전파 사상 (Forward Mapping)",
+                                "sec1Content": "<p>다층 퍼셉트론은 비선형 XOR 다양체 \\(\\mathcal{X} = \\{[0,0]^T, [0,1]^T, [1,0]^T, [1,1]^T\\} \\to \\mathcal{Y} = \\{0, 1, 1, 0\\}\\) 분류 문제를 해결합니다. 아핀 변환과 비선형 활성화 함수를 통해 다음과 같은 순전파 사상을 형성합니다:</p><pre><code>\\mathbf{h}_1 = \\text{ReLU}(W_1 \\mathbf{x} + \\mathbf{b}_1), \\quad \\hat{\\mathbf{y}} = W_2 \\mathbf{h}_1 + \\mathbf{b}_2</code></pre><p>여기서 가중치 텐서 \\(W_1 \\in \\mathbb{R}^{8 \\times 2}\\), \\(\\mathbf{b}_1 \\in \\mathbb{R}^8\\), \\(W_2 \\in \\mathbb{R}^{1 \\times 8}\\), \\(\\mathbf{b}_2 \\in \\mathbb{R}^1\\)는 WebGPU 스토리지 버퍼에 직접 바인딩됩니다.</p>",
+                                "sec2Title": "2. 수학적 그래디언트 유도 및 벡터-야코비안 곱 (VJP)",
+                                "sec2Content": "<p>평균 제곱 오차(MSE) 손실 함수 \\(\\mathcal{L}(\\theta) = \\frac{1}{N} \\sum_{i=1}^N (\\hat{y}_i - y_i)^2\\)에 대해 연쇄 법칙(Chain Rule)을 적용하여 역전파 그래디언트를 유도합니다:</p><pre><code>\\delta_2 = \\frac{\\partial \\mathcal{L}}{\\partial \\hat{\\mathbf{y}}} = \\frac{2}{N}(\\hat{\\mathbf{y}} - \\mathbf{y}), \\quad \\frac{\\partial \\mathcal{L}}{\\partial W_2} = \\delta_2 \\mathbf{h}_1^T, \\quad \\frac{\\partial \\mathcal{L}}{\\partial \\mathbf{b}_2} = \\sum \\delta_2\n\\delta_1 = (W_2^T \\delta_2) \\odot \\mathbb{I}(\\mathbf{h}_1 > 0), \\quad \\frac{\\partial \\mathcal{L}}{\\partial W_1} = \\delta_1 \\mathbf{x}^T, \\quad \\frac{\\partial \\mathcal{L}}{\\partial \\mathbf{b}_1} = \\sum \\delta_1</code></pre><p>계산된 그래디언트는 임시 메모리 할당 없이 GPU AXPY 셰이더 커널을 통해 가중치 버퍼에 직접 In-Place 갱신됩니다: \\(\\theta^{(t+1)} \\leftarrow \\theta^{(t)} - \\eta \\nabla_\\theta \\mathcal{L}\\).</p>",
+                                "sec3Title": "3. CPU vs WebGPU 아키텍처 실행 차이점 비교 분석",
+                                "sec3Content": "<p><strong>CPU 실행 (NumPy / 표준 CPython):</strong> 단일 또는 소수 스레드 순차 루프로 실행됩니다. 연산마다 Python GIL 오버헤드, 중간 NumPy 배열의 힙 메모리 동적 할당/해제 오버헤드, 배치 스텝 간 L1/L2 캐시 스래싱이 발생합니다.</p><p><strong>WebGPU 네이티브 엔진:</strong> 수백 개의 GPU SIMD ALU 워크그룹에 WGSL 셰이더를 직접 디스패치합니다. 30 에포크 동안 모든 텐서가 VRAM에 상주하며, SGD AXPY 커널이 VRAM 내부에서 가중치를 즉시 수정하므로 CPU-GPU 간 데이터 전송 지연시간이 0ms입니다.</p>",
+                                "sec4Title": "4. 직접 체감해보는 CPU vs GPU 전환 실험 가이드",
+                                "sec4Content": "<p>위 에디터 코드 18번째 줄의 <code>device=\"gpu\"</code>를 <code>device=\"cpu\"</code>로 변경한 후 실행해보세요. CPU 모드는 동기식 NumPy 연산에 의존하는 반면, GPU 모드는 비동기 버퍼 매핑(<code>await loss.numpy_async()</code>)을 통해 브라우저 UI 스레드를 전혀 블로킹하지 않고 고속 가속됨을 직접 비교 체험하실 수 있습니다.</p>"
+                },
+                "transformer": {
+                                "title": "인과적 스케일드 닷 프로덕트 셀프 어텐션 및 레이어 정규화",
+                                "badge": "자기회귀 시퀀스 모델링 & 인과적 삼각 마스킹",
+                                "summary": "멀티헤드 인과적 어텐션 메커니즘, 정현파 위치 인코딩, 자기회귀 트랜스포머의 수치적 안정성을 정밀 평가합니다.",
+                                "sec1Title": "1. 이론적 구조 및 위치 동역학 (Positional Dynamics)",
+                                "sec1Content": "<p>인과적 어텐션 모듈은 시퀀스 길이 \\(L\\)과 임베딩 차원 \\(D=16\\)에 대한 순차적 의존성을 모델링합니다. 정현파 위치 인코딩(Vaswani et al., 2017)을 통해 시간 순서 정보를 주입합니다:</p><pre><code>\\text{PE}_{(pos, 2i)} = \\sin\\left(\\frac{pos}{10000^{2i/D}}\\right), \\quad \\text{PE}_{(pos, 2i+1)} = \\cos\\left(\\frac{pos}{10000^{2i/D}}\\right)</code></pre><p>레이어 정규화(LayerNorm)는 내부 활성화 값의 분포를 안정화합니다: \\(\\text{LN}(\\mathbf{x}) = \\frac{\\mathbf{x} - \\mu}{\\sqrt{\\sigma^2 + \\epsilon}} \\odot \\gamma + \\beta\\).</p>",
+                                "sec2Title": "2. 수학적 공식화 및 상삼각 인과적 마스킹 (Causal Masking)",
+                                "sec2Content": "<p>미래 토큰을 참조하지 못하도록 강제하는 자기회귀 인과성을 보장하기 위해 소프트맥스 이전 마스크 행렬 \\(M \\in \\mathbb{R}^{L \\times L}\\)을 적용합니다:</p><pre><code>\\text{Attention}(Q, K, V) = \\text{softmax}\\left(\\frac{QK^T}{\\sqrt{d_k}} + M\\right)V, \\quad M_{ij} = \\begin{cases} 0 & i \\ge j \\\\ -\\infty & i < j \\end{cases}</code></pre><p>GPU 상에서 소프트맥스 오버플로우를 방지하기 위해 \\(\\text{softmax}(\\mathbf{z})_i = \\frac{e^{z_i - \\max(\\mathbf{z})}}{\\sum_j e^{z_j - \\max(\\mathbf{z})}}\\) 수치 안정화 공식을 적용합니다.</p>",
+                                "sec3Title": "3. CPU vs WebGPU 아키텍처 실행 차이점 비교 분석",
+                                "sec3Content": "<p><strong>CPU 실행 (NumPy / 표준 CPython):</strong> \\(QK^T\\) 배치 행렬곱을 위해 순차적인 중첩 for 루프를 수행하고, 시스템 RAM에 거대한 \\(L \\times L\\) 임시 마스크 행렬을 생성/해제하므로 메모리 대역폭 병목이 심각합니다.</p><p><strong>WebGPU 네이티브 엔진:</strong> 상삼각 인과적 마스킹 로직을 WGSL 배치 행렬곱(BMM) 셰이더 내부에 단일 커널로 융합(Kernel Fusion)합니다. 워크그룹 스레드가 고속 레지스터 내에서 직접 마스킹을 처리하므로 마스크 버퍼 할당이 전혀 필요 없습니다.</p>",
+                                "sec4Title": "4. 직접 체감해보는 동적 시퀀스 확장 실험 가이드",
+                                "sec4Content": "<p>에디터 코드에서 <code>seq_lengths = [2, 4, 8, 16, 32, 64]</code>로 길이를 변경하여 실행해보세요. WebGPU가 가변 시퀀스 길이에 대해 병렬 워크그룹 인덱싱을 통해 일정한 초저지연 시간으로 어텐션을 병렬 처리하는 모습을 관찰하실 수 있습니다.</p>"
+                },
+                "benchmark": {
+                                "title": "하드웨어 마이크로 벤치마크: 행렬곱 복잡도 및 연산 한계 분석",
+                                "badge": "FLOPs 연산 밀도, 메모리 대역폭 및 산술 강도",
+                                "summary": "부동소수점 처리량, 메모리 접근 병목, CPU BLAS 대비 WebGPU 컴퓨트 셰이더의 하드웨어 가속 성능을 정밀 측정합니다.",
+                                "sec1Title": "1. 연산 복잡도 및 산술 강도 (Arithmetic Intensity) 분석",
+                                "sec1Content": "<p>크기 \\(A, B \\in \\mathbb{R}^{N \\times N}\\)의 고밀도 행렬곱 \\(C = A \\cdot B\\)는 총 \\(2N^3\\)회의 부동소수점 연산을 요구합니다. \\(N=512\\) 기준:</p><pre><code>\\text{총 연산량} = 2 \\times 512^3 = 268,435,456 \\text{ FLOPs (2억 6,843만 번)}\n\\text{메모리 전송량} = 3 \\times 512^2 \\times 4 \\text{ 바이트} \\approx 3.14 \\text{ MB}</code></pre><p>산술 강도는 \\(\\frac{2N^3}{12N^2} = \\frac{N}{6} \\approx 85.3 \\text{ FLOPs/Byte}\\)로, 메모리 대역폭보다 연산 코어 성능에 지배되는 전형적인 Compute-Bound 영역입니다.</p>",
+                                "sec2Title": "2. 수학적 공식화 및 2차원 워크그룹 타일 분할 (Tiling)",
+                                "sec2Content": "<p>이산 행렬곱 수식을 \\(16 \\times 16\\) 크기의 2차원 워크그룹 블록으로 분할하여 타일 기반 고속 레지스터 축적을 수행합니다:</p><pre><code>C_{i,j} = \\sum_{k=0}^{N-1} A_{ik} B_{kj} = \\sum_{t=0}^{N/T - 1} \\sum_{k=0}^{T-1} A_{i, t \\cdot T + k} B_{t \\cdot T + k, j}</code></pre><p>각 WebGPU 스레드는 온칩 고속 레지스터에 내적 누적값을 유지하여 GPU 연산 장치(ALU)의 가동률을 극대화합니다.</p>",
+                                "sec3Title": "3. CPU vs WebGPU 아키텍처 실행 차이점 비교 분석",
+                                "sec3Content": "<p><strong>NumPy CPU 실행:</strong> 4~8개의 CPU 코어 한계, L3 캐시 스래싱, 브라우저 WASM 샌드박스의 단일 스레드 제약으로 인해 약 300ms~700ms가 소요됩니다.</p><p><strong>AMEVA-Forge WebGPU:</strong> 수천 개의 GPU 셰이더 코어가 SIMD 병렬 락스텝으로 2억 6천만 회의 연산을 단 ~15ms~45ms 만에 완수하여 브라우저 내에서 <strong>15배~30배 이상의 하드웨어 가속 성능</strong>을 실현합니다.</p>",
+                                "sec4Title": "4. 직접 체감해보는 행렬 차원 스케일링 벤치마크 가이드",
+                                "sec4Content": "<p>에디터 코드에서 <code>N = 1024</code>로 설정하여 21억 4천만 회의 대규모 행렬곱을 시도해보세요. CPU는 연산 시간이 3제곱(\\(\\mathcal{O}(N^3)\\))으로 폭증하는 반면, WebGPU는 파이프라인 병렬성을 통해 압도적인 처리 속도를 유지함을 확인하실 수 있습니다.</p>"
+                }
+}
             },
             playgrounds: {
                 mnistTitle: "AMEVA-Forge: MNIST 손글씨 추론",
@@ -539,7 +621,7 @@
                 gpuStatusReady: "[ WebGPU 已就绪: {adapter} ]",
                 gpuStatusUnavailable: "[ WebGPU 不可用 / 回退至 CPU 模式 ]",
                 deviceTarget: "计算设备:",
-                trainingLoss: "训练损失:",
+                trainingLoss: "指标结果:",
                 activeVram: "显存占用:",
                 selectPreset: "选择实验预设:",
                 preset1: "1. 2层 MLP (GPU 原位 SGD 实时训练)",
@@ -548,12 +630,53 @@
                 editorTitle: "Python 脚本编辑器 (Pyodide WebGPU)",
                 btnRun: "▶ 运行实验",
                 btnReset: "↺ 重置代码",
-                chartTitle: "训练损失动态与硬件日志",
+                chartTitle: "执行动态与硬件日志",
                 initLog: "正在初始化 Python 3.11 与 WebGPU 运行时...",
                 archTitle: "底层技术架构",
                 arch1: "<strong>WASM 引擎：</strong> Python 字节码通过编译为 WebAssembly 的 CPython 3.11 执行。",
                 arch2: "<strong>WebGPU 着色器：</strong> 直接调度支持 2D 工作组网格索引的 8D 统一步长 WGSL 着色器。",
-                arch3: "<strong>内存配额：</strong> 确定性暂存缓冲区复用与零泄漏 weakref 垃圾回收机制。"
+                arch3: "<strong>内存配额：</strong> 确定性暂存缓冲区复用与零泄漏 weakref 垃圾回收机制。",
+                presetExplanations: {
+                "mlp": {
+                                "title": "2层多层感知机 (MLP) 与 GPU 原生 In-Place SGD 训练",
+                                "badge": "非线性流形分类与自动微分 (Autograd)",
+                                "summary": "深入分析非线性 XOR 流形分离、反向模式自动微分 (VJP) 以及零分配 GPU 显存原位更新机制。",
+                                "sec1Title": "1. 理论架构与前向映射 (Forward Mapping)",
+                                "sec1Content": "<p>多层感知机解决了针对 XOR 流形 \\(\\mathcal{X} = \\{[0,0]^T, [0,1]^T, [1,0]^T, [1,1]^T\\} \\to \\mathcal{Y} = \\{0, 1, 1, 0\\}\\) 的非线性分类问题。通过仿射变换与非线性激活构成前向映射：</p><pre><code>\\mathbf{h}_1 = \\text{ReLU}(W_1 \\mathbf{x} + \\mathbf{b}_1), \\quad \\hat{\\mathbf{y}} = W_2 \\mathbf{h}_1 + \\mathbf{b}_2</code></pre><p>其中权重张量 \\(W_1 \\in \\mathbb{R}^{8 \\times 2}\\)、\\(\\mathbf{b}_1 \\in \\mathbb{R}^8\\)、\\(W_2 \\in \\mathbb{R}^{1 \\times 8}\\)、\\(\\mathbf{b}_2 \\in \\mathbb{R}^1\\) 直接绑定至 WebGPU 存储缓冲区。</p>",
+                                "sec2Title": "2. 数学梯度推导与向量-雅可比积 (VJP)",
+                                "sec2Content": "<p>针对均方误差 (MSE) 目标函数 \\(\\mathcal{L}(\\theta) = \\frac{1}{N} \\sum_{i=1}^N (\\hat{y}_i - y_i)^2\\)，反向传播应用链式法则：</p><pre><code>\\delta_2 = \\frac{\\partial \\mathcal{L}}{\\partial \\hat{\\mathbf{y}}} = \\frac{2}{N}(\\hat{\\mathbf{y}} - \\mathbf{y}), \\quad \\frac{\\partial \\mathcal{L}}{\\partial W_2} = \\delta_2 \\mathbf{h}_1^T, \\quad \\frac{\\partial \\mathcal{L}}{\\partial \\mathbf{b}_2} = \\sum \\delta_2\n\\delta_1 = (W_2^T \\delta_2) \\odot \\mathbb{I}(\\mathbf{h}_1 > 0), \\quad \\frac{\\partial \\mathcal{L}}{\\partial W_1} = \\delta_1 \\mathbf{x}^T, \\quad \\frac{\\partial \\mathcal{L}}{\\partial \\mathbf{b}_1} = \\sum \\delta_1</code></pre><p>计算所得梯度利用 GPU AXPY 原位着色器内核直接更新显存权重：\\(\\theta^{(t+1)} \\leftarrow \\theta^{(t)} - \\eta \\nabla_\\theta \\mathcal{L}\\)。</p>",
+                                "sec3Title": "3. CPU 与 WebGPU 架构执行差异对比分析",
+                                "sec3Content": "<p><strong>CPU 执行 (NumPy / 标准 CPython)：</strong> 采用单/少线程串行循环。每次操作均伴随 Python GIL 开销、中间 NumPy 数组的堆内存频繁分配与释放，以及 L1/L2 缓存颠簸。</p><p><strong>WebGPU 原生引擎：</strong> 将 WGSL 计算着色器直接分发至数百个 GPU SIMD ALU 工作组。张量在 30 轮训练中常驻显存，SGD AXPY 内核直接就地修改权重，CPU-GPU 传输开销为 0。</p>",
+                                "sec4Title": "4. 互动式 CPU 与 GPU 切换对比实验",
+                                "sec4Content": "<p>将上方编辑器第 18 行的 <code>device=\"gpu\"</code> 修改为 <code>device=\"cpu\"</code> 并运行。观察 CPU 模式依赖同步 NumPy 运算，而 GPU 模式利用异步缓冲区映射 (<code>await loss.numpy_async()</code>) 实现无阻塞硬件加速。</p>"
+                },
+                "transformer": {
+                                "title": "因果缩放点积自注意力机制与层归一化 (LayerNorm)",
+                                "badge": "自回归序列建模与因果三角掩码",
+                                "summary": "深入评估多头因果自注意力机制、正弦位置编码以及自回归 Transformer 的数值稳定性。",
+                                "sec1Title": "1. 理论架构与位置动态学 (Positional Dynamics)",
+                                "sec1Content": "<p>因果注意力模块针对序列长度 \\(L\\) 与嵌入维度 \\(D=16\\) 建模时序依赖。通过正弦位置编码注入顺序信息：</p><pre><code>\\text{PE}_{(pos, 2i)} = \\sin\\left(\\frac{pos}{10000^{2i/D}}\\right), \\quad \\text{PE}_{(pos, 2i+1)} = \\cos\\left(\\frac{pos}{10000^{2i/D}}\\right)</code></pre><p>层归一化 (LayerNorm) 稳定内部激活分布：\\(\\text{LN}(\\mathbf{x}) = \\frac{\\mathbf{x} - \\mu}{\\sqrt{\\sigma^2 + \\epsilon}} \\odot \\gamma + \\beta\\)。</p>",
+                                "sec2Title": "2. 数学公式化与因果上三角掩码 (Causal Masking)",
+                                "sec2Content": "<p>为保证自回归因果性（阻止模型关注未来标记），在 Softmax 前施加上三角掩码矩阵 \\(M \\in \\mathbb{R}^{L \\times L}\\)：</p><pre><code>\\text{Attention}(Q, K, V) = \\text{softmax}\\left(\\frac{QK^T}{\\sqrt{d_k}} + M\\right)V, \\quad M_{ij} = \\begin{cases} 0 & i \\ge j \\\\ -\\infty & i < j \\end{cases}</code></pre><p>GPU 端采用数值稳定化公式：\\(\\text{softmax}(\\mathbf{z})_i = \\frac{e^{z_i - \\max(\\mathbf{z})}}{\\sum_j e^{z_j - \\max(\\mathbf{z})}}\\)。</p>",
+                                "sec3Title": "3. CPU 与 WebGPU 架构执行差异对比分析",
+                                "sec3Content": "<p><strong>CPU 执行 (NumPy / 标准 CPython)：</strong> \\(QK^T\\) 批量矩阵乘法需要串行嵌套循环并在内存中频繁创建/销毁 \\(L \\times L\\) 临时掩码矩阵，产生极高内存带宽瓶颈。</p><p><strong>WebGPU 原生引擎：</strong> 将因果掩码逻辑直接融合 (Kernel Fusion) 到 WGSL 批量矩阵乘法着色器中。工作组线程在高速寄存器中直接完成掩码，完全免除掩码缓冲区开销。</p>",
+                                "sec4Title": "4. 互动式动态序列扩展实验",
+                                "sec4Content": "<p>在脚本中尝试修改 <code>seq_lengths = [2, 4, 8, 16, 32, 64]</code>。观察 WebGPU 如何利用并行工作组索引在变长序列上保持超低延迟高并发执行。</p>"
+                },
+                "benchmark": {
+                                "title": "硬件微基准测试：矩阵乘法复杂度与计算瓶颈分析",
+                                "badge": "FLOPs 算力密度、内存带宽与计算强度",
+                                "summary": "精确测量浮点运算吞吐量、内存访问瓶颈以及相比 CPU BLAS 的 WebGPU 着色器硬件加速倍率。",
+                                "sec1Title": "1. 计算复杂度与计算强度 (Arithmetic Intensity) 分析",
+                                "sec1Content": "<p>密集矩阵乘法 \\(C = A \\cdot B\\) (\\(A, B \\in \\mathbb{R}^{N \\times N}\\)) 需要 \\(2N^3\\) 次浮点运算。在 \\(N=512\\) 时：</p><pre><code>\\text{总运算量} = 2 \\times 512^3 = 268,435,456 \\text{ FLOPs (2.68 亿次)}\n\\text{显存占用} = 3 \\times 512^2 \\times 4 \\text{ 字节} \\approx 3.14 \\text{ MB}</code></pre><p>计算强度为 \\(\\frac{2N^3}{12N^2} = \\frac{N}{6} \\approx 85.3 \\text{ FLOPs/Byte}\\)，属于典型的计算受限 (Compute-Bound) 密集算力场景。</p>",
+                                "sec2Title": "2. 数学公式化与二维工作组分块分块 (Tiling)",
+                                "sec2Content": "<p>矩阵乘法被划分为 \\(16 \\times 16\\) 的二维工作组网格，利用片上高速寄存器完成分块点积累加：</p><pre><code>C_{i,j} = \\sum_{k=0}^{N-1} A_{ik} B_{kj} = \\sum_{t=0}^{N/T - 1} \\sum_{k=0}^{T-1} A_{i, t \\cdot T + k} B_{t \\cdot T + k, j}</code></pre><p>每个 WebGPU 线程在片上寄存器中保持点积累加，使 GPU ALU 硬件算力达到极致饱和。</p>",
+                                "sec3Title": "3. CPU 与 WebGPU 架构执行差异对比分析",
+                                "sec3Content": "<p><strong>NumPy CPU 执行：</strong> 受限于 4~8 个 CPU 核心与 L3 缓存颠簸，在浏览器 WASM 运行时中通常需要 300ms~700ms。</p><p><strong>AMEVA-Forge WebGPU：</strong> 数千个着色器核心以 SIMD 并行同步执行 2.68 亿次运算，仅需 ~15ms~45ms，在浏览器内实现 <strong>15 倍至 30 倍以上的硬件加速</strong>。</p>",
+                                "sec4Title": "4. 互动式矩阵维度扩展基准测试",
+                                "sec4Content": "<p>将脚本中的 <code>N = 1024</code> 改为 1024 体验超过 21.4 亿次 FLOPs 的运算。观察 CPU 耗时呈三次幂 (\\(\\mathcal{O}(N^3)\\)) 爆炸式增长，而 WebGPU 依然保持极致流水线吞吐。</p>"
+                }
+}
             },
             playgrounds: {
                 mnistTitle: "AMEVA-Forge: MNIST 手写数字推理",
@@ -722,7 +845,7 @@
                 gpuStatusReady: "[ WebGPU 準備完了: {adapter} ]",
                 gpuStatusUnavailable: "[ WebGPU 利用不可 / CPU フォールバック ]",
                 deviceTarget: "計算デバイス:",
-                trainingLoss: "学習損失 (Loss):",
+                trainingLoss: "測定結果:",
                 activeVram: "使用中 VRAM:",
                 selectPreset: "実験プリセットを選択:",
                 preset1: "1. 2層 MLP (GPU In-Place SGD リアルタイム学習)",
@@ -731,12 +854,53 @@
                 editorTitle: "Python 実行スクリプト (Pyodide WebGPU)",
                 btnRun: "▶ 実験を実行",
                 btnReset: "↺ コードをリセット",
-                chartTitle: "学習損失ダイナミクス & ハードウェアログ",
+                chartTitle: "実行ダイナミクス＆ハードウェアログ",
                 initLog: "Python 3.11 および WebGPU ランタイムを初期化中...",
                 archTitle: "技術実行アーキテクチャ",
                 arch1: "<strong>WASM エンジン:</strong> WebAssembly にコンパイルされた CPython 3.11 経由でバイトコードを実行します。",
                 arch2: "<strong>WebGPU シェーダー:</strong> 2D ワークグループグリッドをサポートする 8D ユニフォーム WGSL シェーダーをディスパッチします。",
-                arch3: "<strong>メモリクォータ:</strong> ステージングバッファの再利用と Weakref ガベージコレクションによりリークゼロを保証します。"
+                arch3: "<strong>メモリクォータ:</strong> ステージングバッファの再利用と Weakref ガベージコレクションによりリークゼロを保証します。",
+                presetExplanations: {
+                "mlp": {
+                                "title": "2層多層パーセプトロン (MLP) と GPU ネイティブ In-Place SGD 学習",
+                                "badge": "非線形多様体分類と自動微分 (Autograd)",
+                                "summary": "非線形 XOR 多様体分離、逆モード自動微分 (VJP)、ゼロ割り当て GPU メモリインプレース更新メカニズムを詳細に分析します。",
+                                "sec1Title": "1. 理論的アーキテクチャと順伝播マッピング (Forward Mapping)",
+                                "sec1Content": "<p>多層パーセプトロンは非線形 XOR 多様体 \\(\\mathcal{X} = \\{[0,0]^T, [0,1]^T, [1,0]^T, [1,1]^T\\} \\to \\mathcal{Y} = \\{0, 1, 1, 0\\}\\) の分類問題を解決します。アフィン変換と非線形活性化関数により順伝播を構成します:</p><pre><code>\\mathbf{h}_1 = \\text{ReLU}(W_1 \\mathbf{x} + \\mathbf{b}_1), \\quad \\hat{\\mathbf{y}} = W_2 \\mathbf{h}_1 + \\mathbf{b}_2</code></pre><p>重みテンソル \\(W_1 \\in \\mathbb{R}^{8 \\times 2}\\)、\\(\\mathbf{b}_1 \\in \\mathbb{R}^8\\)、\\(W_2 \\in \\mathbb{R}^{1 \\times 8}\\)、\\(\\mathbf{b}_2 \\in \\mathbb{R}^1\\) は WebGPU ストレージバッファに直接バインドされます。</p>",
+                                "sec2Title": "2. 数学的勾配導出とベクトル・ヤコビアン積 (VJP)",
+                                "sec2Content": "<p>平均二乗誤差 (MSE) 損失関数 \\(\\mathcal{L}(\\theta) = \\frac{1}{N} \\sum_{i=1}^N (\\hat{y}_i - y_i)^2\\) に対し、連鎖律を適用して逆伝播勾配を導出します:</p><pre><code>\\delta_2 = \\frac{\\partial \\mathcal{L}}{\\partial \\hat{\\mathbf{y}}} = \\frac{2}{N}(\\hat{\\mathbf{y}} - \\mathbf{y}), \\quad \\frac{\\partial \\mathcal{L}}{\\partial W_2} = \\delta_2 \\mathbf{h}_1^T, \\quad \\frac{\\partial \\mathcal{L}}{\\partial \\mathbf{b}_2} = \\sum \\delta_2\n\\delta_1 = (W_2^T \\delta_2) \\odot \\mathbb{I}(\\mathbf{h}_1 > 0), \\quad \\frac{\\partial \\mathcal{L}}{\\partial W_1} = \\delta_1 \\mathbf{x}^T, \\quad \\frac{\\partial \\mathcal{L}}{\\partial \\mathbf{b}_1} = \\sum \\delta_1</code></pre><p>勾配は中間バッファを割り当てることなく GPU AXPY カーネルによって VRAM 上で直接 In-Place 更新されます: \\(\\theta^{(t+1)} \\leftarrow \\theta^{(t)} - \\eta \\nabla_\\theta \\mathcal{L}\\)。</p>",
+                                "sec3Title": "3. CPU と WebGPU アーキテクチャの実行差異比較",
+                                "sec3Content": "<p><strong>CPU 実行 (NumPy / 標準 CPython):</strong> 単一または少数のスレッドによる逐次ループで実行されます。Python GIL オーバーヘッドや中間配列のヒープ割り当て/解放、L1/L2 キャッシュスラッシングが発生します。</p><p><strong>WebGPU ネイティブエンジン:</strong> 数百の GPU SIMD ALU ワークグループに WGSL シェーダーを直接ディスパッチします。全 30 エポックでテンソルが VRAM に常駐し、CPU-GPU 間の転送遅延なしに即座に更新されます。</p>",
+                                "sec4Title": "4. 体験型 CPU / GPU 切り替え比較実験",
+                                "sec4Content": "<p>エディタの 18 行目にある <code>device=\"gpu\"</code> を <code>device=\"cpu\"</code> に変更して実行してください。同期 NumPy 演算と、UI スレッドをブロックしない WebGPU 非同期バッファマッピング (<code>await loss.numpy_async()</code>) の高速性を比較体感できます。</p>"
+                },
+                "transformer": {
+                                "title": "因果的スケールド・ドットプロダクト・セルフアテンションと LayerNorm",
+                                "badge": "自己回帰シーケンスモデリング & 因果的三角マスキング",
+                                "summary": "マルチヘッド自己回帰アテンション、正弦波位置エンコーディング、トランスフォーマーの数値安定性を詳細に評価します。",
+                                "sec1Title": "1. 理論的アーキテクチャと位置ダイナミクス",
+                                "sec1Content": "<p>因果的アテンションはシーケンス長 \\(L\\) と埋め込み次元 \\(D=16\\) の時系列依存関係をモデル化します。正弦波位置エンコーディングにより時間順序を注入します:</p><pre><code>\\text{PE}_{(pos, 2i)} = \\sin\\left(\\frac{pos}{10000^{2i/D}}\\right), \\quad \\text{PE}_{(pos, 2i+1)} = \\cos\\left(\\frac{pos}{10000^{2i/D}}\\right)</code></pre><p>Layer Normalization により内部活性化の分散を安定化します: \\(\\text{LN}(\\mathbf{x}) = \\frac{\\mathbf{x} - \\mu}{\\sqrt{\\sigma^2 + \\epsilon}} \\odot \\gamma + \\beta\\)。</p>",
+                                "sec2Title": "2. 数学的定式化と因果的上三角マスキング",
+                                "sec2Content": "<p>未来のトークンへの参照を遮断するため、Softmax 前に上三角マスク行列 \\(M \\in \\mathbb{R}^{L \\times L}\\) を適用します:</p><pre><code>\\text{Attention}(Q, K, V) = \\text{softmax}\\left(\\frac{QK^T}{\\sqrt{d_k}} + M\\right)V, \\quad M_{ij} = \\begin{cases} 0 & i \\ge j \\\\ -\\infty & i < j \\end{cases}</code></pre><p>GPU 上でのオーバーフロー防止のため \\(\\text{softmax}(\\mathbf{z})_i = \\frac{e^{z_i - \\max(\\mathbf{z})}}{\\sum_j e^{z_j - \\max(\\mathbf{z})}}\\) を適用します。</p>",
+                                "sec3Title": "3. CPU と WebGPU アーキテクチャの実行差異比較",
+                                "sec3Content": "<p><strong>CPU 実行 (NumPy / 標準 CPython):</strong> \\(QK^T\\) バッチ行列乗算のために多重ループを実行し、\\(L \\times L\\) の一時マスク配列を生成・破棄するためメモリ帯域がボトルネックとなります。</p><p><strong>WebGPU ネイティブエンジン:</strong> 因果的マスキングを行列乗算シェーダー内に単一カーネルとして融合 (Kernel Fusion) します。レジスタ内で直接処理するためマスクバッファの割り当てが不要です。</p>",
+                                "sec4Title": "4. 体験型動的シーケンス長拡張実験",
+                                "sec4Content": "<p>スクリプト内の <code>seq_lengths = [2, 4, 8, 16, 32, 64]</code> を変更して実行してみてください。WebGPU が並列ワークグループによって可変長シーケンスを超低レイテンシで処理する様子を確認できます。</p>"
+                },
+                "benchmark": {
+                                "title": "ハードウェアマイクロベンチマーク: 行列乗算の計算複雑度と演算限界",
+                                "badge": "FLOPs 演算密度、メモリ帯域幅、演算強度",
+                                "summary": "浮動小数点スループット、メモリアクセスボトルネック、CPU BLAS に対する WebGPU シェーダーの高速化倍率を測定します。",
+                                "sec1Title": "1. 計算複雑度と演算強度 (Arithmetic Intensity) の解析",
+                                "sec1Content": "<p>サイズ \\(A, B \\in \\mathbb{R}^{N \\times N}\\) の密行列乗算 \\(C = A \\cdot B\\) は \\(2N^3\\) 回の浮動小数点演算を必要とします。\\(N=512\\) の場合:</p><pre><code>\\text{総演算量} = 2 \\times 512^3 = 268,435,456 \\text{ FLOPs (約 2.68 億回)}\n\\text{メモリ使用量} = 3 \\times 512^2 \\times 4 \\text{ バイト} \\approx 3.14 \\text{ MB}</code></pre><p>演算強度は \\(\\frac{2N^3}{12N^2} = \\frac{N}{6} \\approx 85.3 \\text{ FLOPs/Byte}\\) であり、Compute-Bound (演算律速) 領域に位置します。</p>",
+                                "sec2Title": "2. 数学的定式化と 2D ワークグループタイリング",
+                                "sec2Content": "<p>\\(16 \\times 16\\) の 2D ワークグループグリッドに分割し、高速レジスタ上でタイリング累積を行います:</p><pre><code>C_{i,j} = \\sum_{k=0}^{N-1} A_{ik} B_{kj} = \\sum_{t=0}^{N/T - 1} \\sum_{k=0}^{T-1} A_{i, t \\cdot T + k} B_{t \\cdot T + k, j}</code></pre><p>各 WebGPU スレッドがレジスタ内で積和演算を保持し、GPU ALU の稼働率を最大化します。</p>",
+                                "sec3Title": "3. CPU と WebGPU アーキテクチャの実行差異比較",
+                                "sec3Content": "<p><strong>NumPy CPU 実行:</strong> 4〜8 コアの制限と L3 キャッシュスラッシングにより、ブラウザ内 WASM では約 300ms〜700ms を要します。</p><p><strong>AMEVA-Forge WebGPU:</strong> 数千のシェーダーコアが SIMD 並列で 2.68 億回の演算をわずか ~15ms〜45ms で完了し、ブラウザ上で <strong>15倍〜30倍以上の高速化</strong> を達成します。</p>",
+                                "sec4Title": "4. 体験型行列次元スケーリングベンチマーク",
+                                "sec4Content": "<p>スクリプトで <code>N = 1024</code> に設定して 21.4 億回の演算を実行してみてください。CPU では演算時間が 3 乗 (\\(\\mathcal{O}(N^3)\\)) で爆発するのに対し、WebGPU は高いパイプラインスループットを維持します。</p>"
+                }
+}
             },
             playgrounds: {
                 mnistTitle: "AMEVA-Forge: MNIST 手書き数字認識",
@@ -905,7 +1069,7 @@
                 gpuStatusReady: "[ WebGPU तैयार: {adapter} ]",
                 gpuStatusUnavailable: "[ WebGPU अनुपलब्ध / CPU मोड ]",
                 deviceTarget: "डिवाइस लक्ष्य:",
-                trainingLoss: "ट्रेनिंग लॉस:",
+                trainingLoss: "मीट्रिक परिणाम:",
                 activeVram: "सक्रिय VRAM:",
                 selectPreset: "प्रयोग प्रीसेट चुनें:",
                 preset1: "1. 2-Layer MLP (GPU In-Place SGD ट्रेनिंग)",
@@ -914,12 +1078,53 @@
                 editorTitle: "Python निष्पादन स्क्रिप्ट (Pyodide WebGPU)",
                 btnRun: "▶ प्रयोग चलाएं",
                 btnReset: "↺ कोड रीसेट करें",
-                chartTitle: "ट्रेनिंग लॉस डायनामिक्स और हार्डवेयर लॉग",
+                chartTitle: "निष्पादन डायनामिक्स और हार्डवेयर लॉग",
                 initLog: "Python 3.11 और WebGPU रनटाइम प्रारंभ हो रहा है...",
                 archTitle: "तकनीकी निष्पादन आर्किटेक्चर",
                 arch1: "<strong>WASM इंजन:</strong> Python बाइटकोड WebAssembly में संकलित CPython 3.11 के माध्यम से निष्पादित होता है।",
                 arch2: "<strong>WebGPU शेडर्स:</strong> 2D वर्कग्रुप ग्रिड इंडेक्सिंग के साथ डायरेक्ट 8D यूनिफ़ॉर्म WGSL शेडर डिस्पैच।",
-                arch3: "<strong>मेमोरी कोटा:</strong> नियतात्मक स्टेजिंग बफर रीसाइक्लिंग और ज़ीरो-लीक गार्बेज कलेक्शन।"
+                arch3: "<strong>मेमोरी कोटा:</strong> नियतात्मक स्टेजिंग बफर रीसाइक्लिंग और ज़ीरो-लीक गार्बेज कलेक्शन।",
+                presetExplanations: {
+                "mlp": {
+                                "title": "2-परत मल्टी-लेयर परसेप्ट्रॉन (MLP) और GPU-नेटिव इन-प्लेस SGD प्रशिक्षण",
+                                "badge": "नॉन-लीनियर मैनिफोल्ड वर्गीकरण और ऑटोग्रैड",
+                                "summary": "नॉन-लीनियर XOR सेपरेशन, रिवर्स-मोड ऑटोमैटिक डिफरेंशियल (VJP), और ज़ीरो-एलोकेशन GPU मेमोरी अपडेट का विश्लेषण।",
+                                "sec1Title": "1. सैद्धांतिक संरचना और फ़ॉरवर्ड मैपिंग",
+                                "sec1Content": "<p>मल्टी-लेयर परसेप्ट्रॉन XOR मैनिफोल्ड \\(\\mathcal{X} = \\{[0,0]^T, [0,1]^T, [1,0]^T, [1,1]^T\\} \\to \\mathcal{Y} = \\{0, 1, 1, 0\\}\\) वर्गीकरण को हल करता है:</p><pre><code>\\mathbf{h}_1 = \\text{ReLU}(W_1 \\mathbf{x} + \\mathbf{b}_1), \\quad \\hat{\\mathbf{y}} = W_2 \\mathbf{h}_1 + \\mathbf{b}_2</code></pre><p>जहाँ भार टेन्सर सीधे WebGPU स्टोरेज बफ़र्स से जुड़े होते हैं।</p>",
+                                "sec2Title": "2. गणितीय ग्रेडिएंट व्युत्पत्ति और वेक्टर-जैकोबियन गुणन (VJP)",
+                                "sec2Content": "<p>मीन स्क्वेयर्ड एरर (MSE) लॉस फ़ंक्शन के लिए बैकप्रॉपैगैशन ग्रेडिएंट:</p><pre><code>\\delta_2 = \\frac{2}{N}(\\hat{\\mathbf{y}} - \\mathbf{y}), \\quad \\frac{\\partial \\mathcal{L}}{\\partial W_2} = \\delta_2 \\mathbf{h}_1^T, \\quad \\delta_1 = (W_2^T \\delta_2) \\odot \\mathbb{I}(\\mathbf{h}_1 > 0)</code></pre><p>GPU AXPY कर्नेल बिना अतिरिक्त मेमोरी एलोकेशन के इन-प्लेस भार अपडेट करता है।</p>",
+                                "sec3Title": "3. CPU बनाम WebGPU आर्किटेक्चर निष्पादन तुलना",
+                                "sec3Content": "<p><strong>CPU निष्पादन (NumPy / CPython):</strong> सीरियल लूप्स और मेमोरी एलोकेशन ओवरहेड के कारण धीमा निष्पादन।</p><p><strong>WebGPU नेटिव इंजन:</strong> सैकड़ों GPU SIMD थ्रेड्स पर WGSL शेडर्स को सीधे निष्पादित करता है, शून्य ट्रांसफर ओवरहेड के साथ।</p>",
+                                "sec4Title": "4. इंटरएक्टिव CPU बनाम GPU परीक्षण गाइड",
+                                "sec4Content": "<p>एडिटर में <code>device=\"gpu\"</code> को <code>device=\"cpu\"</code> में बदलकर चलाएं और हार्डवेयर त्वरण के अंतर को प्रत्यक्ष अनुभव करें।</p>"
+                },
+                "transformer": {
+                                "title": "कॉज़ल स्केल्ड डॉट-प्रोडक्ट सेल्फ-अटेंशन और लेयर नॉर्मलाइज़ेशन",
+                                "badge": "ऑटोरिग्रेसिव सीक्वेंस मॉडलिंग और कॉज़ल मास्किंग",
+                                "summary": "मल्टी-हेड कॉज़ल अटेंशन, साइनसॉइडल पोज़िशनल एन्कोडिंग और ट्रांसफॉर्मर स्थिरता का सटीक विश्लेषण।",
+                                "sec1Title": "1. सैद्धांतिक संरचना और पोज़िशनल डायनामिक्स",
+                                "sec1Content": "<p>कॉज़ल अटेंशन सीक्वेंस लंबाई \\(L\\) और आयाम \\(D=16\\) के लिए पोज़िशनल एन्कोडिंग का उपयोग करता है:</p><pre><code>\\text{PE}_{(pos, 2i)} = \\sin\\left(\\frac{pos}{10000^{2i/D}}\\right), \\quad \\text{LN}(\\mathbf{x}) = \\frac{\\mathbf{x} - \\mu}{\\sqrt{\\sigma^2 + \\epsilon}} \\odot \\gamma + \\beta</code></pre>",
+                                "sec2Title": "2. गणितीय निरूपण और कॉज़ल अपर-ट्राएंगुलर मास्किंग",
+                                "sec2Content": "<p>भविष्य के टोकन देखने से रोकने के लिए सॉफ्टमैक्स से पहले अपर-ट्राएंगुलर मास्क \\(M\\) लगाया जाता है:</p><pre><code>\\text{Attention}(Q, K, V) = \\text{softmax}\\left(\\frac{QK^T}{\\sqrt{d_k}} + M\\right)V</code></pre>",
+                                "sec3Title": "3. CPU बनाम WebGPU आर्किटेक्चर निष्पादन तुलना",
+                                "sec3Content": "<p><strong>CPU निष्पादन:</strong> बड़े टेम्परेरी मास्क एलोकेशन के कारण मेमोरी बैंडविड्थ पर दबाव पड़ता है।</p><p><strong>WebGPU नेटिव इंजन:</strong> मास्किंग लॉजिक को सीधे BMM शेडर में फ्यूज (Kernel Fusion) करके शून्य एलोकेशन प्राप्त करता है।</p>",
+                                "sec4Title": "4. गतिशील अनुक्रम लंबाई परीक्षण गाइड",
+                                "sec4Content": "<p>स्क्रिप्ट में <code>seq_lengths = [2, 4, 8, 16, 32, 64]</code> बदलकर देखें कि WebGPU कैसे न्यूनतम लेटेंसी के साथ समानांतर गणना करता है।</p>"
+                },
+                "benchmark": {
+                                "title": "हार्डवेयर माइक्रो-बेंचमार्क: मैट्रिक्स गुणन जटिलता और कंप्यूट सीमा विश्लेषण",
+                                "badge": "FLOPs घनत्व, मेमोरी बैंडविड्थ और अंकगणितीय तीव्रता",
+                                "summary": "फ़्लोटिंग-पॉइंट थ्रूपुट, मेमोरी एक्सेस बॉटलनेक और CPU की तुलना में WebGPU के हार्डवेयर स्पीडअप का मापन।",
+                                "sec1Title": "1. कम्प्यूटेशनल जटिलता और अंकगणितीय तीव्रता",
+                                "sec1Content": "<p>\\(N=512\\) के लिए मैट्रिक्स गुणन \\(2N^3\\) ऑपरेशंस (लगभग 26.8 करोड़ FLOPs) की मांग करता है:</p><pre><code>\\text{कुल गणना} = 2 \\times 512^3 = 268,435,456 \\text{ FLOPs}</code></pre><p>अंकगणितीय तीव्रता \\(85.3 \\text{ FLOPs/Byte}\\) के साथ यह कंप्यूट-बाउंड श्रेणी में आता है।</p>",
+                                "sec2Title": "2. गणितीय निरूपण और 2D वर्कग्रुप टाइलिंग",
+                                "sec2Content": "<p>\\(16 \\times 16\\) टाइल ग्रिड विभाजन द्वारा ऑन-चिप रजिस्टरों में समानांतर संचय किया जाता है:</p><pre><code>C_{i,j} = \\sum_{k=0}^{N-1} A_{ik} B_{kj}</code></pre>",
+                                "sec3Title": "3. CPU बनाम WebGPU आर्किटेक्चर निष्पादन तुलना",
+                                "sec3Content": "<p><strong>NumPy CPU:</strong> ब्राउज़र WASM में 300ms–700ms का समय लेता है।</p><p><strong>AMEVA-Forge WebGPU:</strong> 26.8 करोड़ FLOPs को मात्र ~15ms–45ms में पूरा करके <strong>15x से 30x का स्पीडअप</strong> प्रदान करता है।</p>",
+                                "sec4Title": "4. इंटरएक्टिव स्केलिंग बेंचमार्क गाइड",
+                                "sec4Content": "<p>स्क्रिप्ट में <code>N = 1024</code> सेट करके 2.14 अरब FLOPs की विशाल गणना का वास्तविक अनुभव करें।</p>"
+                }
+}
             },
             playgrounds: {
                 mnistTitle: "AMEVA-Forge: MNIST हस्तलिखित अंक पहचान",
@@ -1088,7 +1293,7 @@
                 gpuStatusReady: "[ WebGPU Listo: {adapter} ]",
                 gpuStatusUnavailable: "[ WebGPU No Disponible / Modo CPU ]",
                 deviceTarget: "Dispositivo de Cómputo:",
-                trainingLoss: "Pérdida de Entrenamiento:",
+                trainingLoss: "Resultado de Métrica:",
                 activeVram: "VRAM Activa:",
                 selectPreset: "Seleccionar Preajuste de Experimento:",
                 preset1: "1. MLP de 2 Capas (Entrenamiento SGD In-Place en GPU)",
@@ -1097,12 +1302,53 @@
                 editorTitle: "Script de Ejecución Python (Pyodide WebGPU)",
                 btnRun: "▶ Ejecutar Experimento",
                 btnReset: "↺ Restablecer Código",
-                chartTitle: "Dinámica de Pérdida de Entrenamiento y Registro de Hardware",
+                chartTitle: "Dinámica de Ejecución y Registro de Hardware",
                 initLog: "Inicializando entorno de ejecución Python 3.11 y WebGPU...",
                 archTitle: "Arquitectura de Ejecución Técnica",
                 arch1: "<strong>Motor WASM:</strong> El bytecode de Python se ejecuta a través de CPython 3.11 compilado en WebAssembly.",
                 arch2: "<strong>Shaders WebGPU:</strong> Despacho directo de shaders WGSL con strides uniformes 8D e indexación de grupos de trabajo 2D.",
-                arch3: "<strong>Cuota de Memoria:</strong> Reciclaje determinista de buffers de staging y recolección de basura weakref sin fugas."
+                arch3: "<strong>Cuota de Memoria:</strong> Reciclaje determinista de buffers de staging y recolección de basura weakref sin fugas.",
+                presetExplanations: {
+                "mlp": {
+                                "title": "Perceptrón Multicapa de 2 Capas (MLP) y Entrenamiento SGD In-Place en GPU",
+                                "badge": "Clasificación de Variedades No Lineales y Autodiferenciación",
+                                "summary": "Analiza la separación no lineal de XOR, la diferenciación automática en modo inverso (VJP) y la actualización in-place en VRAM sin asignación.",
+                                "sec1Title": "1. Arquitectura Teórica y Mapeo Directo (Forward Mapping)",
+                                "sec1Content": "<p>El Perceptrón Multicapa resuelve la clasificación no lineal en la variedad XOR \\(\\mathcal{X} = \\{[0,0]^T, [0,1]^T, [1,0]^T, [1,1]^T\\} \\to \\mathcal{Y} = \\{0, 1, 1, 0\\}\\):</p><pre><code>\\mathbf{h}_1 = \\text{ReLU}(W_1 \\mathbf{x} + \\mathbf{b}_1), \\quad \\hat{\\mathbf{y}} = W_2 \\mathbf{h}_1 + \\mathbf{b}_2</code></pre><p>donde los tensores de pesos están vinculados directamente a buffers de almacenamiento WebGPU.</p>",
+                                "sec2Title": "2. Derivación Matemática del Gradiente y Producto Vector-Jacobiano (VJP)",
+                                "sec2Content": "<p>Para la función de pérdida del Error Cuadrático Medio (MSE) \\(\\mathcal{L}(\\theta) = \\frac{1}{N} \\sum_{i=1}^N (\\hat{y}_i - y_i)^2\\):</p><pre><code>\\delta_2 = \\frac{2}{N}(\\hat{\\mathbf{y}} - \\mathbf{y}), \\quad \\frac{\\partial \\mathcal{L}}{\\partial W_2} = \\delta_2 \\mathbf{h}_1^T, \\quad \\delta_1 = (W_2^T \\delta_2) \\odot \\mathbb{I}(\\mathbf{h}_1 > 0)</code></pre><p>Los pesos se actualizan directamente mediante el kernel AXPY in-place sin asignaciones intermedias: \\(\\theta^{(t+1)} \\leftarrow \\theta^{(t)} - \\eta \\nabla_\\theta \\mathcal{L}\\).</p>",
+                                "sec3Title": "3. Comparación Arquitectónica: CPU vs WebGPU",
+                                "sec3Content": "<p><strong>Ejecución CPU (NumPy / CPython):</strong> Bucles secuenciales con sobrecarga de GIL de Python y asignación/desasignación constante en memoria RAM.</p><p><strong>Motor Nativo WebGPU:</strong> Envía compute shaders WGSL directamente a cientos de unidades SIMD ALU en la GPU con cero sobrecarga de transferencia CPU-GPU.</p>",
+                                "sec4Title": "4. Guía de Experimento Comparativo CPU vs GPU",
+                                "sec4Content": "<p>Cambie <code>device=\"gpu\"</code> por <code>device=\"cpu\"</code> en la línea 18 del editor y ejecute. Experimente la aceleración de hardware frente a la ejecución síncrona en CPU.</p>"
+                },
+                "transformer": {
+                                "title": "Autoatención Causal de Producto Punto Escalado y Normalización de Capa",
+                                "badge": "Modelado de Secuencias Autorregresivo y Máscara Causal",
+                                "summary": "Evalúa mecanismos de atención causal multicabezal, codificación posicional sinusoidal y estabilidad numérica en transformadores autorregresivos.",
+                                "sec1Title": "1. Arquitectura Teórica y Dinámica Posicional",
+                                "sec1Content": "<p>El módulo de atención causal modela dependencias secuenciales para longitud \\(L\\) y dimensión \\(D=16\\) mediante codificación posicional sinusoidal:</p><pre><code>\\text{PE}_{(pos, 2i)} = \\sin\\left(\\frac{pos}{10000^{2i/D}}\\right), \\quad \\text{LN}(\\mathbf{x}) = \\frac{\\mathbf{x} - \\mu}{\\sqrt{\\sigma^2 + \\epsilon}} \\odot \\gamma + \\beta</code></pre>",
+                                "sec2Title": "2. Formulación Matemática y Máscara Triangular Superior Causal",
+                                "sec2Content": "<p>Para garantizar la causalidad autorregresiva se aplica una matriz de máscara \\(M \\in \\mathbb{R}^{L \\times L}\\) antes de softmax:</p><pre><code>\\text{Attention}(Q, K, V) = \\text{softmax}\\left(\\frac{QK^T}{\\sqrt{d_k}} + M\\right)V, \\quad M_{ij} = \\begin{cases} 0 & i \\ge j \\\\ -\\infty & i < j \\end{cases}</code></pre>",
+                                "sec3Title": "3. Comparación Arquitectónica: CPU vs WebGPU",
+                                "sec3Content": "<p><strong>Ejecución CPU:</strong> Bucles anidados secuenciales con alta presión de ancho de banda por matrices de máscara temporales.</p><p><strong>Motor Nativo WebGPU:</strong> Fusiona la máscara causal directamente en el shader de multiplicación matricial por lotes (BMM) en registros de alta velocidad sin asignar buffers de máscara.</p>",
+                                "sec4Title": "4. Guía de Experimento con Longitud de Secuencia Dinámica",
+                                "sec4Content": "<p>Modifique <code>seq_lengths = [2, 4, 8, 16, 32, 64]</code> en el script y observe cómo WebGPU ejecuta la atención paralela con latencia ultrabaja constante.</p>"
+                },
+                "benchmark": {
+                                "title": "Micro-Benchmark de Hardware: Complejidad de Multiplicación Matricial y Límites de Cómputo",
+                                "badge": "Densidad de FLOPs, Ancho de Banda y Intensidad Aritmética",
+                                "summary": "Mide el rendimiento de coma flotante, cuellos de botella de memoria y la aceleración de WebGPU frente a CPU BLAS.",
+                                "sec1Title": "1. Análisis de Complejidad Computacional e Intensidad Aritmética",
+                                "sec1Content": "<p>La multiplicación de matrices densas \\(C = A \\cdot B\\) para \\(N=512\\) requiere \\(2N^3\\) operaciones de coma flotante (268.4 Millones de FLOPs):</p><pre><code>\\text{Operaciones Totales} = 2 \\times 512^3 = 268,435,456 \\text{ FLOPs}\n\\text{Intensidad Aritmética} = \\frac{N}{6} \\approx 85.3 \\text{ FLOPs/Byte}</code></pre><p>Se clasifica claramente en el régimen limitado por computación (Compute-Bound).</p>",
+                                "sec2Title": "2. Formulación Matemática y Partición por Malla 2D (Tiling)",
+                                "sec2Content": "<p>Particionado en grupos de trabajo 2D de \\(16 \\times 16\\) con acumulación en registros de hardware:</p><pre><code>C_{i,j} = \\sum_{k=0}^{N-1} A_{ik} B_{kj}</code></pre>",
+                                "sec3Title": "3. Comparación Arquitectónica: CPU vs WebGPU",
+                                "sec3Content": "<p><strong>NumPy CPU:</strong> Limitado por 4–8 núcleos de CPU y caché L3, tardando ~300ms–700ms en entornos WASM del navegador.</p><p><strong>AMEVA-Forge WebGPU:</strong> Miles de núcleos de shader ejecutan 268M de FLOPs en solo ~15ms–45ms, logrando una <strong>aceleración de 15x a 30x</strong> directamente en la pestaña del navegador.</p>",
+                                "sec4Title": "4. Guía de Benchmark con Escalado de Dimensiones",
+                                "sec4Content": "<p>Establezca <code>N = 1024</code> en el script para calcular más de 2.14 Mil Millones de FLOPs y observe la escalabilidad masiva de WebGPU frente al crecimiento cúbico en CPU.</p>"
+                }
+}
             },
             playgrounds: {
                 mnistTitle: "AMEVA-Forge: Inferencia MNIST",

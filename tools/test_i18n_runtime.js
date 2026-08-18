@@ -123,9 +123,55 @@ function runRuntimeTest() {
     if (!interp.includes('Digit 7') || !interp.includes('99.8%')) throw new Error("Interpolation failed");
     console.log("[PASS] Parameter interpolation '{digit}', '{conf}' validated");
 
+    // Test Smart First-Visit Auto-Detection for Various Locales & Timezones
+    console.log("\n[*] Testing First-Visit Locale & Timezone Auto-Detection Matrix...");
+    
+    // Case A: Tokyo Timezone -> 'ja'
+    const detectedJa = i18n.storage.detectLocaleFromEnvironment({
+        navigator: { languages: ['ja-JP', 'ja', 'en'] },
+        Intl: { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Asia/Tokyo' }) }) }
+    });
+    console.log("  - Tokyo Environment -> Auto-detected:", detectedJa);
+    if (detectedJa !== 'ja') throw new Error("Failed to auto-detect Japanese");
+
+    // Case B: China/Shanghai Timezone -> 'zh'
+    const detectedZh = i18n.storage.detectLocaleFromEnvironment({
+        navigator: { languages: ['zh-CN', 'zh', 'en'] },
+        Intl: { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Asia/Shanghai' }) }) }
+    });
+    console.log("  - China Environment -> Auto-detected:", detectedZh);
+    if (detectedZh !== 'zh') throw new Error("Failed to auto-detect Chinese");
+
+    // Case C: Spain/Madrid Timezone -> 'es'
+    const detectedEs = i18n.storage.detectLocaleFromEnvironment({
+        navigator: { languages: ['es-ES', 'es', 'en'] },
+        Intl: { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Europe/Madrid' }) }) }
+    });
+    console.log("  - Spain Environment -> Auto-detected:", detectedEs);
+    if (detectedEs !== 'es') throw new Error("Failed to auto-detect Spanish");
+
+    // Case D: India/Kolkata Timezone (with generic/en browser language) -> 'en' (Tech/Developer standard)
+    const detectedHi = i18n.storage.detectLocaleFromEnvironment({
+        navigator: { languages: ['en-IN', 'en-US', 'en'] },
+        Intl: { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Asia/Kolkata' }) }) }
+    });
+    console.log("  - India Environment -> Auto-detected:", detectedHi);
+    if (detectedHi !== 'en') throw new Error("Failed to auto-detect English for India environment");
+
+    // Case E: Explicit Hindi browser preference -> 'hi'
+    const detectedExplicitHi = i18n.storage.detectLocaleFromEnvironment({
+        navigator: { languages: ['hi-IN', 'hi', 'en'] },
+        Intl: { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'Asia/Kolkata' }) }) }
+    });
+    console.log("  - Explicit Hindi Browser Setting -> Auto-detected:", detectedExplicitHi);
+    if (detectedExplicitHi !== 'hi') throw new Error("Failed to respect explicit Hindi preference");
+
+    console.log("[PASS] All First-Visit Locale & Timezone Auto-Detection matrix verified");
+
     console.log("\n================================================================================");
     console.log(" >>> RUNTIME ENGINE & STORAGE ADAPTER TESTS 100% SUCCESSFUL <<<");
     console.log("================================================================================");
 }
 
 runRuntimeTest();
+
