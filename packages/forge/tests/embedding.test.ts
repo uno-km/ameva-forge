@@ -16,6 +16,7 @@ import { KERNEL_REGISTRY, gpuCore } from '../src/tensor/gpuCore';
 import { _globalRegistry } from '../src/tensor/tensorRegistry';
 import { _setDeviceForTesting } from '../src/webgpu/device';
 import { clearStagingPool, allocateBuffer } from '../src/webgpu/buffers';
+import { computeDispatch2D } from '../src/tensor/dispatchShape';
 
 describe('WebGPU Native Embedding & Embedding Backward Kernel Tests', () => {
   const mockDevice: any = {
@@ -167,4 +168,50 @@ describe('WebGPU Native Embedding & Embedding Backward Kernel Tests', () => {
       /Instruction\[1\] op="embedding_backward": expected exact 2 inputs, got 1/
     );
   });
+
+  it('should guarantee 1:1 per-token workgroup dispatch for large sequences (N=128, 512, 2048) without 64x truncation', () => {
+    // 1. N = 128 tokens
+    const d128 = computeDispatch2D(128, 1);
+    expect(d128.totalWorkgroups).toBe(128);
+    expect(d128.dispatchX).toBe(128);
+    expect(d128.dispatchY).toBe(1);
+
+    // 2. N = 512 tokens
+    const d512 = computeDispatch2D(512, 1);
+    expect(d512.totalWorkgroups).toBe(512);
+    expect(d512.dispatchX).toBe(512);
+    expect(d512.dispatchY).toBe(1);
+
+    // 3. N = 2048 tokens
+    const d2048 = computeDispatch2D(2048, 1);
+    expect(d2048.totalWorkgroups).toBe(2048);
+    expect(d2048.dispatchX).toBe(2048);
+    expect(d2048.dispatchY).toBe(1);
+
+    // 4. Test physical gpuCore dispatch on large sequence N=128
+    const { buffer: bufW, token: tokW } = allocateBuffer(32000 * 64 * 4, 0x0080 | 0x0004, 'tensor', 'large_w');
+    const { buffer: bufI, token: tokI } = allocateBuffer(128 * 4, 0x0080 | 0x0004, 'tensor', 'large_i');
+
+    const hWeight = _globalRegistry.register({
+      buffer: bufW,
+      token: tokW,
+      shape: [32000, 64],
+      dtype: 'float32',
+      byteLength: 32000 * 64 * 4
+    });
+
+    const hIndex = _globalRegistry.register({
+      buffer: bufI,
+      token: tokI,
+      shape: [1, 128],
+      dtype: 'float32',
+      byteLength: 128 * 4
+    });
+
+    const hOut = gpuCore.embedding(hWeight, hIndex);
+    const tensorOut = _globalRegistry.get(hOut);
+    expect(tensorOut.shape).toEqual([1, 128, 64]);
+    expect(tensorOut.byteLength).toBe(1 * 128 * 64 * 4);
+  });
 });
+

@@ -1003,7 +1003,8 @@ export function rmsNorm(handleX: TensorHandle, handleGamma?: TensorHandle, eps =
     handleGamma !== undefined ? _globalRegistry.get(handleGamma).buffer : x.buffer
   ];
 
-  const { dispatchX, dispatchY } = computeDispatch2D(numTokens);
+  // rmsnorm.wgsl은 워크그룹당 1개 토큰을 정규화하므로 정확히 numTokens개의 워크그룹 디스패치
+  const { dispatchX, dispatchY } = computeDispatch2D(numTokens, 1);
   dispatchKernel({
     opKey: 'rmsnorm',
     wgslCode: RMSNORM_WGSL,
@@ -1044,7 +1045,8 @@ export function rope(handleX: TensorHandle, baseFreq = 10000.0, offsetPos = 0): 
   u32View[7] = 0;
 
   const totalTokens = B * H * N;
-  const { dispatchX, dispatchY } = computeDispatch2D(totalTokens);
+  // rope.wgsl은 워크그룹당 1개 토큰을 회전하므로 정확히 totalTokens개의 워크그룹 디스패치
+  const { dispatchX, dispatchY } = computeDispatch2D(totalTokens, 1);
 
   dispatchKernel({
     opKey: 'rope',
@@ -1150,7 +1152,8 @@ export function embedding(handleWeight: TensorHandle, handleIndex: TensorHandle)
     0, // 16-byte alignment pad
   ]);
 
-  const { dispatchX, dispatchY } = computeDispatch2D(numTokens);
+  // embedding.wgsl은 워크그룹당 1개 토큰의 임베딩 차원을 협력 복사하므로 정확히 numTokens개의 워크그룹 디스패치
+  const { dispatchX, dispatchY } = computeDispatch2D(numTokens, 1);
 
   dispatchKernel({
     opKey: 'embedding',
@@ -1197,7 +1200,8 @@ export function embedding_backward(
     totalWeightElements,
   ]);
 
-  const { dispatchX, dispatchY } = computeDispatch2D(Math.ceil(totalWeightElements / 64));
+  // embedding_backward.wgsl은 각 스레드가 출력 1개 원소를 담당하므로 workgroupSize=64로 디스패치
+  const { dispatchX, dispatchY } = computeDispatch2D(totalWeightElements, 64);
 
   dispatchKernel({
     opKey: 'embedding_backward',

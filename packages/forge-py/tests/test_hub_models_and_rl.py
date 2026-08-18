@@ -68,7 +68,7 @@ def test_models_on_gpu_lazy_dag():
     assert logits_gpu.device == "gpu"
     assert logits_gpu.shape == (1, 3, 64)
     
-    # 2. LLaMA GPU DAG
+    # 2. LLaMA GPU DAG (Small sequence)
     llama_cfg = LlamaConfig(vocab_size=64, hidden_size=32, intermediate_size=64, num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2, device="gpu")
     llama_model = LlamaForCausalLM(llama_cfg)
     llama_out = llama_model(idx_gpu)
@@ -85,12 +85,26 @@ def test_models_on_gpu_lazy_dag():
     assert len(embedding_inst) == 1
     assert embedding_inst[0]["params"] == [3, 32, 64, 0]
 
-    # 3. PolicyGradientAgent GPU DAG
+    # 3. LLaMA Large Context (N=128 tokens) GPU DAG Invariance
+    idx_large_gpu = torch.tensor(np.random.randint(0, 64, size=(1, 128)), dtype="int32", device="gpu")
+    llama_large_out = llama_model(idx_large_gpu)
+    assert llama_large_out.device == "gpu"
+    assert llama_large_out.shape == (1, 128, 64)
+
+    gb_large = GraphBuilder()
+    gb_large.add_tensor(llama_large_out)
+    ast_large = gb_large.to_dict()
+    large_emb = [i for i in ast_large["instructions"] if i.get("op") == "embedding"]
+    assert len(large_emb) == 1
+    assert large_emb[0]["params"] == [128, 32, 64, 0]
+
+    # 4. PolicyGradientAgent GPU DAG
     pg_agent = PolicyGradientAgent(state_dim=4, hidden_dim=8, action_dim=2, device="gpu")
     st_gpu = torch.tensor([[0.1, 0.2, 0.3, 0.4]], dtype="float32", device="gpu")
     pg_out = pg_agent(st_gpu)
     assert pg_out.device == "gpu"
     assert pg_out.shape == (1, 2)
+
 
 
 def test_cartpole_env():

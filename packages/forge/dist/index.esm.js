@@ -5640,7 +5640,8 @@ function rmsNorm(handleX, handleGamma, eps = 1e-5) {
         x.buffer,
         handleGamma !== undefined ? _globalRegistry.get(handleGamma).buffer : x.buffer
     ];
-    const { dispatchX, dispatchY } = computeDispatch2D(numTokens);
+    // rmsnorm.wgsl은 워크그룹당 1개 토큰을 정규화하므로 정확히 numTokens개의 워크그룹 디스패치
+    const { dispatchX, dispatchY } = computeDispatch2D(numTokens, 1);
     dispatchKernel({
         opKey: 'rmsnorm',
         wgslCode: RMSNORM_WGSL,
@@ -5676,7 +5677,8 @@ function rope(handleX, baseFreq = 10000.0, offsetPos = 0) {
     u32View[6] = 0;
     u32View[7] = 0;
     const totalTokens = B * H * N;
-    const { dispatchX, dispatchY } = computeDispatch2D(totalTokens);
+    // rope.wgsl은 워크그룹당 1개 토큰을 회전하므로 정확히 totalTokens개의 워크그룹 디스패치
+    const { dispatchX, dispatchY } = computeDispatch2D(totalTokens, 1);
     dispatchKernel({
         opKey: 'rope',
         wgslCode: ROPE_WGSL,
@@ -5750,7 +5752,8 @@ function embedding(handleWeight, handleIndex) {
         vocabSize,
         0, // 16-byte alignment pad
     ]);
-    const { dispatchX, dispatchY } = computeDispatch2D(numTokens);
+    // embedding.wgsl은 워크그룹당 1개 토큰의 임베딩 차원을 협력 복사하므로 정확히 numTokens개의 워크그룹 디스패치
+    const { dispatchX, dispatchY } = computeDispatch2D(numTokens, 1);
     dispatchKernel({
         opKey: 'embedding',
         wgslCode: EMBEDDING_WGSL,
@@ -5780,7 +5783,8 @@ function embedding_backward(handleGradOutput, handleIndex, vocabSize, embeddingD
         vocabSize,
         totalWeightElements,
     ]);
-    const { dispatchX, dispatchY } = computeDispatch2D(Math.ceil(totalWeightElements / 64));
+    // embedding_backward.wgsl은 각 스레드가 출력 1개 원소를 담당하므로 workgroupSize=64로 디스패치
+    const { dispatchX, dispatchY } = computeDispatch2D(totalWeightElements, 64);
     dispatchKernel({
         opKey: 'embedding_backward',
         wgslCode: EMBEDDING_BACKWARD_WGSL,
@@ -6780,7 +6784,8 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 u32view[6] = 0;
                 u32view[7] = 0;
                 const totalTokens = B * H * N;
-                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(totalTokens);
+                // rope.wgsl은 워크그룹당 1개 토큰을 회전하므로 정확히 totalTokens개의 워크그룹 디스패치
+                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(totalTokens, 1);
                 dispatchX = dx;
                 dispatchY = dy;
                 dispatchZ = 1;
@@ -6799,7 +6804,8 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 u32view[1] = dim;
                 f32view[2] = eps;
                 u32view[3] = hasGamma;
-                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numTokens);
+                // rmsnorm.wgsl은 워크그룹당 1개 토큰을 정규화하므로 정확히 numTokens개의 워크그룹 디스패치
+                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numTokens, 1);
                 dispatchX = dx;
                 dispatchY = dy;
                 dispatchZ = 1;
@@ -6809,7 +6815,7 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 wgslCode = SWIGLU_WGSL;
                 const numElements = inst.shape.reduce((a, b) => a * b, 1);
                 const p = new Uint32Array([numElements, 0, 0, 0]);
-                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(Math.ceil(numElements / 64));
+                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numElements, 64);
                 dispatchX = dx;
                 dispatchY = dy;
                 dispatchZ = 1;
@@ -6821,7 +6827,7 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 const bits = inst.params?.[0] ?? 4;
                 const groupSize = inst.params?.[1] ?? 128;
                 const p = new Uint32Array([numElements, bits, groupSize, 0]);
-                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(Math.ceil(numElements / 64));
+                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numElements, 64);
                 dispatchX = dx;
                 dispatchY = dy;
                 dispatchZ = 1;
@@ -6833,7 +6839,8 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 const numTokens = inst.shape.slice(0, -1).reduce((a, b) => a * b, 1);
                 const vocabSize = inst.params?.[2] ?? 1000000;
                 const p = new Uint32Array([numTokens, embeddingDim, vocabSize, 0]);
-                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numTokens);
+                // embedding.wgsl은 워크그룹당 1개 토큰을 복사하므로 정확히 numTokens개의 워크그룹 디스패치
+                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numTokens, 1);
                 dispatchX = dx;
                 dispatchY = dy;
                 dispatchZ = 1;
@@ -6846,7 +6853,7 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 const numTokens = inst.params?.[0] ?? 1;
                 const totalWeightElements = vocabSize * embeddingDim;
                 const p = new Uint32Array([numTokens, embeddingDim, vocabSize, totalWeightElements]);
-                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(Math.ceil(totalWeightElements / 64));
+                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(totalWeightElements, 64);
                 dispatchX = dx;
                 dispatchY = dy;
                 dispatchZ = 1;

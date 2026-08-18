@@ -18,6 +18,7 @@ import { _setDeviceForTesting } from '../src/webgpu/device';
 import { clearStagingPool, allocateBuffer } from '../src/webgpu/buffers';
 import { _globalRegistry } from '../src/tensor/tensorRegistry';
 import { gpuCore } from '../src/tensor/gpuCore';
+import { computeDispatch2D } from '../src/tensor/dispatchShape';
 
 // Golden Reference RoPE
 function cpuRoPE(x: Float32Array, B: number, H: number, N: number, d: number, baseFreq: number, offsetPos: number): Float32Array {
@@ -160,6 +161,18 @@ describe('SCRUM-219 ~ SCRUM-222: LLM Primitives Numerical Parity & Sampling Suit
         expect(Math.abs(expected[i])).toBeLessThanOrEqual(1.0);
       }
     });
+
+    it('guarantees 1:1 per-token workgroup dispatch for RoPE large sequences (totalTokens=1024, 2048)', () => {
+      const d1024 = computeDispatch2D(1024, 1);
+      expect(d1024.totalWorkgroups).toBe(1024);
+      expect(d1024.dispatchX).toBe(1024);
+      expect(d1024.dispatchY).toBe(1);
+
+      const d2048 = computeDispatch2D(2048, 1);
+      expect(d2048.totalWorkgroups).toBe(2048);
+      expect(d2048.dispatchX).toBe(2048);
+      expect(d2048.dispatchY).toBe(1);
+    });
   });
 
   describe('SCRUM-220: Root Mean Square Normalization (RMSNorm)', () => {
@@ -200,6 +213,18 @@ describe('SCRUM-219 ~ SCRUM-222: LLM Primitives Numerical Parity & Sampling Suit
       for (let i = 0; i < expected.length; i++) {
         expect(Number.isFinite(expected[i])).toBe(true);
       }
+    });
+
+    it('guarantees 1:1 per-token workgroup dispatch for RMSNorm large sequences (numTokens=512, 2048)', () => {
+      const d512 = computeDispatch2D(512, 1);
+      expect(d512.totalWorkgroups).toBe(512);
+      expect(d512.dispatchX).toBe(512);
+      expect(d512.dispatchY).toBe(1);
+
+      const d2048 = computeDispatch2D(2048, 1);
+      expect(d2048.totalWorkgroups).toBe(2048);
+      expect(d2048.dispatchX).toBe(2048);
+      expect(d2048.dispatchY).toBe(1);
     });
   });
 
