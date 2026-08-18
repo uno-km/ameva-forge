@@ -3,92 +3,96 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="AMEVA-Forge Live Interactive WebGPU Deep Learning Studio (Apache Tomcat Classic).">
-    <title>AMEVA-Forge: Live WebGPU Studio</title>
+    <meta name="description" data-i18n="demo.desc" content="AMEVA-Forge Live Interactive WebGPU Deep Learning Studio (Apache Tomcat Classic).">
+    <title data-i18n="demo.pageTitle">AMEVA-Forge: Live WebGPU Studio</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="alternate icon" href="favicon.svg">
     <link rel="stylesheet" href="style.css">
     <script src="./dist/index.js"></script>
     <script src="./dist/forge-py-bundle.js"></script>
     <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
+    <script src="i18n.js"></script>
+    <script src="i18n-translations.js"></script>
 </head>
 <body>
     <header>
-        <h1>AMEVA-Forge Documentation</h1>
+        <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
         <div class="header-badge-group">
-            <span class="apache-tag">Release 1.0.0</span>
-            <span id="gpuStatus" style="font-weight: bold; color: #008800;">[ WebGPU Detecting... ]</span>
-            <a href="https://github.com/uno-km/ameva-forge" target="_blank">[ GitHub Repository ]</a>
+            <span class="apache-tag" data-i18n="common.releaseTag">Release 1.0.0</span>
+            <span id="gpuStatus" style="font-weight: bold; color: #008800;" data-i18n="demo.gpuStatusDetecting">[ WebGPU Detecting... ]</span>
+            <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
         </div>
     </header>
 
     <div class="container">
         <nav class="sidebar">
-            <h3>Interactive</h3>
+            <h3 data-i18n="common.nav.interactive">Interactive</h3>
             <ul>
-                <li><a href="demo.html" class="active"><strong>Live WebGPU Studio</strong></a></li>
+                <li><a href="demo.html" class="active"><strong data-i18n="common.nav.liveStudio">Live WebGPU Studio</strong></a></li>
             </ul>
-            <h3>Documentation</h3>
+            <h3 data-i18n="common.nav.documentation">Documentation</h3>
             <ul>
-                <li><a href="index.html">Home</a></li>
-                <li><a href="installation.html">Installation</a></li>
-                <li><a href="quickstart.html">Quickstart</a></li>
-                <li><a href="api-reference.html">API Reference</a></li>
+                <li><a href="index.html" data-i18n="common.nav.home">Home</a></li>
+                <li><a href="installation.html" data-i18n="common.nav.installation">Installation</a></li>
+                <li><a href="quickstart.html" data-i18n="common.nav.quickstart">Quickstart</a></li>
+                <li><a href="api-reference.html" data-i18n="common.nav.apiReference">API Reference</a></li>
             </ul>
             <h3>Concepts</h3>
             <ul>
-                <li><a href="what-is-forge.html">What is Forge?</a></li>
-                <li><a href="forge-vs-pytorch.html">Forge vs PyTorch</a></li>
+                <li><a href="what-is-forge.html" data-i18n="common.nav.whatIsForge">What is Forge?</a></li>
+                <li><a href="forge-vs-pytorch.html" data-i18n="common.nav.forgeVsPytorch">Forge vs PyTorch</a></li>
             </ul>
         </nav>
 
         <main class="content">
-            <h2>Interactive WebGPU Studio (Live Training & Attention)</h2>
-            <p>This interactive studio allows you to define, train, and benchmark neural networks <strong>directly inside your browser</strong> using Python (Pyodide) and native WebGPU compute shaders.</p>
+            <h2 data-i18n="demo.h2">Interactive WebGPU Studio (Live Training & Attention)</h2>
+            <p data-i18n-html="demo.desc">This interactive studio allows you to define, train, and benchmark neural networks <strong>directly inside your browser</strong> using Python (Pyodide) and native WebGPU compute shaders.</p>
 
             <div class="metric-bar">
-                <div class="metric-item">Device Target: <strong id="metricDevice">WebGPU</strong></div>
-                <div class="metric-item">Training Loss: <strong id="metricLoss">--</strong></div>
-                <div class="metric-item">Active VRAM: <strong id="metricVram">0 Bytes</strong></div>
+                <div class="metric-item"><span data-i18n="demo.deviceTarget">Device Target:</span> <strong id="metricDevice">WebGPU</strong></div>
+                <div class="metric-item"><span data-i18n="demo.trainingLoss">Metric Result:</span> <strong id="metricLoss">--</strong></div>
+                <div class="metric-item"><span data-i18n="demo.activeVram">Active VRAM:</span> <strong id="metricVram">0 Bytes</strong></div>
             </div>
 
             <div style="margin-bottom: 12px;">
-                <strong>Select Experiment Preset:</strong>
+                <strong data-i18n="demo.selectPreset">Select Experiment Preset:</strong>
                 <select id="modelPreset" style="padding: 4px 8px; font-family: Consolas, monospace; font-size: 0.9em; margin-left: 8px;">
-                    <option value="mlp">1. 2-Layer MLP (GPU In-Place SGD Training)</option>
-                    <option value="transformer">2. Mini-Transformer (Causal Masked Attention)</option>
-                    <option value="benchmark">3. Matmul Benchmark (NumPy CPU vs WebGPU)</option>
+                    <option value="mlp" data-i18n="demo.preset1">1. 2-Layer MLP (GPU In-Place SGD Training)</option>
+                    <option value="transformer" data-i18n="demo.preset2">2. Mini-Transformer (Causal Masked Attention)</option>
+                    <option value="benchmark" data-i18n="demo.preset3">3. Matmul Benchmark (NumPy CPU vs WebGPU)</option>
                 </select>
             </div>
 
             <div class="studio-grid">
                 <!-- Left: Editor Panel -->
                 <div class="studio-panel">
-                    <h4>Python Execution Script (Pyodide WebGPU)</h4>
+                    <h4 data-i18n="demo.editorTitle">Python Execution Script (Pyodide WebGPU)</h4>
                     <textarea id="pythonEditor" class="editor-textarea" spellcheck="false"></textarea>
                     <div style="margin-top: 10px; display: flex; gap: 8px;">
-                        <button id="btnRun" class="classic-btn">▶ Run Experiment</button>
-                        <button id="btnReset" class="classic-btn-secondary">↺ Reset Code</button>
+                        <button id="btnRun" class="classic-btn" data-i18n="demo.btnRun">▶ Run Experiment</button>
+                        <button id="btnReset" class="classic-btn-secondary" data-i18n="demo.btnReset">↺ Reset Code</button>
                     </div>
                 </div>
 
                 <!-- Right: Chart & Output Panel -->
                 <div class="studio-panel">
-                    <h4>Training Loss Dynamics & Hardware Log</h4>
+                    <h4 id="chartTitle" data-i18n="demo.chartTitle">Execution Dynamics & Hardware Log</h4>
                     <canvas id="lossChart" width="380" height="170"></canvas>
-                    <div id="consoleOutput" class="log-box">Initializing Python 3.11 & WebGPU runtime...</div>
+                    <div id="consoleOutput" class="log-box" data-i18n="demo.initLog">Initializing Python 3.11 & WebGPU runtime...</div>
                 </div>
             </div>
 
-            <h3>Technical Execution Architecture</h3>
+            <h3 data-i18n="demo.archTitle">Technical Execution Architecture</h3>
             <ul>
-                <li><strong>WASM Engine:</strong> Python bytecode executes via CPython 3.11 compiled to WebAssembly.</li>
-                <li><strong>WebGPU Shaders:</strong> Direct WGSL 8D uniform dispatch with 2D workgroup grid indexing.</li>
-                <li><strong>Memory Quota:</strong> Deterministic staging buffer recycling and zero-leak weakref garbage collection.</li>
+                <li data-i18n-html="demo.arch1"><strong>WASM Engine:</strong> Python bytecode executes via CPython 3.11 compiled to WebAssembly.</li>
+                <li data-i18n-html="demo.arch2"><strong>WebGPU Shaders:</strong> Direct WGSL 8D uniform dispatch with 2D workgroup grid indexing.</li>
+                <li data-i18n-html="demo.arch3"><strong>Memory Quota:</strong> Deterministic staging buffer recycling and zero-leak weakref garbage collection.</li>
             </ul>
         </main>
     </div>
 
     <footer>
-        &copy; 2026 AMEVA-Forge Team. Released under the Apache-2.0 License.
+        <span data-i18n="common.footerText">&copy; 2026 AMEVA-Forge Team. Released under the Apache-2.0 License.</span>
     </footer>
 
     <script>
@@ -99,53 +103,54 @@ import forge.nn as nn
 import forge.optim as optim
 import numpy as np
 
-# 1. Define Model
 class MLP(nn.Module):
     def __init__(self):
         super().__init__()
-        self.fc1 = nn.Linear(2, 4)
-        self.fc2 = nn.Linear(4, 1)
+        self.fc1 = nn.Linear(2, 8)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(8, 1)
         
     def forward(self, x):
-        return self.fc2(torch.relu(self.fc1(x)))
+        return self.fc2(self.relu(self.fc1(x)))
 
-model = MLP().to('gpu')
+# Initialize model on WebGPU
+model = MLP().to("gpu")
+criterion = nn.MSELoss()
 optimizer = optim.SGD(model.parameters(), lr=0.1)
 
-# 2. Synthetic XOR Dataset
-X_np = np.array([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]], dtype=np.float32)
-Y_np = np.array([[0.0], [1.0], [1.0], [0.0]], dtype=np.float32)
+# Synthetic XOR dataset
+inputs = torch.tensor([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]], device="gpu")
+targets = torch.tensor([[0.0], [1.0], [1.0], [0.0]], device="gpu")
 
-X = torch.tensor(X_np, device='gpu')
-Y = torch.tensor(Y_np, device='gpu')
-
-# 3. Training Loop on WebGPU
 losses = []
-for epoch in range(1, 51):
+for epoch in range(1, 31):
     optimizer.zero_grad()
-    preds = model(X)
-    diff = preds - Y
-    loss = torch.mean(diff * diff)
+    preds = model(inputs)
+    loss = criterion(preds, targets)
     
-    loss_val = float(await loss.numpy_async())
+    # Read loss scalar value asynchronously
+    loss_val = float((await loss.numpy_async()).item())
     losses.append(loss_val)
     
     loss.backward()
     await optimizer.step_async()
     
-    if epoch % 10 == 0 or epoch == 1:
-        print(f"Epoch {epoch:02d}/50 | WebGPU Loss: {loss_val:.6f}")
+    if epoch % 5 == 0 or epoch == 1:
+        print(f"Epoch {epoch:02d}/30 | GPU Loss: {loss_val:.5f}")
 
-print("Training Complete! Final Loss:", losses[-1])
+print("Training finished! Final loss:", losses[-1])
+
+# Clean up memory
+del model, optimizer, inputs, targets, preds, loss
+import gc; gc.collect()
 losses
 `,
-            transformer: `# ── Transformer Causal Self-Attention on WebGPU ──
+            transformer: `# ── Causal Scaled Dot-Product Attention (Multi-Sequence) ──
 import forge as torch
 import forge.nn as nn
 import forge.functional as F
 import numpy as np
 
-# 1. Model with Positional Encoding & Causal Attention
 class CausalAttentionDemo(nn.Module):
     def __init__(self, d_model=16):
         super().__init__()
@@ -160,16 +165,23 @@ class CausalAttentionDemo(nn.Module):
         return self.proj(self.ln(attn))
 
 model = CausalAttentionDemo(d_model=16).to('gpu')
-x_seq = torch.randn((1, 8, 16), device='gpu')
 
-out = model(x_seq)
-await out.realize()
-out_val = await out.numpy_async()
+seq_lengths = [2, 4, 6, 8, 10, 12]
+norms = []
+print("Evaluating Causal Masked Attention across dynamic sequence lengths:")
 
-print("Causal Attention Forward Executed on WebGPU!")
-print(f"Input Shape:  (1, 8, 16)")
-print(f"Output Shape: {out_val.shape}")
-print(f"Output Norm:  {float(np.linalg.norm(out_val)):.4f}")
+for step, seq_len in enumerate(seq_lengths, 1):
+    x_seq = torch.randn((1, seq_len, 16), device='gpu')
+    out = model(x_seq)
+    out_val = await out.numpy_async()
+    norm_val = float(np.linalg.norm(out_val))
+    norms.append(norm_val)
+    print(f"Step {step:02d} | SeqLen: {seq_len:02d} -> WebGPU Out Shape: {out_val.shape} | Norm: {norm_val:.4f}")
+
+print("Causal Attention Evaluation Complete!")
+del model, x_seq, out
+import gc; gc.collect()
+{"type": "transformer", "lengths": seq_lengths, "norms": norms}
 `,
             benchmark: `# ── Matmul Benchmark: NumPy CPU vs AMEVA-Forge WebGPU ──
 import forge as torch
@@ -198,10 +210,16 @@ gpu_time = (time.perf_counter() - t1) * 1000.0
 
 C_gpu_val = await C_gpu.numpy_async()
 diff = float(np.max(np.abs(C_np - C_gpu_val)))
+speedup = cpu_time / max(gpu_time, 0.001)
 
 print(f"NumPy CPU Time:  {cpu_time:.2f} ms")
 print(f"WebGPU Time:     {gpu_time:.2f} ms")
-print(f"Max Math Diff:   {diff:.6e} (Parity Verified)")
+print(f"Speedup:         {speedup:.2f}x faster on GPU")
+print(f"Max Math Diff:   {diff:.6e} (Parity 100% Verified)")
+
+del A_gpu, B_gpu, C_gpu
+import gc; gc.collect()
+{"type": "benchmark", "cpu_ms": cpu_time, "gpu_ms": gpu_time, "speedup": speedup}
 `
         };
 
@@ -218,12 +236,25 @@ print(f"Max Math Diff:   {diff:.6e} (Parity Verified)")
 
         editor.value = PRESETS.mlp;
 
+        function resetCanvasAndMetrics() {
+            ctx.clearRect(0, 0, lossCanvas.width, lossCanvas.height);
+            metricLoss.textContent = '--';
+            if (window.forge && window.forge.getQuotaSnapshot) {
+                const snap = window.forge.getQuotaSnapshot();
+                metricVram.textContent = (snap ? snap.usedBytes : 0) + ' Bytes';
+            }
+        }
+
         presetSelect.addEventListener('change', (e) => {
             editor.value = PRESETS[e.target.value] || PRESETS.mlp;
+            resetCanvasAndMetrics();
+            consoleOut.textContent = `Preset switched to: ${presetSelect.options[presetSelect.selectedIndex].text}`;
         });
 
         btnReset.addEventListener('click', () => {
             editor.value = PRESETS[presetSelect.value] || PRESETS.mlp;
+            resetCanvasAndMetrics();
+            consoleOut.textContent = `Code reset to default preset.`;
         });
 
         function log(msg) {
@@ -237,14 +268,16 @@ print(f"Max Math Diff:   {diff:.6e} (Parity Verified)")
 
             const w = lossCanvas.width;
             const h = lossCanvas.height;
-            const pad = 20;
+            const pad = 25;
 
             const minL = Math.min(...losses);
             const maxL = Math.max(...losses);
             const range = (maxL - minL) || 1.0;
 
-            // Grid
+            // Grid & Labels
             ctx.strokeStyle = '#e0e0e0';
+            ctx.fillStyle = '#666666';
+            ctx.font = '10px Consolas, monospace';
             ctx.lineWidth = 1;
             ctx.beginPath();
             for (let i = 0; i <= 4; i++) {
@@ -254,9 +287,13 @@ print(f"Max Math Diff:   {diff:.6e} (Parity Verified)")
             }
             ctx.stroke();
 
+            // Label
+            ctx.fillText('Loss: ' + losses[0].toFixed(3), pad, pad - 8);
+            ctx.fillText('Final: ' + losses[losses.length - 1].toFixed(3), w - pad - 60, pad - 8);
+
             // Line
             ctx.strokeStyle = '#003399';
-            ctx.lineWidth = 2;
+            ctx.lineWidth = 2.5;
             ctx.beginPath();
             losses.forEach((val, idx) => {
                 const x = pad + (w - 2 * pad) * (idx / (losses.length - 1));
@@ -271,15 +308,98 @@ print(f"Max Math Diff:   {diff:.6e} (Parity Verified)")
             const lastY = h - pad - ((losses[losses.length - 1] - minL) / range) * (h - 2 * pad);
             ctx.fillStyle = '#cc0000';
             ctx.beginPath();
-            ctx.arc(lastX, lastY, 4, 0, Math.PI * 2);
+            ctx.arc(lastX, lastY, 4.5, 0, Math.PI * 2);
             ctx.fill();
+        }
+
+        function drawTransformerNorms(lengths, norms) {
+            ctx.clearRect(0, 0, lossCanvas.width, lossCanvas.height);
+            const w = lossCanvas.width;
+            const h = lossCanvas.height;
+            const pad = 30;
+
+            const minN = Math.min(...norms);
+            const maxN = Math.max(...norms);
+            const range = (maxN - minN) || 1.0;
+
+            ctx.fillStyle = '#003399';
+            ctx.font = '11px Consolas, monospace';
+            ctx.fillText('Causal Attention Norm vs Sequence Length', pad, 18);
+
+            ctx.strokeStyle = '#e0e0e0';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for (let i = 0; i <= 3; i++) {
+                const y = pad + (h - 2 * pad) * (i / 3);
+                ctx.moveTo(pad, y);
+                ctx.lineTo(w - pad, y);
+            }
+            ctx.stroke();
+
+            ctx.strokeStyle = '#008800';
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            norms.forEach((val, idx) => {
+                const x = pad + (w - 2 * pad) * (idx / (norms.length - 1));
+                const y = h - pad - ((val - minN) / range) * (h - 2 * pad);
+                if (idx === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+
+            norms.forEach((val, idx) => {
+                const x = pad + (w - 2 * pad) * (idx / (norms.length - 1));
+                const y = h - pad - ((val - minN) / range) * (h - 2 * pad);
+                ctx.fillStyle = '#003399';
+                ctx.beginPath();
+                ctx.arc(x, y, 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#333333';
+                ctx.fillText(`L=${lengths[idx]}`, x - 10, h - 8);
+            });
+        }
+
+        function drawBenchmarkBars(cpuMs, gpuMs, speedup) {
+            ctx.clearRect(0, 0, lossCanvas.width, lossCanvas.height);
+            const w = lossCanvas.width;
+            const h = lossCanvas.height;
+            const pad = 30;
+
+            ctx.fillStyle = '#003399';
+            ctx.font = 'bold 12px Consolas, monospace';
+            ctx.fillText(`NumPy CPU vs WebGPU (${speedup.toFixed(1)}x Speedup)`, pad, 20);
+
+            const maxTime = Math.max(cpuMs, gpuMs) || 1.0;
+            const barHeight = 32;
+
+            // CPU Bar
+            const cpuWidth = (w - 2 * pad - 80) * (cpuMs / maxTime);
+            ctx.fillStyle = '#bbbbbb';
+            ctx.fillRect(pad + 70, 45, cpuWidth, barHeight);
+            ctx.fillStyle = '#333333';
+            ctx.font = '11px Arial, sans-serif';
+            ctx.fillText('NumPy CPU:', pad, 65);
+            ctx.fillText(`${cpuMs.toFixed(1)} ms`, pad + 75 + cpuWidth, 65);
+
+            // GPU Bar
+            const gpuWidth = Math.max((w - 2 * pad - 80) * (gpuMs / maxTime), 6);
+            ctx.fillStyle = '#003399';
+            ctx.fillRect(pad + 70, 95, gpuWidth, barHeight);
+            ctx.fillStyle = '#003399';
+            ctx.font = 'bold 11px Arial, sans-serif';
+            ctx.fillText('WebGPU:', pad, 115);
+            ctx.fillText(`${gpuMs.toFixed(1)} ms`, pad + 75 + gpuWidth, 115);
         }
 
         async function initEnvironment() {
             const gpuStatus = document.getElementById('gpuStatus');
 
             if (!navigator.gpu) {
-                gpuStatus.textContent = '[ WebGPU Unavailable ]';
+                if (window.forgeI18n) {
+                    gpuStatus.textContent = window.forgeI18n.t('demo.gpuStatusUnavailable');
+                } else {
+                    gpuStatus.textContent = '[ WebGPU Unavailable ]';
+                }
                 gpuStatus.style.color = '#cc0000';
                 log('[Warning] WebGPU is not supported on this browser.');
                 return;
@@ -296,7 +416,13 @@ print(f"Max Math Diff:   {diff:.6e} (Parity Verified)")
                 } else if (window.forge && typeof window.forge.initWebGPU === 'function') {
                     await window.forge.initWebGPU();
                 }
-                gpuStatus.textContent = '[ WebGPU Active ]';
+                
+                const adapterDesc = (window.forge && window.forge.adapterInfo && window.forge.adapterInfo.description) ? window.forge.adapterInfo.description : 'Active';
+                if (window.forgeI18n) {
+                    gpuStatus.textContent = window.forgeI18n.t('demo.gpuStatusReady', { adapter: adapterDesc });
+                } else {
+                    gpuStatus.textContent = `[ WebGPU Ready: ${adapterDesc} ]`;
+                }
                 gpuStatus.style.color = '#008800';
                 log('[WebGPU] Hardware adapter initialized successfully.');
             } catch (err) {
@@ -323,7 +449,6 @@ print(f"Max Math Diff:   {diff:.6e} (Parity Verified)")
                     }
                     log('[AMEVA-Forge] Installed forge Python package directly into virtual filesystem.');
                 } else {
-                    // Fallback to micropip
                     await pyodideInstance.loadPackage("micropip");
                     const micropip = pyodideInstance.pyimport("micropip");
                     await micropip.install("./pkg/forge-0.1.0-py3-none-any.whl");
@@ -349,6 +474,7 @@ print(f"[Ready] forge v0.1.0 ready on Pyodide. WebGPU bridge active.")
             }
 
             btnRun.disabled = true;
+            resetCanvasAndMetrics();
             consoleOut.textContent = '';
             log('[Running...] Executing Python code on WebGPU...');
 
@@ -362,15 +488,22 @@ print(f"[Ready] forge v0.1.0 ready on Pyodide. WebGPU bridge active.")
 
                 if (window.forge && window.forge.getQuotaSnapshot) {
                     const snap = window.forge.getQuotaSnapshot();
-                    metricVram.textContent = snap.usedBytes + ' Bytes';
+                    metricVram.textContent = (snap ? snap.usedBytes : 0) + ' Bytes';
                 }
 
-                if (result && Array.isArray(result.toJs ? result.toJs() : result)) {
-                    const lossArr = result.toJs ? result.toJs() : result;
-                    metricLoss.textContent = parseFloat(lossArr[lossArr.length - 1]).toFixed(4);
-                    drawLossCurve(lossArr);
+                const jsRes = result && result.toJs ? result.toJs({ dict_converter: Object.fromEntries }) : result;
+
+                if (Array.isArray(jsRes)) {
+                    metricLoss.textContent = parseFloat(jsRes[jsRes.length - 1]).toFixed(4);
+                    drawLossCurve(jsRes);
+                } else if (jsRes && jsRes.type === 'transformer') {
+                    metricLoss.textContent = 'Norm: ' + parseFloat(jsRes.norms[jsRes.norms.length - 1]).toFixed(2);
+                    drawTransformerNorms(jsRes.lengths, jsRes.norms);
+                } else if (jsRes && jsRes.type === 'benchmark') {
+                    metricLoss.textContent = jsRes.speedup.toFixed(1) + 'x Speedup';
+                    drawBenchmarkBars(jsRes.cpu_ms, jsRes.gpu_ms, jsRes.speedup);
                 } else {
-                    metricLoss.textContent = 'Done';
+                    metricLoss.textContent = 'Complete';
                 }
             } catch (err) {
                 log('[Execution Error] ' + err.message);

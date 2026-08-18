@@ -3,91 +3,94 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="AMEVA-Forge is a PyTorch-compatible WebGPU deep learning framework for educational autograd and in-browser training.">
-    <title>AMEVA-Forge Documentation</title>
+    <meta name="description" data-i18n="home.metaDesc" content="AMEVA-Forge is a PyTorch-compatible WebGPU deep learning framework for educational autograd and in-browser training.">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="alternate icon" href="favicon.svg">
     <link rel="stylesheet" href="style.css">
     <script src="./dist/index.js"></script>
+    <script src="i18n.js"></script>
+    <script src="i18n-translations.js"></script>
 </head>
 <body>
     <header>
-        <h1>AMEVA-Forge Documentation</h1>
+        <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
         <div class="header-badge-group">
-            <span class="apache-tag">Release 1.0.0</span>
-            <a href="demo.html"><strong>[ Live WebGPU Studio ]</strong></a>
-            <a href="https://github.com/uno-km/ameva-forge" target="_blank">[ GitHub Repository ]</a>
+            <span class="apache-tag" data-i18n="common.releaseTag">Release 1.0.0</span>
+            <a href="demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
+            <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
         </div>
     </header>
 
     <div class="container">
         <nav class="sidebar">
-            <h3>Interactive</h3>
+            <h3 data-i18n="common.nav.interactive">Interactive</h3>
             <ul>
-                <li><a href="demo.html"><strong>Live WebGPU Studio</strong></a></li>
+                <li><a href="demo.html"><strong data-i18n="common.nav.liveStudio">Live WebGPU Studio</strong></a></li>
             </ul>
-            <h3>Documentation</h3>
+            <h3 data-i18n="common.nav.documentation">Documentation</h3>
             <ul>
-                <li><a href="index.html" class="active"><strong>Home</strong></a></li>
-                <li><a href="installation.html">Installation</a></li>
-                <li><a href="quickstart.html">Quickstart</a></li>
-                <li><a href="api-reference.html">API Reference</a></li>
+                <li><a href="index.html" class="active"><strong data-i18n="common.nav.home">Home</strong></a></li>
+                <li><a href="installation.html" data-i18n="common.nav.installation">Installation</a></li>
+                <li><a href="quickstart.html" data-i18n="common.nav.quickstart">Quickstart</a></li>
+                <li><a href="api-reference.html" data-i18n="common.nav.apiReference">API Reference</a></li>
             </ul>
-            <h3>Concepts</h3>
+            <h3 data-i18n="common.nav.concepts">Concepts</h3>
             <ul>
-                <li><a href="what-is-forge.html">What is Forge?</a></li>
-                <li><a href="forge-vs-pytorch.html">Forge vs PyTorch</a></li>
+                <li><a href="what-is-forge.html" data-i18n="common.nav.whatIsForge">What is Forge?</a></li>
+                <li><a href="forge-vs-pytorch.html" data-i18n="common.nav.forgeVsPytorch">Forge vs PyTorch</a></li>
             </ul>
         </nav>
 
         <main class="content">
-            <h2>Welcome to AMEVA-Forge (Release 1.0.0)</h2>
-            <p><strong>AMEVA-Forge</strong> is a lightweight deep learning framework engineered for educational autograd, small model experimentation, and client-side privacy-preserving computation across both native Python environments and modern web browsers via WebGPU.</p>
+            <h2 data-i18n="home.welcomeTitle">Welcome to AMEVA-Forge (Release 1.0.0)</h2>
+            <p data-i18n-html="home.welcomeDesc"><strong>AMEVA-Forge</strong> is a lightweight deep learning framework engineered for educational autograd, small model experimentation, and client-side privacy-preserving computation across both native Python environments and modern web browsers via WebGPU.</p>
 
-            <h3>Release 1.0 Scope: 2-Layer MLP & Causal Attention</h3>
-            <p>Our Release 1.0 focus is laser-targeted on one goal: <strong>Enable users to build, train, and understand neural networks (2-Layer MLP, Causal Attention, In-Place SGD) entirely in the browser using Python without server compute costs.</strong></p>
+            <h3 data-i18n="home.releaseScopeTitle">Release 1.0 Scope: 2-Layer MLP & Causal Attention</h3>
+            <p data-i18n-html="home.releaseScopeDesc">Our Release 1.0 focus is laser-targeted on one goal: <strong>Enable users to build, train, and understand neural networks (2-Layer MLP, Causal Attention, In-Place SGD) entirely in the browser using Python without server compute costs.</strong></p>
 
-            <h3>Core Capabilities</h3>
+            <h3 data-i18n="home.coreCapabilitiesTitle">Core Capabilities</h3>
             <ul>
-                <li><strong>100% PyTorch-like API:</strong> Drop-in compatibility with PyTorch syntax (<code>torch.Tensor</code>, <code>nn.Linear</code>, <code>nn.LayerNorm</code>, <code>optim.SGD</code>, <code>loss.backward()</code>).</li>
-                <li><strong>Browser WebGPU Execution:</strong> Empowers deep learning operations to run client-side using Pyodide (WASM) and native WGSL compute shaders.</li>
-                <li><strong>Autograd Engine:</strong> Implements reverse-mode automatic differentiation with mathematically closed-form GPU gradients.</li>
-                <li><strong>Memory Quota Manager:</strong> Zero-leak staging buffer recycling and deterministic garbage collection finalizers.</li>
+                <li data-i18n-html="home.cap1"><strong>100% PyTorch-like API:</strong> Drop-in compatibility with PyTorch syntax (<code>torch.Tensor</code>, <code>nn.Linear</code>, <code>nn.LayerNorm</code>, <code>optim.SGD</code>, <code>loss.backward()</code>).</li>
+                <li data-i18n-html="home.cap2"><strong>Browser WebGPU Execution:</strong> Empowers deep learning operations to run client-side using Pyodide (WASM) and native WGSL compute shaders.</li>
+                <li data-i18n-html="home.cap3"><strong>Autograd Engine:</strong> Implements reverse-mode automatic differentiation with mathematically closed-form GPU gradients.</li>
+                <li data-i18n-html="home.cap4"><strong>Memory Quota Manager:</strong> Zero-leak staging buffer recycling and deterministic garbage collection finalizers.</li>
             </ul>
 
-            <h3>Supported Operations & Modules in Release 1.0</h3>
+            <h3 data-i18n="home.supportedOpsTitle">Supported Operations & Modules in Release 1.0</h3>
             <table>
                 <thead>
                     <tr>
-                        <th style="width: 25%;">Category</th>
-                        <th>Supported Operations & Features</th>
+                        <th style="width: 25%;" data-i18n="home.thCategory">Category</th>
+                        <th data-i18n="home.thOps">Supported Operations & Features</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr>
-                        <td><strong>Tensor Operations</strong></td>
-                        <td><code>add</code>, <code>sub</code>, <code>mul</code>, <code>div</code>, <code>matmul</code> (2D), <code>batched_matmul</code> (3D BMM), <code>transpose</code>, <code>permute</code>, <code>scatter</code>, <code>gather</code>, <code>8D broadcasting</code></td>
+                        <td><strong data-i18n="home.catTensor">Tensor Operations</strong></td>
+                        <td data-i18n-html="home.catTensorOps"><code>add</code>, <code>sub</code>, <code>mul</code>, <code>div</code>, <code>matmul</code> (2D), <code>batched_matmul</code> (3D BMM), <code>transpose</code>, <code>permute</code>, <code>scatter</code>, <code>gather</code>, <code>8D broadcasting</code></td>
                     </tr>
                     <tr>
-                        <td><strong>Neural Network (nn)</strong></td>
-                        <td><code>nn.Linear</code>, <code>nn.LayerNorm</code>, <code>nn.BatchNorm2d</code> (train/eval), <code>nn.PositionalEncoding</code> (LRU cache), <code>nn.Dropout</code>, <code>nn.Sequential</code></td>
+                        <td><strong data-i18n="home.catNN">Neural Network (nn)</strong></td>
+                        <td data-i18n-html="home.catNNOps"><code>nn.Linear</code>, <code>nn.LayerNorm</code>, <code>nn.BatchNorm2d</code> (train/eval), <code>nn.PositionalEncoding</code> (LRU cache), <code>nn.Dropout</code>, <code>nn.Sequential</code></td>
                     </tr>
                     <tr>
-                        <td><strong>Functional & Loss</strong></td>
-                        <td><code>F.scaled_dot_product_attention</code> (Causal), <code>F.softmax</code>, <code>F.log_softmax</code>, <code>F.cross_entropy</code>, <code>nn.MSELoss</code>, <code>F.relu</code></td>
+                        <td><strong data-i18n="home.catFunc">Functional & Loss</strong></td>
+                        <td data-i18n-html="home.catFuncOps"><code>F.scaled_dot_product_attention</code> (Causal), <code>F.softmax</code>, <code>F.log_softmax</code>, <code>F.cross_entropy</code>, <code>nn.MSELoss</code>, <code>F.relu</code></td>
                     </tr>
                     <tr>
-                        <td><strong>Optimization</strong></td>
-                        <td><code>optim.SGD</code> (GPU In-Place AXPY kernel with automatic gradient buffer disposal)</td>
+                        <td><strong data-i18n="home.catOptim">Optimization</strong></td>
+                        <td data-i18n-html="home.catOptimOps"><code>optim.SGD</code> (GPU In-Place AXPY kernel with automatic gradient buffer disposal)</td>
                     </tr>
                 </tbody>
             </table>
 
-            <h3>Getting Started</h3>
-            <p>Proceed to our <a href="installation.html">Installation Guide</a> to set up AMEVA-Forge in your environment, try the <a href="demo.html">Interactive Live Studio</a>, or explore the <a href="quickstart.html">Quickstart Guide</a> to define computation graphs immediately.</p>
+            <h3 data-i18n="home.gettingStartedTitle">Getting Started</h3>
+            <p data-i18n-html="home.gettingStartedDesc">Proceed to our <a href="installation.html">Installation Guide</a> to set up AMEVA-Forge in your environment, try the <a href="demo.html">Interactive Live Studio</a>, or explore the <a href="quickstart.html">Quickstart Guide</a> to define computation graphs immediately.</p>
         </main>
     </div>
 
     <footer>
-        &copy; 2026 AMEVA-Forge Team. Released under the Apache-2.0 License.
+        <span data-i18n="common.footerText">&copy; 2026 AMEVA-Forge Team. Released under the Apache-2.0 License.</span>
     </footer>
 </body>
 </html>

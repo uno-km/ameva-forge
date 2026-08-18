@@ -3,148 +3,152 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AMEVA-Forge: API Reference</title>
+    <title data-i18n="apiReference.pageTitle">AMEVA-Forge: API Reference</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="alternate icon" href="favicon.svg">
     <link rel="stylesheet" href="style.css">
     <script src="./dist/index.js"></script>
+    <script src="i18n.js"></script>
+    <script src="i18n-translations.js"></script>
 </head>
 <body>
     <header>
-        <h1>AMEVA-Forge Documentation</h1>
+        <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
         <div class="header-badge-group">
-            <span class="apache-tag">Release 1.0.0</span>
-            <a href="demo.html"><strong>[ Live WebGPU Studio ]</strong></a>
-            <a href="https://github.com/uno-km/ameva-forge" target="_blank">[ GitHub Repository ]</a>
+            <span class="apache-tag" data-i18n="common.releaseTag">Release 1.0.0</span>
+            <a href="demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
+            <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
         </div>
     </header>
 
     <div class="container">
         <nav class="sidebar">
-            <h3>Interactive</h3>
+            <h3 data-i18n="common.nav.interactive">Interactive</h3>
             <ul>
-                <li><a href="demo.html">Live WebGPU Studio</a></li>
+                <li><a href="demo.html" data-i18n="common.nav.liveStudio">Live WebGPU Studio</a></li>
             </ul>
-            <h3>Documentation</h3>
+            <h3 data-i18n="common.nav.documentation">Documentation</h3>
             <ul>
-                <li><a href="index.html">Home</a></li>
-                <li><a href="installation.html">Installation</a></li>
-                <li><a href="quickstart.html">Quickstart</a></li>
-                <li><a href="api-reference.html" class="active"><strong>API Reference</strong></a></li>
+                <li><a href="index.html" data-i18n="common.nav.home">Home</a></li>
+                <li><a href="installation.html" data-i18n="common.nav.installation">Installation</a></li>
+                <li><a href="quickstart.html" data-i18n="common.nav.quickstart">Quickstart</a></li>
+                <li><a href="api-reference.html" class="active"><strong data-i18n="common.nav.apiReference">API Reference</strong></a></li>
             </ul>
-            <h3>Concepts</h3>
+            <h3 data-i18n="common.nav.concepts">Concepts</h3>
             <ul>
-                <li><a href="what-is-forge.html">What is Forge?</a></li>
-                <li><a href="forge-vs-pytorch.html">Forge vs PyTorch</a></li>
+                <li><a href="what-is-forge.html" data-i18n="common.nav.whatIsForge">What is Forge?</a></li>
+                <li><a href="forge-vs-pytorch.html" data-i18n="common.nav.forgeVsPytorch">Forge vs PyTorch</a></li>
             </ul>
         </nav>
 
         <main class="content">
-            <h2>API Reference (Release 1.0.0)</h2>
-            <p>Complete documentation for all modules, classes, and methods supported in AMEVA-Forge Release 1.0.</p>
+            <h2 data-i18n="apiReference.h2">API Reference (Release 1.0.0)</h2>
+            <p data-i18n="apiReference.desc">Complete documentation for all modules, classes, and methods supported in AMEVA-Forge Release 1.0.</p>
 
-            <h3>1. Core Tensor (<code>forge.Tensor</code>)</h3>
+            <h3 data-i18n="apiReference.sec1Title">1. Core Tensor (forge.Tensor)</h3>
             <table>
                 <thead>
                     <tr>
-                        <th style="width: 30%;">Method / Attribute</th>
-                        <th>Description</th>
+                        <th style="width: 30%;" data-i18n="apiReference.thMethod">Method / Attribute</th>
+                        <th data-i18n="apiReference.thDesc">Description</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr>
                         <td><code>forge.tensor(data, requires_grad=False, device='cpu')</code></td>
-                        <td>Creates a new multi-dimensional tensor from array or nested lists.</td>
+                        <td data-i18n="apiReference.tensor1Desc">Creates a new multi-dimensional tensor from array or nested lists.</td>
                     </tr>
                     <tr>
                         <td><code>tensor.to(device)</code> / <code>tensor.move_to_(device)</code></td>
-                        <td>Transfers tensor storage between CPU and WebGPU in-place preserving parameter identity.</td>
+                        <td data-i18n="apiReference.tensor2Desc">Transfers tensor storage between CPU and WebGPU in-place preserving parameter identity.</td>
                     </tr>
                     <tr>
                         <td><code>tensor.backward(gradient=None)</code></td>
-                        <td>Computes vector-Jacobian products (VJP) across the autograd graph.</td>
+                        <td data-i18n="apiReference.tensor3Desc">Computes vector-Jacobian products (VJP) across the autograd graph.</td>
                     </tr>
                     <tr>
                         <td><code>await tensor.numpy_async()</code></td>
-                        <td>Asynchronously reads back GPU buffer to NumPy array without blocking browser UI.</td>
+                        <td data-i18n="apiReference.tensor4Desc">Asynchronously reads back GPU buffer to NumPy array without blocking browser UI.</td>
                     </tr>
                 </tbody>
             </table>
 
-            <h3>2. Neural Network Modules (<code>forge.nn</code>)</h3>
+            <h3 data-i18n="apiReference.sec2Title">2. Neural Network Modules (forge.nn)</h3>
             <table>
                 <thead>
                     <tr>
-                        <th style="width: 30%;">Module</th>
-                        <th>Description</th>
+                        <th style="width: 30%;" data-i18n="apiReference.thModule">Module</th>
+                        <th data-i18n="apiReference.thDesc">Description</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr>
                         <td><code>nn.Linear(in_features, out_features, bias=True)</code></td>
-                        <td>Applies an affine linear transformation \(y = xA^T + b\).</td>
+                        <td data-i18n="apiReference.nn1Desc">Applies an affine linear transformation \(y = xA^T + b\).</td>
                     </tr>
                     <tr>
                         <td><code>nn.LayerNorm(normalized_shape, eps=1e-5)</code></td>
-                        <td>Applies Layer Normalization over the specified normalized shape.</td>
+                        <td data-i18n="apiReference.nn2Desc">Applies Layer Normalization over the specified normalized shape.</td>
                     </tr>
                     <tr>
                         <td><code>nn.BatchNorm2d(num_features, eps=1e-5, momentum=0.1)</code></td>
-                        <td>Applies 2D Batch Normalization with train/eval state tracking.</td>
+                        <td data-i18n="apiReference.nn3Desc">Applies 2D Batch Normalization with train/eval state tracking.</td>
                     </tr>
                     <tr>
                         <td><code>nn.PositionalEncoding(d_model, max_len=5000)</code></td>
-                        <td>Sinusoidal positional encoding with LRU dynamic caching.</td>
+                        <td data-i18n="apiReference.nn4Desc">Sinusoidal positional encoding with LRU dynamic caching.</td>
                     </tr>
                     <tr>
                         <td><code>nn.Dropout(p=0.5)</code></td>
-                        <td>Applies randomized zeroing during training mode; identity during eval.</td>
+                        <td data-i18n="apiReference.nn5Desc">Applies randomized zeroing during training mode; identity during eval.</td>
                     </tr>
                     <tr>
                         <td><code>nn.Sequential(*layers)</code></td>
-                        <td>Sequential container for chaining neural network modules.</td>
+                        <td data-i18n="apiReference.nn6Desc">Sequential container for chaining neural network modules.</td>
                     </tr>
                 </tbody>
             </table>
 
-            <h3>3. Functional & Loss Operations (<code>forge.functional</code>)</h3>
+            <h3 data-i18n="apiReference.sec3Title">3. Functional & Loss Operations (forge.functional)</h3>
             <table>
                 <thead>
                     <tr>
-                        <th style="width: 30%;">Function</th>
-                        <th>Description</th>
+                        <th style="width: 30%;" data-i18n="apiReference.thFunction">Function</th>
+                        <th data-i18n="apiReference.thDesc">Description</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr>
                         <td><code>F.scaled_dot_product_attention(q, k, v, is_causal=False)</code></td>
-                        <td>Computes attention \(\text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V\) with optional causal masking.</td>
+                        <td data-i18n="apiReference.f1Desc">Computes attention \(\text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V\) with optional causal masking.</td>
                     </tr>
                     <tr>
                         <td><code>F.cross_entropy(input, target)</code></td>
-                        <td>Computes Cross-Entropy loss with mathematically exact closed-form GPU derivative.</td>
+                        <td data-i18n="apiReference.f2Desc">Computes Cross-Entropy loss with mathematically exact closed-form GPU derivative.</td>
                     </tr>
                     <tr>
                         <td><code>F.softmax(input, dim=-1)</code></td>
-                        <td>Applies numerically stabilized softmax along the specified dimension.</td>
+                        <td data-i18n="apiReference.f3Desc">Applies numerically stabilized softmax along the specified dimension.</td>
                     </tr>
                     <tr>
                         <td><code>nn.MSELoss()</code></td>
-                        <td>Measures mean squared error between prediction and ground truth.</td>
+                        <td data-i18n="apiReference.f4Desc">Measures mean squared error between prediction and ground truth.</td>
                     </tr>
                 </tbody>
             </table>
 
-            <h3>4. Optimizers (<code>forge.optim</code>)</h3>
+            <h3 data-i18n="apiReference.sec4Title">4. Optimizers (forge.optim)</h3>
             <table>
                 <thead>
                     <tr>
-                        <th style="width: 30%;">Optimizer</th>
-                        <th>Description</th>
+                        <th style="width: 30%;" data-i18n="apiReference.thOptimizer">Optimizer</th>
+                        <th data-i18n="apiReference.thDesc">Description</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr>
                         <td><code>optim.SGD(params, lr=0.01, momentum=0.0)</code></td>
-                        <td>Stochastic Gradient Descent optimizer supporting asynchronous WebGPU in-place AXPY kernel updates.</td>
+                        <td data-i18n="apiReference.opt1Desc">Stochastic Gradient Descent optimizer supporting asynchronous WebGPU in-place AXPY kernel updates.</td>
                     </tr>
                 </tbody>
             </table>
@@ -152,7 +156,7 @@
     </div>
 
     <footer>
-        &copy; 2026 AMEVA-Forge Team. Released under the Apache-2.0 License.
+        <span data-i18n="common.footerText">&copy; 2026 AMEVA-Forge Team. Released under the Apache-2.0 License.</span>
     </footer>
 </body>
 </html>

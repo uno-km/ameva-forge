@@ -216,13 +216,11 @@ async def js_execute_graph(instructions_json: str, inputs) -> dict:
         if js_inputs is not None:
             try:
                 js_inputs.destroy()
-            except Exception as e:
-                import warnings
-                warnings.warn(f"[AMEVA Bridge] Proxy cleanup failed: {e}", RuntimeWarning)
+            except Exception:
+                pass
         if result_proxy is not None:
             try:
                 result_proxy.destroy()
-            except Exception as e:
-                import warnings
-                warnings.warn(f"[AMEVA Bridge] Proxy cleanup failed: {e}", RuntimeWarning)
+            except Exception:
+                pass
 

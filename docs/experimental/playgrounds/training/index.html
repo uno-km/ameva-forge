@@ -1,11 +1,12 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>AMEVA-Forge: Training Demo</title>
+    <title data-i18n="common.nav.training">AMEVA-Forge: Training Demo</title>
     <link rel="stylesheet" href="../../style.css">
+    <script src="../../i18n.js"></script>
+    <script src="../../i18n-translations.js"></script>
     <style>
-
         button { padding: 5px 15px; border: 1px solid #003399; background: #f4f4f4; cursor: pointer; margin-right: 10px; font-weight: bold;}
         button.extreme { border-color: #d32f2f; color: #d32f2f; }
         button:hover { background: #e0e0e0; }
@@ -17,30 +18,33 @@
             z-index: 1000;
         }
         .hidden { display: none !important; }
-
     </style>
 </head>
 <body>
     <header>
-        <h1>AMEVA-Forge: Training Demo</h1>
+        <h1 data-i18n="common.headerTitle">AMEVA-Forge: Training Demo</h1>
+        <div class="header-badge-group">
+            <span class="apache-tag" data-i18n="common.releaseTag">Release 1.0.0</span>
+            <a href="../../demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
+            <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
+        </div>
     </header>
     
     <div class="container">
-<nav class="sidebar">
-    <h3>Navigation</h3>
-    <ul>
-        <li><a href="../../index.html">Home</a></li>
-        <li><a href="../../what-is-forge.html">What is Forge?</a></li>
-        <li><a href="../../forge-vs-pytorch.html">Forge vs PyTorch</a></li>
-        <li><a href="../mnist/index.html">1. MNIST Inference</a></li>
-        <li><a href="../benchmark/index.html">2. Benchmark Test</a></li>
-        <li><a href="../training/index.html"><strong>3. Training Demo</strong></a></li>
-        <li><a href="../vision/index.html">4. Vision Center</a></li>
-    </ul>
-</nav>
+        <nav class="sidebar">
+            <h3 data-i18n="common.nav.navigation">Navigation</h3>
+            <ul>
+                <li><a href="../../index.html" data-i18n="common.nav.home">Home</a></li>
+                <li><a href="../../what-is-forge.html" data-i18n="common.nav.whatIsForge">What is Forge?</a></li>
+                <li><a href="../../forge-vs-pytorch.html" data-i18n="common.nav.forgeVsPytorch">Forge vs PyTorch</a></li>
+                <li><a href="../mnist/index.html" data-i18n="common.nav.mnist">1. MNIST Inference</a></li>
+                <li><a href="../benchmark/index.html" data-i18n="common.nav.benchmark">2. Benchmark Test</a></li>
+                <li><a href="../training/index.html" class="active"><strong data-i18n="common.nav.training">3. Training Demo</strong></a></li>
+                <li><a href="../vision/index.html" data-i18n="common.nav.vision">4. Vision Center</a></li>
+            </ul>
+        </nav>
         
         <main class="content">
-
             <h2>3. WebGPU Real-time Training Demo</h2>
             <p>Select a scale to train entirely within your browser utilizing WebGPU acceleration. No server processing is involved.</p>
             <div style="margin-bottom: 20px;">
@@ -55,13 +59,12 @@
                 <h1 style="color: #003399;">Loading WebGPU Training Environment...</h1>
                 <h2 id="loadingText">Initializing Pyodide...</h2>
             </div>
-
         </main>
     </div>
 
     <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
     <script>var exports = {};</script>
-    <script src="../../../packages/forge/dist/index.js"></script>
+    <script src="../../packages/forge/dist/index.js"></script>
     <script>
         if (exports.registerPyodideBridge) {
             exports.registerPyodideBridge();
@@ -89,7 +92,7 @@
                 
                 await micropip.install("../../../packages/forge-py/dist/forge-0.1.0-py3-none-any.whl");
                 
-                await pyodide.runPythonAsync(`
+                await pyodide.runPythonAsync(
 import sys
 from js import log
 class WebConsole:
@@ -102,7 +105,7 @@ import forge.nn as nn
 import time
 import asyncio
 log("Pyodide Engine Ready!")
-                `);
+                );
                 
                 document.getElementById('loadingOverlay').classList.add('hidden');
             } catch (e) {
@@ -118,7 +121,7 @@ log("Pyodide Engine Ready!")
             
             let code = "";
             if (mode === 'low') {
-                code = `
+                code = 
 async def train():
     log("Initializing XOR Dataset...")
     import numpy as np
@@ -138,9 +141,9 @@ async def train():
         await asyncio.sleep(0.01)
     log("XOR Training Complete!")
 await train()
-`;
+;
             } else if (mode === 'medium') {
-                code = `
+                code = 
 async def train():
     log("Generating Synthetic 1000x20 Dataset...")
     import numpy as np
@@ -161,9 +164,9 @@ async def train():
         await asyncio.sleep(0.01)
     log("Medium MLP Training Complete!")
 await train()
-`;
+;
             } else if (mode === 'extreme') {
-                code = `
+                code = 
 async def train():
     log("WARNING: EXTREME VRAM CRUSHER INITIATED")
     log("Allocating 4096x4096x3 tensors on GPU...")
@@ -182,7 +185,7 @@ async def train():
     except Exception as e:
         log(f"CRASH: {str(e)}")
 await train()
-`;
+;
             }
             
             try {
@@ -193,7 +196,6 @@ await train()
             isTraining = false;
         }
         initDashboard();
-
     </script>
 </body>
 </html>

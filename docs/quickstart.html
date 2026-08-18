@@ -3,46 +3,50 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AMEVA-Forge: Quickstart Guide</title>
+    <title data-i18n="quickstart.pageTitle">AMEVA-Forge: Quickstart Guide</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="alternate icon" href="favicon.svg">
     <link rel="stylesheet" href="style.css">
     <script src="./dist/index.js"></script>
+    <script src="i18n.js"></script>
+    <script src="i18n-translations.js"></script>
 </head>
 <body>
     <header>
-        <h1>AMEVA-Forge Documentation</h1>
+        <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
         <div class="header-badge-group">
-            <span class="apache-tag">Release 1.0.0</span>
-            <a href="demo.html"><strong>[ Live WebGPU Studio ]</strong></a>
-            <a href="https://github.com/uno-km/ameva-forge" target="_blank">[ GitHub Repository ]</a>
+            <span class="apache-tag" data-i18n="common.releaseTag">Release 1.0.0</span>
+            <a href="demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
+            <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
         </div>
     </header>
 
     <div class="container">
         <nav class="sidebar">
-            <h3>Interactive</h3>
+            <h3 data-i18n="common.nav.interactive">Interactive</h3>
             <ul>
-                <li><a href="demo.html">Live WebGPU Studio</a></li>
+                <li><a href="demo.html" data-i18n="common.nav.liveStudio">Live WebGPU Studio</a></li>
             </ul>
-            <h3>Documentation</h3>
+            <h3 data-i18n="common.nav.documentation">Documentation</h3>
             <ul>
-                <li><a href="index.html">Home</a></li>
-                <li><a href="installation.html">Installation</a></li>
-                <li><a href="quickstart.html" class="active"><strong>Quickstart</strong></a></li>
-                <li><a href="api-reference.html">API Reference</a></li>
+                <li><a href="index.html" data-i18n="common.nav.home">Home</a></li>
+                <li><a href="installation.html" data-i18n="common.nav.installation">Installation</a></li>
+                <li><a href="quickstart.html" class="active"><strong data-i18n="common.nav.quickstart">Quickstart</strong></a></li>
+                <li><a href="api-reference.html" data-i18n="common.nav.apiReference">API Reference</a></li>
             </ul>
-            <h3>Concepts</h3>
+            <h3 data-i18n="common.nav.concepts">Concepts</h3>
             <ul>
-                <li><a href="what-is-forge.html">What is Forge?</a></li>
-                <li><a href="forge-vs-pytorch.html">Forge vs PyTorch</a></li>
+                <li><a href="what-is-forge.html" data-i18n="common.nav.whatIsForge">What is Forge?</a></li>
+                <li><a href="forge-vs-pytorch.html" data-i18n="common.nav.forgeVsPytorch">Forge vs PyTorch</a></li>
             </ul>
         </nav>
 
         <main class="content">
-            <h2>Quickstart Guide</h2>
-            <p>This guide provides a rapid introduction to defining a neural network, performing forward passes, backpropagation, and updating weights using AMEVA-Forge on CPU and WebGPU.</p>
+            <h2 data-i18n="quickstart.h2">Quickstart Guide</h2>
+            <p data-i18n="quickstart.desc">This guide provides a rapid introduction to defining a neural network, performing forward passes, backpropagation, and updating weights using AMEVA-Forge on CPU and WebGPU.</p>
 
-            <h3>1. Tensor Creation and Operations</h3>
-            <p>AMEVA-Forge's fundamental data structure is the <code>Tensor</code>. Tensor operations are recorded dynamically for automatic differentiation.</p>
+            <h3 data-i18n="quickstart.sec1Title">1. Tensor Creation and Operations</h3>
+            <p data-i18n-html="quickstart.sec1Desc">AMEVA-Forge's fundamental data structure is the <code>Tensor</code>. Tensor operations are recorded dynamically for automatic differentiation.</p>
             <pre><code>import forge as torch
 
 # Define standard tensors with autograd enabled
@@ -53,8 +57,8 @@ y = torch.tensor([[5.0, 6.0], [7.0, 8.0]])
 z = x @ y
 print("Forward Result:\n", z.numpy())</code></pre>
 
-            <h3>2. Reverse-Mode Autograd</h3>
-            <p>Calling <code>.backward()</code> computes gradients for all descendant tensors where <code>requires_grad=True</code>.</p>
+            <h3 data-i18n="quickstart.sec2Title">2. Reverse-Mode Autograd</h3>
+            <p data-i18n-html="quickstart.sec2Desc">Calling <code>.backward()</code> computes gradients for all descendant tensors where <code>requires_grad=True</code>.</p>
             <pre><code># Compute a scalar loss
 loss = z.sum()
 
@@ -63,7 +67,7 @@ loss.backward()
 
 print("Gradient of x:\n", x.grad.numpy())</code></pre>
 
-            <h3>3. Building Neural Networks with <code>forge.nn</code></h3>
+            <h3 data-i18n="quickstart.sec3Title">3. Building Neural Networks with forge.nn</h3>
             <pre><code>import forge.nn as nn
 import forge.optim as optim
 
@@ -80,8 +84,8 @@ class SimpleMLP(nn.Module):
 model = SimpleMLP()
 print(model)</code></pre>
 
-            <h3>4. Browser WebGPU Training Loop</h3>
-            <p>Move the entire model to WebGPU using <code>.to("gpu")</code> and utilize async methods for non-blocking browser execution.</p>
+            <h3 data-i18n="quickstart.sec4Title">4. Browser WebGPU Training Loop</h3>
+            <p data-i18n-html="quickstart.sec4Desc">Move the entire model to WebGPU using <code>.to("gpu")</code> and utilize async methods for non-blocking browser execution.</p>
             <pre><code>model = SimpleMLP().to("gpu")
 optimizer = optim.SGD(model.parameters(), lr=0.05)
 criterion = nn.MSELoss()
@@ -106,7 +110,7 @@ for step in range(50):
     </div>
 
     <footer>
-        &copy; 2026 AMEVA-Forge Team. Released under the Apache-2.0 License.
+        <span data-i18n="common.footerText">&copy; 2026 AMEVA-Forge Team. Released under the Apache-2.0 License.</span>
     </footer>
 </body>
 </html>

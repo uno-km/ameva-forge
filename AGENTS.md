@@ -15,3 +15,12 @@
 
 ## 3. 주석 및 문서화 무결성 (Documentation Integrity)
 - 모든 WGSL 셰이더와 소스 파일, 핵심 함수/클래스에는 `WHAT / WHY / HOW` 및 한글 메타데이터 주석을 필수 유지하며, 임의로 주석을 삭제하거나 축약하지 않는다.
+
+## 4. 소스코드 변경 및 다국어·빌드 동기화 표준 프로토콜 (Source Code Change Protocol)
+- **발동 조건**: Python/TypeScript/WGSL 소스코드 수정, 문서/UI 텍스트 수정, 신규 기능 추가 시.
+- **행동 강령**:
+  1. [`SOURCE_CHANGE_MANUAL.md`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/SOURCE_CHANGE_MANUAL.md) 및 `.agents/skills/source-change-protocol/SKILL.md`를 필수로 준수한다.
+  2. 문서/UI 텍스트 변경 시 HTML 하드코딩을 일체 금지하고, [`docs/i18n-translations.js`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/docs/i18n-translations.js)에 **6개 국어(`en`, `ko`, `zh`, `ja`, `hi`, `es`) 전체에 1:1 키 패리티로 동시 반영**한다.
+  3. 수정 완료 후 반드시 `node tools/validate_i18n.js`와 `node tools/test_i18n_runtime.js`를 실행하여 100% 무결성을 증명한다.
+  4. Python/TypeScript 소스 수정 시 `docs/dist/` 및 `docs/pkg/` 번들 빌드 아티팩트를 최신화하여 정합성을 유지한다.
+
