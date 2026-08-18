@@ -97,6 +97,7 @@ let ALLOWED_KERNEL_NAMES = new Set([
   "col2im",
   "permute",
   "matmul_bias_relu",
+  "matmul_tiled",
 ]);
 
 /**
