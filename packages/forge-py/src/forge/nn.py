@@ -883,11 +883,8 @@ class PositionalEncoding(Module):
         else:
             if len(self._pe_cache) >= 32:
                 old_key, old_tensor = self._pe_cache.popitem(last=False)
-                if getattr(old_tensor, 'device', None) == 'gpu':
-                    try:
-                        old_tensor.dispose()
-                    except Exception:
-                        pass
+                if isinstance(old_tensor, Tensor):
+                    old_tensor.dispose()
             pe_slice_data = self._pe_raw[:, :seq_len, :].astype(np.float32)
             self._pe_cache[cache_key] = tensor(pe_slice_data, device=x.device, requires_grad=False)
             

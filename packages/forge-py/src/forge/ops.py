@@ -224,18 +224,18 @@ def ones_like(x: Tensor) -> Tensor:
 # HOW: np.zeros로 0 행렬을 만든 뒤 텐서로 감쌉니다.
 def zeros_like(x: Tensor) -> Tensor:
     """x와 같은 shape/device의 0-텐서를 생성한다."""
+    if x.device == "gpu":
+        numel = 1
+        for s in x.shape:
+            numel *= s
+        return Tensor(shape=x.shape, dtype=x.dtype, device="gpu", op="fill", op_params=[float(numel), 0.0])
     arr = np.zeros(x.shape, dtype=np.float32)
-    if x.device == "cpu":
-        return Tensor(shape=x.shape, dtype=x.dtype, device="cpu", data=arr)
-    else:
-        # Lazy upload: realize() 호출 없이 그래프에 합류
-        return Tensor(shape=x.shape, dtype="float32", device="gpu",
-                   data=arr, op='upload')
+    return Tensor(shape=x.shape, dtype=x.dtype, device="cpu", data=arr)
 
 
 # WHAT: 사용자가 직접 shape을 지정하여 0으로 채워진 텐서를 생성합니다.
 # WHY: 새로운 편향(Bias) 파라미터나 특정 크기의 초기 텐서를 만들기 위함입니다.
-# HOW: np.zeros를 사용 후 tensor() 팩토리 함수를 호출합니다.
+# HOW: GPU 디바이스일 경우 Pure-VRAM fill 커널 op를 발행하고, CPU는 np.zeros를 사용합니다.
 def zeros(
     shape: Tuple[int, ...],
     device: str = "cpu",
@@ -243,13 +243,18 @@ def zeros(
     requires_grad: bool = False
 ) -> Tensor:
     """0으로 채워진 텐서를 생성한다."""
+    if device == "gpu":
+        numel = 1
+        for s in shape:
+            numel *= s
+        return Tensor(shape=shape, dtype=dtype, device="gpu", op="fill", op_params=[float(numel), 0.0], requires_grad=requires_grad)
     arr = np.zeros(shape, dtype=np.float32)
-    return tensor(arr, device=device, dtype=dtype, requires_grad=requires_grad)
+    return tensor(arr, device="cpu", dtype=dtype, requires_grad=requires_grad)
 
 
 # WHAT: 사용자가 지정한 크기로 1로 채워진 텐서를 생성합니다.
 # WHY: 가중치의 배율을 1로 초기화하거나 특정 연산의 마스크로 사용하기 위함입니다.
-# HOW: np.ones 배열을 만들어 tensor()로 래핑합니다.
+# HOW: GPU 디바이스일 경우 Pure-VRAM fill 커널 op를 발행하고, CPU는 np.ones를 사용합니다.
 def ones(
     shape: Tuple[int, ...],
     device: str = "cpu",
@@ -257,13 +262,18 @@ def ones(
     requires_grad: bool = False
 ) -> Tensor:
     """1로 채워진 텐서를 생성한다."""
+    if device == "gpu":
+        numel = 1
+        for s in shape:
+            numel *= s
+        return Tensor(shape=shape, dtype=dtype, device="gpu", op="fill", op_params=[float(numel), 1.0], requires_grad=requires_grad)
     arr = np.ones(shape, dtype=np.float32)
-    return tensor(arr, device=device, dtype=dtype, requires_grad=requires_grad)
+    return tensor(arr, device="cpu", dtype=dtype, requires_grad=requires_grad)
 
 
 # WHAT: 주어진 값을 모든 요소에 채워 넣는 텐서 생성 함수입니다.
 # WHY: 임의의 고정된 상수값(예: 0.5, 2.0 등)으로 구성된 텐서가 필요할 때 사용하기 위함입니다.
-# HOW: np.full을 이용해 데이터를 채우고 tensor()를 반환합니다.
+# HOW: GPU 디바이스일 경우 Pure-VRAM fill 커널 op를 발행하고, CPU는 np.full을 사용합니다.
 def full(
     shape: Tuple[int, ...],
     fill_value: float,
@@ -272,8 +282,13 @@ def full(
     requires_grad: bool = False
 ) -> Tensor:
     """특정 값으로 채워진 텐서를 생성한다."""
+    if device == "gpu":
+        numel = 1
+        for s in shape:
+            numel *= s
+        return Tensor(shape=shape, dtype=dtype, device="gpu", op="fill", op_params=[float(numel), float(fill_value)], requires_grad=requires_grad)
     arr = np.full(shape, fill_value, dtype=np.float32)
-    return tensor(arr, device=device, dtype=dtype, requires_grad=requires_grad)
+    return tensor(arr, device="cpu", dtype=dtype, requires_grad=requires_grad)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

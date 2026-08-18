@@ -27,10 +27,10 @@ async def test_gpu_momentum_sgd_step_async_real_execution():
         captured_instructions = parsed
         # Return in-place param handle for the sgd_momentum_step op node
         step_nodes = [node["id"] for node in parsed if node.get("op") == "sgd_momentum_step"]
-        # Velocity upload node
-        upload_nodes = [node["id"] for node in parsed if node.get("op") == "upload"]
+        # Velocity allocation node (upload or pure-GPU fill)
+        alloc_nodes = [node["id"] for node in parsed if node.get("op") in ("upload", "fill")]
         res = {}
-        for uid in upload_nodes:
+        for uid in alloc_nodes:
             res[str(uid)] = "vel_handle_allocated"
         for sid in step_nodes:
             res[str(sid)] = "param_handle_1"  # in-place contract
@@ -66,10 +66,10 @@ async def test_gpu_adam_step_async_real_execution():
         parsed = json.loads(instructions)
         captured_instructions = parsed
         step_nodes = [node["id"] for node in parsed if node.get("op") == "adam_step"]
-        upload_nodes = [node["id"] for node in parsed if node.get("op") == "upload"]
+        alloc_nodes = [node["id"] for node in parsed if node.get("op") in ("upload", "fill")]
         res = {}
-        for uid in upload_nodes:
-            res[str(uid)] = f"handle_upload_{uid}"
+        for uid in alloc_nodes:
+            res[str(uid)] = f"handle_alloc_{uid}"
         for sid in step_nodes:
             res[str(sid)] = "param_handle_adam"  # in-place contract
         return res
