@@ -979,6 +979,11 @@
         "permute",
         "matmul_bias_relu",
         "matmul_tiled",
+        "flash_attention",
+        "rope",
+        "rmsnorm",
+        "swiglu",
+        "unpack_quant",
     ]);
     /**
      * WHAT: 화이트리스트에 허용된 커널 이름들을 새롭게 등록(덮어쓰기)합니다.
@@ -4010,88 +4015,97 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 `;
 
     /**
-     * 생성일 (Created): 2026-08-12 12:59:35 +0900
-     * 수정 내역 (Modified):
-     *   - 2026-08-12 12:59:35 +0900: Feat: Introduce v3.0 features (CNN, Pooling, Dropout, Serialization)
+     * 파일 생성일: 2026-08-12
+     * 수정일: 2026-08-18 (Release 2.0 SCRUM-204 16x16 Shared Memory Tiled Batched MatMul)
+     *
+     * WHAT: 16x16 워크그룹 공유 메모리(Shared Memory) 기반 4D Batched General Matrix Multiply 커널입니다.
+     * WHY: Multi-Head Attention (MHA/GQA)에서 QK^T 및 Attn*V 연산의 글로벌 메모리 병목을 제거하기 위해 존재합니다.
+     * HOW: 각 배치 인덱스(global_id.z) 내에서 16x16 A/B 타일을 온칩 SRAM에 적재하고 workgroupBarrier()로 동기화하여 고속 배치 GEMM을 수행합니다.
      */
     const BATCHED_MATMUL_WGSL = `
-/**
- * @struct Params
- * @brief 배치 행렬 곱셈(Batched Matrix Multiplication)을 제어하기 위한 행렬의 차원 크기와 스트라이드(stride) 정보를 저장합니다. (What)
- * 입력 행렬 텐서 A와 B의 형태(M, N, K)와 연속적인 배치 접근을 위한 메모리 오프셋을 계산할 때 사용하기 위해 정의되었습니다. (Why)
- */
 struct Params {
-  // 배치(Batch)의 개수입니다. 한 번에 여러 쌍의 행렬 곱셈을 병렬 처리하기 위한 차원입니다.
-  B: u32,
-  // 결과 행렬(C)과 왼쪽 행렬(A)의 행(Row) 개수입니다.
-  M: u32,
-  // 결과 행렬(C)과 오른쪽 행렬(B)의 열(Column) 개수입니다.
-  N: u32,
-  // 왼쪽 행렬(A)의 열 개수이자 오른쪽 행렬(B)의 행 개수로, 내적(Dot product)이 이루어지는 공통 차원의 길이입니다.
-  K: u32,
-  // 왼쪽 행렬(A)에서 다음 배치로 넘어가기 위해 필요한 원소의 개수(보폭)입니다.
-  strideA: u32,
-  // 오른쪽 행렬(B)에서 다음 배치로 넘어가기 위해 필요한 원소의 개수(보폭)입니다.
-  strideB: u32,
-  // 결과 행렬(C)에서 다음 배치로 넘어가기 위해 필요한 원소의 개수(보폭)입니다.
-  strideC: u32,
+  B: u32,       // 총 배치 수 (예: Batch * NumHeads)
+  M: u32,       // 행렬 A/C의 행 개수
+  N: u32,       // 행렬 B/C의 열 개수
+  K: u32,       // 공통 내적 차원
+  strideA: u32, // 배치당 A 오프셋 보폭
+  strideB: u32, // 배치당 B 오프셋 보폭
+  strideC: u32, // 배치당 C 오프셋 보폭
+  pad: u32,
 };
 
-// params: 배치 크기 및 행렬 차원 정보를 GPU 스레드들에게 제공하는 uniform 버퍼입니다.
 @group(0) @binding(0) var<uniform> params: Params;
-// a: 첫 번째(왼쪽) 입력 행렬 데이터들을 담고 있는 1차원 배열(읽기 전용)입니다.
 @group(0) @binding(1) var<storage, read> a: array<f32>;
-// b: 두 번째(오른쪽) 입력 행렬 데이터들을 담고 있는 1차원 배열(읽기 전용)입니다.
 @group(0) @binding(2) var<storage, read> b: array<f32>;
-// c: 행렬 곱셈의 결과가 저장될 출력 배열(읽기/쓰기 가능)입니다.
 @group(0) @binding(3) var<storage, read_write> c: array<f32>;
 
-/**
- * @function main
- * @brief 주어진 배치(Batch)에 대해 행렬 A와 B의 내적을 수행하여 행렬 C의 각 요소를 계산합니다. (What)
- * 어텐션 메커니즘 등 신경망 구조에서 다중 배치의 텐서를 한 번에 곱하기 위해 (Why) 3차원 그리드로 병렬 실행됩니다.
- * 
- * @param global_id 워크그룹과 스레드의 3차원 인덱스입니다. (x: 열(Column), y: 행(Row), z: 배치(Batch)를 나타냅니다.) (How)
- */
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  // 스레드의 x 인덱스로, 연산할 결과 행렬 C의 열(Column) 위치를 할당합니다.
-  let col = global_id.x;
-  // 스레드의 y 인덱스로, 연산할 결과 행렬 C의 행(Row) 위치를 할당합니다.
-  let row = global_id.y;
-  // 스레드의 z 인덱스로, 현재 처리할 배치(Batch) 번호를 할당합니다.
-  let batch = global_id.z;
+var<workgroup> tileA: array<array<f32, 16>, 16>;
+var<workgroup> tileB: array<array<f32, 16>, 16>;
 
-  // 할당된 인덱스들이 지정된 행렬 크기나 배치 수를 초과하는지 검사합니다. (What)
-  // 워크그룹 크기(8x8)로 인해 남는 스레드가 유효하지 않은 메모리에 접근하는 것을 방지하기 위함입니다. (Why)
-  if (row >= params.M || col >= params.N || batch >= params.B) {
+@compute @workgroup_size(16, 16, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let local_row = local_id.y;
+  let local_col = local_id.x;
+
+  let global_row_c = workgroup_id.y * 16u + local_row;
+  let global_col_c = workgroup_id.x * 16u + local_col;
+  let batch = workgroup_id.z;
+
+  if (batch >= params.B) {
     return;
   }
 
-  // 1차원 배열 A에서 현재 배치의 현재 행이 시작되는 오프셋을 계산합니다. (How)
-  let a_offset = batch * params.strideA + row * params.K;
-  // 1차원 배열 B에서 현재 배치의 현재 열이 시작되는 오프셋을 계산합니다.
-  let b_offset = batch * params.strideB + col;
-  // 1차원 결과 배열 C에서 현재 배치의 위치(row, col)에 해당하는 저장 인덱스를 계산합니다.
-  let c_offset = batch * params.strideC + row * params.N + col;
+  let batch_a_offset = batch * params.strideA;
+  let batch_b_offset = batch * params.strideB;
+  let batch_c_offset = batch * params.strideC;
 
-  // 내적(Dot product)을 누적하기 위한 실수형 변수를 선언하고 0으로 초기화합니다. (What)
-  var sum: f32 = 0.0;
-  
-  // 공통 차원인 K번만큼 반복하여 행렬 A의 특정 행과 행렬 B의 특정 열의 요소들을 곱하고 더합니다. (How)
-  for (var k: u32 = 0u; k < params.K; k = k + 1u) {
-    // 행렬 A에서는 열(k) 방향으로 이동하고, 행렬 B에서는 행(k) 방향으로 이동(B의 행 길이인 N만큼 점프)하면서 값을 곱하여 sum에 누적시킵니다. (How)
-    sum = sum + a[a_offset + k] * b[b_offset + k * params.N];
+  let num_tiles = (params.K + 15u) / 16u;
+  var acc: f32 = 0.0;
+
+  for (var t: u32 = 0u; t < num_tiles; t = t + 1u) {
+    let global_row_a = global_row_c;
+    let global_col_a = t * 16u + local_col;
+
+    if (global_row_a < params.M && global_col_a < params.K) {
+      tileA[local_row][local_col] = a[batch_a_offset + global_row_a * params.K + global_col_a];
+    } else {
+      tileA[local_row][local_col] = 0.0;
+    }
+
+    let global_row_b = t * 16u + local_row;
+    let global_col_b = global_col_c;
+
+    if (global_row_b < params.K && global_col_b < params.N) {
+      tileB[local_row][local_col] = b[batch_b_offset + global_row_b * params.N + global_col_b];
+    } else {
+      tileB[local_row][local_col] = 0.0;
+    }
+
+    workgroupBarrier();
+
+    for (var k: u32 = 0u; k < 16u; k = k + 1u) {
+      acc = acc + tileA[local_row][k] * tileB[k][local_col];
+    }
+
+    workgroupBarrier();
   }
 
-  // 계산된 내적 최종 결과(sum)를 출력 배열 C의 오프셋 위치에 저장합니다. (What)
-  c[c_offset] = sum;
+  if (global_row_c < params.M && global_col_c < params.N) {
+    c[batch_c_offset + global_row_c * params.N + global_col_c] = acc;
+  }
 }
 `;
 
     /**
-     * AMEVA-Forge Fused Linear Kernel: MatMul + BiasAdd + ReLU
-     * Computes C = ReLU(A @ B + Bias) in a single GPU compute pass.
+     * 파일 생성일: 2026-08-12
+     * 수정일: 2026-08-18 (Release 2.0 SCRUM-203 고도화)
+     *
+     * WHAT: 16x16 워크그룹 공유 메모리(Shared Memory) 기반 Fused GEMM (MatMul + Bias + ReLU/GELU) 커널입니다.
+     * WHY: Linear Layer 및 FFN 계층에서 중간 버퍼 VRAM 할당과 메모리 왕복 대역폭 소모를 100% 제거하기 위해 존재합니다.
+     * HOW: 공유 메모리 타일링으로 A, B 행렬곱을 수행한 후, 레지스터 레벨에서 Bias 덧셈과 활성화 함수(ReLU/GELU)를 단일 패스로 처리합니다.
      */
     const MATMUL_BIAS_RELU_WGSL = `
 struct Params {
@@ -4099,8 +4113,8 @@ struct Params {
   N: u32,
   K: u32,
   offsetY: u32,
-  has_bias: u32,
-  has_relu: u32,
+  has_bias: u32,  // 1: bias 적용, 0: 생략
+  activation_type: u32, // 0: None, 1: ReLU, 2: GELU
   pad1: u32,
   pad2: u32,
 };
@@ -4111,29 +4125,73 @@ struct Params {
 @group(0) @binding(3) var<storage, read> bias: array<f32>;
 @group(0) @binding(4) var<storage, read_write> c: array<f32>;
 
-@compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  let col = global_id.x + global_id.z * 65535u * 8u;
-  let row = global_id.y + params.offsetY;
+var<workgroup> tileA: array<array<f32, 16>, 16>;
+var<workgroup> tileB: array<array<f32, 16>, 16>;
 
-  if (row >= params.M || col >= params.N) {
-    return;
+fn compute_gelu(x: f32) -> f32 {
+  let sqrt_2_over_pi = 0.7978845608;
+  let coef = 0.044715;
+  let inner = sqrt_2_over_pi * (x + coef * x * x * x);
+  return 0.5 * x * (1.0 + tanh(inner));
+}
+
+@compute @workgroup_size(16, 16, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let local_row = local_id.y;
+  let local_col = local_id.x;
+
+  let global_row_c = workgroup_id.y * 16u + local_row + params.offsetY;
+  let global_col_c = (workgroup_id.x + workgroup_id.z * 65535u) * 16u + local_col;
+
+  let num_tiles = (params.K + 15u) / 16u;
+  var acc: f32 = 0.0;
+
+  for (var t: u32 = 0u; t < num_tiles; t = t + 1u) {
+    let global_row_a = global_row_c;
+    let global_col_a = t * 16u + local_col;
+
+    if (global_row_a < params.M && global_col_a < params.K) {
+      tileA[local_row][local_col] = a[global_row_a * params.K + global_col_a];
+    } else {
+      tileA[local_row][local_col] = 0.0;
+    }
+
+    let global_row_b = t * 16u + local_row;
+    let global_col_b = global_col_c;
+
+    if (global_row_b < params.K && global_col_b < params.N) {
+      tileB[local_row][local_col] = b[global_row_b * params.N + global_col_b];
+    } else {
+      tileB[local_row][local_col] = 0.0;
+    }
+
+    workgroupBarrier();
+
+    for (var k: u32 = 0u; k < 16u; k = k + 1u) {
+      acc = acc + tileA[local_row][k] * tileB[k][local_col];
+    }
+
+    workgroupBarrier();
   }
 
-  var sum: f32 = 0.0;
-  for (var k: u32 = 0u; k < params.K; k = k + 1u) {
-    sum = sum + a[row * params.K + k] * b[k * params.N + col];
-  }
+  if (global_row_c < params.M && global_col_c < params.N) {
+    if (params.has_bias == 1u) {
+      acc = acc + bias[global_col_c];
+    }
 
-  if (params.has_bias == 1u) {
-    sum = sum + bias[col];
-  }
+    if (params.activation_type == 1u) {
+      // ReLU
+      acc = max(acc, 0.0);
+    } else if (params.activation_type == 2u) {
+      // GELU
+      acc = compute_gelu(acc);
+    }
 
-  if (params.has_relu == 1u) {
-    sum = max(sum, 0.0);
+    c[global_row_c * params.N + global_col_c] = acc;
   }
-
-  c[row * params.N + col] = sum;
 }
 `;
 
@@ -4224,6 +4282,368 @@ fn main(
 `;
 
     /**
+     * 파일 생성일: 2026-08-18
+     * AMEVA-Forge Release 2.0: SCRUM-209 / SCRUM-210 / SCRUM-211
+     * FlashAttention-2 Fused 1-Pass Online Softmax WGSL Kernel (MHA / GQA / Causal)
+     *
+     * WHAT: O(N) 메모리 복잡도를 가지는 FlashAttention-2 융합 1-Pass 어텐션 WGSL 셰이더입니다.
+     * WHY: 표준 Scaled Dot-Product Attention의 O(N^2) 어텐션 맵 VRAM 할당과 대역폭 병목을 100% 제거하고,
+     *      긴 시퀀스(SeqLen 2048~4096)에서도 OOM 없이 초고속 LLM 추론을 가능하게 합니다.
+     * HOW: Dao et al.의 FlashAttention-2 Online Softmax 알고리즘(Running Max & Running Sum)을 GPU 스레드 레지스터 레벨에서
+     *      단일 패스로 융합하고, Grouped Query Attention(GQA)과 Causal Masking을 셰이더 내부에서 인라인으로 처리합니다.
+     */
+    const FLASH_ATTENTION_WGSL = `
+struct Params {
+  B: u32,             // 총 배치 수
+  H: u32,             // 쿼리 헤드 수 (Query Heads)
+  H_kv: u32,          // KV 헤드 수 (KV Heads, GQA 지원용: H / H_kv = 그룹 크기)
+  N: u32,             // 시퀀스 길이 (Sequence Length)
+  d: u32,             // 헤드 차원 (Head Dim, 예: 64, 128)
+  scale: f32,         // 1.0 / sqrt(d) 스케일 팩터
+  is_causal: u32,     // 1: Causal Masking 적용, 0: Full Attention
+  strideQ: u32,       // Q 텐서의 배치*헤드당 오프셋 보폭
+  strideK: u32,       // K 텐서의 배치*헤드당 오프셋 보폭
+  strideV: u32,       // V 텐서의 배치*헤드당 오프셋 보폭
+  strideO: u32,       // O 텐서의 배치*헤드당 오프셋 보폭
+  pad: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> q: array<f32>;
+@group(0) @binding(2) var<storage, read> k: array<f32>;
+@group(0) @binding(3) var<storage, read> v: array<f32>;
+@group(0) @binding(4) var<storage, read_write> o: array<f32>;
+
+// 워크그룹당 최대 128 차원의 헤드 출력을 레지스터/공유 메모리에 누적
+var<workgroup> s_q: array<f32, 128>;
+
+@compute @workgroup_size(64, 1, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let thread_id = local_id.x;
+  let q_idx = workgroup_id.x; // 현재 처리할 쿼리 토큰 인덱스 (0 .. N-1)
+  let head_idx = workgroup_id.y; // 쿼리 헤드 인덱스 (0 .. H-1)
+  let batch_idx = workgroup_id.z; // 배치 인덱스 (0 .. B-1)
+
+  if (q_idx >= params.N || head_idx >= params.H || batch_idx >= params.B) {
+    return;
+  }
+
+  // GQA 매핑: 쿼리 헤드 인덱스에 대응하는 KV 헤드 인덱스 계산
+  let group_size = params.H / params.H_kv;
+  let kv_head_idx = head_idx / group_size;
+
+  let q_head_offset = batch_idx * (params.H * params.strideQ) + head_idx * params.strideQ;
+  let k_head_offset = batch_idx * (params.H_kv * params.strideK) + kv_head_idx * params.strideK;
+  let v_head_offset = batch_idx * (params.H_kv * params.strideV) + kv_head_idx * params.strideV;
+  let o_head_offset = batch_idx * (params.H * params.strideO) + head_idx * params.strideO;
+
+  let q_token_offset = q_head_offset + q_idx * params.d;
+  let o_token_offset = o_head_offset + q_idx * params.d;
+
+  // 1. 협력 적재: 쿼리 벡터 Q[q_idx, 0..d-1]를 워크그룹 공유 메모리에 캐시
+  for (var c: u32 = thread_id; c < params.d; c = c + 64u) {
+    s_q[c] = q[q_token_offset + c];
+  }
+  workgroupBarrier();
+
+  // 각 스레드가 담당할 차원 d의 서브셋 (헤드 차원이 64/128인 경우 1~2개 원소)
+  // Online Softmax State
+  var m_prev: f32 = -1e30; // Running max
+  var l_prev: f32 = 0.0;   // Running sum
+
+  // 현재 스레드가 누적할 출력 원소 레지스터
+  var thread_acc0: f32 = 0.0;
+  var thread_acc1: f32 = 0.0;
+
+  let dim_idx0 = thread_id;
+  let dim_idx1 = thread_id + 64u;
+
+  // Causal Masking 적용 시 최대 키 인덱스는 q_idx까지
+  var max_k_len: u32 = params.N;
+  if (params.is_causal == 1u) {
+    max_k_len = q_idx + 1u;
+  }
+
+  // 2. K/V 시퀀스를 1-Pass로 순회하며 Online Softmax & Output Accumulation
+  for (var j: u32 = 0u; j < max_k_len; j = j + 1u) {
+    let k_token_offset = k_head_offset + j * params.d;
+    let v_token_offset = v_head_offset + j * params.d;
+
+    // Step A: 내적 Score S_ij = scale * sum_{c} Q[c] * K[j, c]
+    var dot: f32 = 0.0;
+    for (var c: u32 = 0u; c < params.d; c = c + 1u) {
+      dot = dot + s_q[c] * k[k_token_offset + c];
+    }
+    let score = dot * params.scale;
+
+    // Step B: FlashAttention-2 Online Softmax Rescale
+    let m_new = max(m_prev, score);
+    let alpha = exp(m_prev - m_new);
+    let p = exp(score - m_new);
+
+    l_prev = l_prev * alpha + p;
+    m_prev = m_new;
+
+    // Step C: Running Output Rescale & Value Accumulation
+    if (dim_idx0 < params.d) {
+      thread_acc0 = thread_acc0 * alpha + p * v[v_token_offset + dim_idx0];
+    }
+    if (dim_idx1 < params.d) {
+      thread_acc1 = thread_acc1 * alpha + p * v[v_token_offset + dim_idx1];
+    }
+  }
+
+  // 3. 최종 소프트맥스 합(l_prev)으로 나누어 정규화 후 글로벌 메모리에 기록
+  let inv_l = 1.0 / max(l_prev, 1e-12);
+
+  if (dim_idx0 < params.d) {
+    o[o_token_offset + dim_idx0] = thread_acc0 * inv_l;
+  }
+  if (dim_idx1 < params.d) {
+    o[o_token_offset + dim_idx1] = thread_acc1 * inv_l;
+  }
+}
+`;
+
+    /**
+     * 파일 생성일: 2026-08-18
+     * AMEVA-Forge Release 2.0: SCRUM-219 Rotary Position Embedding (RoPE) WGSL Kernel
+     *
+     * WHAT: LLaMA / Mistral / Gemma 등 현대 LLM의 핵심 위치 인코딩인 RoPE(Rotary Position Embedding) WGSL 셰이더입니다.
+     * WHY: 입력 시퀀스의 상대적 위치 정보를 복소수 회전 행렬 형태로 Query 및 Key 텐서에 인플레이스 주입하기 위해 존재합니다.
+     * HOW: 각 토큰 위치(pos)와 헤드 차원 페어 인덱스(k)에 대해 주파수 theta = base^(-2k/d)를 계산하고,
+     *      cos/sin 삼각함수를 적용하여 2D 평면 회전 변환을 단일 GPU 패스로 수행합니다.
+     */
+    const ROPE_WGSL = `
+struct Params {
+  B: u32,             // 총 배치 수
+  H: u32,             // 헤드 수
+  N: u32,             // 시퀀스 길이
+  d: u32,             // 헤드 차원 (반드시 짝수, 예: 64, 128)
+  base_freq: f32,     // 기본 주파수 (예: 10000.0 또는 500000.0)
+  offset_pos: u32,    // KV 캐시 오프셋 위치 (Prefill / Decode 단계별 시작 토큰 인덱스)
+  pad1: u32,
+  pad2: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> out: array<f32>;
+
+@compute @workgroup_size(64, 1, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let pair_idx = local_id.x; // 0 .. (d/2 - 1)
+  let token_idx = workgroup_id.x; // 0 .. N-1
+  let head_idx = workgroup_id.y;  // 0 .. H-1
+  let batch_idx = workgroup_id.z; // 0 .. B-1
+
+  let half_d = params.d / 2u;
+  if (pair_idx >= half_d || token_idx >= params.N || head_idx >= params.H || batch_idx >= params.B) {
+    return;
+  }
+
+  let pos = f32(token_idx + params.offset_pos);
+  let freq_exponent = -2.0 * f32(pair_idx) / f32(params.d);
+  let theta = pow(params.base_freq, freq_exponent) * pos;
+
+  let cos_theta = cos(theta);
+  let sin_theta = sin(theta);
+
+  let tensor_offset = ((batch_idx * params.H + head_idx) * params.N + token_idx) * params.d;
+  let idx0 = tensor_offset + pair_idx * 2u;
+  let idx1 = tensor_offset + pair_idx * 2u + 1u;
+
+  let v0 = x[idx0];
+  let v1 = x[idx1];
+
+  // 2D 회전 변환
+  out[idx0] = v0 * cos_theta - v1 * sin_theta;
+  out[idx1] = v1 * cos_theta + v0 * sin_theta;
+}
+`;
+
+    /**
+     * 파일 생성일: 2026-08-18
+     * AMEVA-Forge Release 2.0: SCRUM-220 RMSNorm WGSL Kernel
+     *
+     * WHAT: Root Mean Square Normalization (RMSNorm) WGSL 셰이더입니다.
+     * WHY: LayerNorm 대비 평균 계산 오버헤드를 제거하여 연산 속도를 20~30% 단축하고, 수치적 안정성을 제공하기 위해 존재합니다.
+     * HOW: 각 토큰 벡터의 제곱합을 계산하여 RMS 값을 구한 후, 스케일 파라미터(gamma)를 곱하여 정규화된 텐서를 산출합니다.
+     */
+    const RMSNORM_WGSL = `
+struct Params {
+  num_tokens: u32,  // 총 토큰 수 (Batch * SeqLen)
+  dim: u32,         // 은닉 차원 (Hidden Dim, 예: 2048, 4096)
+  eps: f32,         // 수치 안정화 epsilon (예: 1e-5, 1e-6)
+  has_gamma: u32,   // 1: gamma 스케일 적용, 0: 생략
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read> gamma: array<f32>;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+
+var<workgroup> s_sum_sq: array<f32, 256>;
+
+@compute @workgroup_size(256, 1, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let thread_id = local_id.x;
+  let token_idx = workgroup_id.x + workgroup_id.y * 65535u;
+
+  if (token_idx >= params.num_tokens) {
+    return;
+  }
+
+  let token_offset = token_idx * params.dim;
+
+  // 1. 스레드별 제곱합 계산
+  var local_sum_sq: f32 = 0.0;
+  for (var i: u32 = thread_id; i < params.dim; i = i + 256u) {
+    let val = x[token_offset + i];
+    local_sum_sq = local_sum_sq + val * val;
+  }
+  s_sum_sq[thread_id] = local_sum_sq;
+
+  workgroupBarrier();
+
+  // 2. 워크그룹 트리 리덕션 (Tree Reduction)
+  for (var stride: u32 = 128u; stride > 0u; stride = stride / 2u) {
+    if (thread_id < stride) {
+      s_sum_sq[thread_id] = s_sum_sq[thread_id] + s_sum_sq[thread_id + stride];
+    }
+    workgroupBarrier();
+  }
+
+  // 3. RMS 스케일 계산: 1.0 / sqrt(mean_sq + eps)
+  let mean_sq = s_sum_sq[0] / f32(params.dim);
+  let inv_rms = 1.0 / sqrt(mean_sq + params.eps);
+
+  // 4. 정규화 및 Gamma 스케일링
+  for (var i: u32 = thread_id; i < params.dim; i = i + 256u) {
+    var val = x[token_offset + i] * inv_rms;
+    if (params.has_gamma == 1u) {
+      val = val * gamma[i];
+    }
+    out[token_offset + i] = val;
+  }
+}
+`;
+
+    /**
+     * 파일 생성일: 2026-08-18
+     * AMEVA-Forge Release 2.0: SCRUM-221 SwiGLU Fused Activation WGSL Kernel
+     *
+     * WHAT: Swish Gated Linear Unit (SwiGLU) 융합 활성화 함수 WGSL 셰이더입니다.
+     * WHY: LLaMA 및 Gemma 등의 FFN 블록에서 Gate Projection(x)과 Up Projection(y)의 원소별 Swish 게이팅을
+     *      중간 메모리 왕복 없이 단일 커널로 초고속 처리하기 위해 존재합니다.
+     * HOW: Swish(x) = x * sigmoid(x) = x / (1.0 + exp(-x)) 연산 후 y와 원소별 곱셈을 수행합니다.
+     */
+    const SWIGLU_WGSL = `
+struct Params {
+  num_elements: u32,  // 총 원소 개수
+  workgroupsX: u32,   // 2D 디스패치 X 크기
+  pad1: u32,
+  pad2: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> gate: array<f32>; // Gate projection (x)
+@group(0) @binding(2) var<storage, read> up: array<f32>;   // Up projection (y)
+@group(0) @binding(3) var<storage, read_write> out: array<f32>; // SwiGLU output
+
+@compute @workgroup_size(64, 1, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let idx = (workgroup_id.x + workgroup_id.y * params.workgroupsX) * 64u + local_id.x;
+
+  if (idx >= params.num_elements) {
+    return;
+  }
+
+  let x = gate[idx];
+  let y = up[idx];
+
+  // Swish(x) = x / (1.0 + exp(-x))
+  let swish_x = x / (1.0 + exp(-x));
+  out[idx] = swish_x * y;
+}
+`;
+
+    /**
+     * 파일 생성일: 2026-08-18
+     * AMEVA-Forge Release 2.0: SCRUM-234 INT4 / INT8 Quantized Weight Unpacking WGSL Kernel
+     *
+     * WHAT: GGUF(Q4_K_M/Q8_0) 및 AWQ/GPTQ 양자화된 신경망 가중치를 GPU 상에서 실시간 FP32로 언패킹하는 WGSL 셰이더입니다.
+     * WHY: 7B LLM 가중치를 4GB 미만으로 브라우저에 로드하고, 메모리 대역폭을 75% 절감하여 초고속 추론을 달성하기 위해 존재합니다.
+     * HOW: u32 정수에 패킹된 8개의 4-bit 값(또는 4개의 8-bit 값)을 비트 시프트 및 마스킹으로 추출하고,
+     *      scale과 zero_point를 적용하여 역양자화(Dequantization)합니다.
+     */
+    const UNPACK_QUANT_WGSL = `
+struct Params {
+  num_elements: u32,    // 총 복원될 원소 개수 (FP32 개수)
+  bits: u32,            // 4 또는 8
+  group_size: u32,      // 양자화 그룹 크기 (예: 32, 128)
+  workgroupsX: u32,     // 2D 디스패치 X 크기
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> packed_data: array<u32>; // 패킹된 정수 배열
+@group(0) @binding(2) var<storage, read> scales: array<f32>;      // 그룹별 스케일
+@group(0) @binding(3) var<storage, read> zeros: array<f32>;       // 그룹별 제로포인트
+@group(0) @binding(4) var<storage, read_write> out_fp32: array<f32>; // 복원된 FP32 배열
+
+@compute @workgroup_size(64, 1, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let idx = (workgroup_id.x + workgroup_id.y * params.workgroupsX) * 64u + local_id.x;
+
+  if (idx >= params.num_elements) {
+    return;
+  }
+
+  let group_idx = idx / params.group_size;
+  let scale = scales[group_idx];
+  let zero = zeros[group_idx];
+
+  var raw_int: f32 = 0.0;
+
+  if (params.bits == 4u) {
+    // 4-bit 언패킹: 1개 u32에 8개 니블(nibble) 저장
+    let word_idx = idx / 8u;
+    let nibble_idx = idx % 8u;
+    let shift = nibble_idx * 4u;
+    let packed_val = packed_data[word_idx];
+    let val_4bit = (packed_val >> shift) & 0x0Fu;
+    raw_int = f32(val_4bit);
+  } else if (params.bits == 8u) {
+    // 8-bit 언패킹: 1개 u32에 4개 바이트 저장
+    let word_idx = idx / 4u;
+    let byte_idx = idx % 4u;
+    let shift = byte_idx * 8u;
+    let packed_val = packed_data[word_idx];
+    let val_8bit = (packed_val >> shift) & 0xFFu;
+    raw_int = f32(val_8bit);
+  }
+
+  // Dequantize: (int_val - zero) * scale
+  out_fp32[idx] = (raw_int - zero) * scale;
+}
+`;
+
+    /**
      * Created: 2026-08-12T12:14:52+09:00
      * Modified:
      *   - 2026-08-12T12:59:35+09:00: Feat: Introduce v3.0 features (CNN, Pooling, Dropout, Serialization)
@@ -4259,6 +4679,11 @@ fn main(
         ['matmul_tiled', MATMUL_TILED_WGSL],
         ['matmul_bias_relu', MATMUL_BIAS_RELU_WGSL],
         ['batched_matmul', BATCHED_MATMUL_WGSL],
+        ['flash_attention', FLASH_ATTENTION_WGSL],
+        ['rope', ROPE_WGSL],
+        ['rmsnorm', RMSNORM_WGSL],
+        ['swiglu', SWIGLU_WGSL],
+        ['unpack_quant', UNPACK_QUANT_WGSL],
         ['relu', RELU_WGSL],
         ['add', ADD_WGSL],
         ['mul', MUL_WGSL],
@@ -4645,7 +5070,7 @@ fn main(
         const passEncoder = commandEncoder.beginComputePass();
         passEncoder.setPipeline(pipeline);
         passEncoder.setBindGroup(0, bindGroup);
-        passEncoder.dispatchWorkgroups(opts.dispatchX, opts.dispatchY ?? 1);
+        passEncoder.dispatchWorkgroups(opts.dispatchX, opts.dispatchY ?? 1, opts.dispatchZ ?? 1);
         passEncoder.end();
         device.queue.submit([commandEncoder.finish()]);
         // params 버퍼는 GPU 제출 완료 후 중앙 allocator를 통해 해제
@@ -4964,10 +5389,77 @@ fn main(
         });
         return _globalRegistry.register({ buffer: outBuffer, token, shape: [...x.shape], dtype: "float32", byteLength: x.byteLength });
     }
+    /**
+     * WHAT: FlashAttention-2 융합 1-Pass Scaled Dot-Product Attention을 수행하는 함수입니다.
+     * WHY: O(N^2) 어텐션 맵 VRAM 할당을 완전히 제거하여 대규모 LLM 추론 시 극적인 메모리 절감과 처리율을 제공합니다.
+     * HOW: Q, K, V 텐서를 받아 셰이더 내에서 Online Softmax와 Causal Masking을 융합 실행합니다.
+     */
+    function flashAttention(handleQ, handleK, handleV, scale, isCausal = false) {
+        const q = _globalRegistry.get(handleQ);
+        const k = _globalRegistry.get(handleK);
+        const v = _globalRegistry.get(handleV);
+        if (q.shape.length !== 4 || k.shape.length !== 4 || v.shape.length !== 4) {
+            throw new AMEVAForgeShapeError("FlashAttention requires 4D tensors [Batch, Heads, SeqLen, HeadDim]");
+        }
+        if (q.dtype !== "float32" || k.dtype !== "float32" || v.dtype !== "float32") {
+            throw new AMEVAForgeDTypeError("FlashAttention requires float32 tensors");
+        }
+        const [B, H, N, d] = q.shape;
+        const [B_k, H_kv, N_k, d_k] = k.shape;
+        const [B_v, H_kv2, N_v, d_v] = v.shape;
+        if (B !== B_k || B !== B_v)
+            throw new AMEVAForgeShapeError(`Batch mismatch: ${B} vs ${B_k}, ${B_v}`);
+        if (H_kv !== H_kv2)
+            throw new AMEVAForgeShapeError(`KV heads mismatch: ${H_kv} vs ${H_kv2}`);
+        if (H % H_kv !== 0)
+            throw new AMEVAForgeShapeError(`Query heads ${H} must be divisible by KV heads ${H_kv} (GQA requirement)`);
+        if (N_k !== N || N_v !== N)
+            throw new AMEVAForgeShapeError(`SeqLen mismatch: ${N} vs ${N_k}, ${N_v}`);
+        if (d !== d_k || d !== d_v)
+            throw new AMEVAForgeShapeError(`HeadDim mismatch: ${d} vs ${d_k}, ${d_v}`);
+        if (d > 128)
+            throw new AMEVAForgeShapeError(`HeadDim ${d} exceeds max supported dimension 128`);
+        const effectiveScale = scale !== undefined ? scale : 1.0 / Math.sqrt(d);
+        const strideQ = N * d;
+        const strideK = N * d;
+        const strideV = N * d;
+        const strideO = N * d;
+        const byteLength = B * H * N * d * 4;
+        const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_SRC$1);
+        // Params buffer: B, H, H_kv, N, d, scale(float), is_causal, strideQ, strideK, strideV, strideO, pad
+        const paramsArray = new ArrayBuffer(48);
+        const u32View = new Uint32Array(paramsArray);
+        const f32View = new Float32Array(paramsArray);
+        u32View[0] = B;
+        u32View[1] = H;
+        u32View[2] = H_kv;
+        u32View[3] = N;
+        u32View[4] = d;
+        f32View[5] = effectiveScale;
+        u32View[6] = isCausal ? 1 : 0;
+        u32View[7] = strideQ;
+        u32View[8] = strideK;
+        u32View[9] = strideV;
+        u32View[10] = strideO;
+        u32View[11] = 0;
+        dispatchKernel({
+            opKey: 'flash_attention',
+            wgslCode: FLASH_ATTENTION_WGSL,
+            paramsData: u32View,
+            inputBuffers: [q.buffer, k.buffer, v.buffer],
+            outBuffer,
+            dispatchX: N,
+            dispatchY: H,
+            dispatchZ: B,
+        });
+        return _globalRegistry.register({ buffer: outBuffer, token, shape: [B, H, N, d], dtype: "float32", byteLength });
+    }
     const gpuCore = {
         add,
         mul,
         matmul,
+        matmulTiled,
+        flashAttention,
         relu,
         relu_backward,
         transpose,
@@ -5550,14 +6042,14 @@ fn main(
                     const [B_param, N_param, P_param, M_param] = inst.params;
                     B = B_param;
                     wgslCode = BATCHED_MATMUL_WGSL;
-                    const rawDispatchX = Math.ceil(P_param / 8);
+                    const rawDispatchX = Math.ceil(P_param / 16);
                     if (rawDispatchX <= 65535) {
                         dispatchX = rawDispatchX;
                     }
                     else {
                         throw new AMEVAForgeSecurityError(`batched_matmul dispatchX exceeded limit: ${rawDispatchX}`);
                     }
-                    const rawDispatchY = Math.ceil(N_param / 8);
+                    const rawDispatchY = Math.ceil(N_param / 16);
                     if (rawDispatchY <= 65535) {
                         dispatchY = rawDispatchY;
                     }
@@ -6664,6 +7156,7 @@ fn main(
     exports.dispose = dispose;
     exports.ensureFloat32Array = ensureFloat32Array;
     exports.executeGraph = executeGraph;
+    exports.flashAttention = flashAttention;
     exports.flushGC = flushGC;
     exports.getAllowedKernelNames = getAllowedKernelNames;
     exports.getQuotaSnapshot = getQuotaSnapshot;

@@ -125,10 +125,18 @@ export declare function transpose(handle: TensorHandle): TensorHandle;
  * HOW: 원본 입력 텐서(x)와 위층에서 전달된 그래디언트 텐서(grad)를 받아, x가 0보다 큰 곳은 grad를, 아니면 0을 출력 버퍼에 씁니다.
  */
 export declare function relu_backward(handleX: TensorHandle, handleGrad: TensorHandle): TensorHandle;
+/**
+ * WHAT: FlashAttention-2 융합 1-Pass Scaled Dot-Product Attention을 수행하는 함수입니다.
+ * WHY: O(N^2) 어텐션 맵 VRAM 할당을 완전히 제거하여 대규모 LLM 추론 시 극적인 메모리 절감과 처리율을 제공합니다.
+ * HOW: Q, K, V 텐서를 받아 셰이더 내에서 Online Softmax와 Causal Masking을 융합 실행합니다.
+ */
+export declare function flashAttention(handleQ: TensorHandle, handleK: TensorHandle, handleV: TensorHandle, scale?: number, isCausal?: boolean): TensorHandle;
 export declare const gpuCore: {
     add: typeof add;
     mul: typeof mul;
     matmul: typeof matmul;
+    matmulTiled: typeof matmulTiled;
+    flashAttention: typeof flashAttention;
     relu: typeof relu;
     relu_backward: typeof relu_backward;
     transpose: typeof transpose;

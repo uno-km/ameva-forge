@@ -98,6 +98,11 @@ let ALLOWED_KERNEL_NAMES = new Set([
   "permute",
   "matmul_bias_relu",
   "matmul_tiled",
+  "flash_attention",
+  "rope",
+  "rmsnorm",
+  "swiglu",
+  "unpack_quant",
 ]);
 
 /**

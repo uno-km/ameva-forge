@@ -745,14 +745,14 @@ async function _executeGraphCore(
         B = B_param;
         wgslCode = BATCHED_MATMUL_WGSL;
         
-        const rawDispatchX = Math.ceil(P_param / 8);
+        const rawDispatchX = Math.ceil(P_param / 16);
         if (rawDispatchX <= 65535) {
           dispatchX = rawDispatchX;
         } else {
           throw new AMEVAForgeSecurityError(`batched_matmul dispatchX exceeded limit: ${rawDispatchX}`);
         }
         
-        const rawDispatchY = Math.ceil(N_param / 8);
+        const rawDispatchY = Math.ceil(N_param / 16);
         if (rawDispatchY <= 65535) {
           dispatchY = rawDispatchY;
         } else {

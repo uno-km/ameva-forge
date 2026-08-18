@@ -73,6 +73,11 @@ import { PERMUTE_WGSL } from "./kernels/permute.wgsl";
 import { BATCHED_MATMUL_WGSL } from "./kernels/batched_matmul.wgsl";
 import { MATMUL_BIAS_RELU_WGSL } from "./kernels/matmul_bias_relu.wgsl";
 import { MATMUL_TILED_WGSL } from "./kernels/matmul_tiled.wgsl";
+import { FLASH_ATTENTION_WGSL } from "./kernels/flash_attention.wgsl";
+import { ROPE_WGSL } from "./kernels/rope.wgsl";
+import { RMSNORM_WGSL } from "./kernels/rmsnorm.wgsl";
+import { SWIGLU_WGSL } from "./kernels/swiglu.wgsl";
+import { UNPACK_QUANT_WGSL } from "./kernels/unpack_quant.wgsl";
 
 // WebGPU Buffer Usage bitmasks with Node.js environment fallback
 const BUFFER_USAGE_STORAGE_SRC = typeof GPUBufferUsage !== 'undefined'
@@ -97,6 +102,11 @@ export const KERNEL_REGISTRY: ReadonlyMap<string, string> = new Map([
   ['matmul_tiled', MATMUL_TILED_WGSL],
   ['matmul_bias_relu', MATMUL_BIAS_RELU_WGSL],
   ['batched_matmul', BATCHED_MATMUL_WGSL],
+  ['flash_attention', FLASH_ATTENTION_WGSL],
+  ['rope', ROPE_WGSL],
+  ['rmsnorm', RMSNORM_WGSL],
+  ['swiglu', SWIGLU_WGSL],
+  ['unpack_quant', UNPACK_QUANT_WGSL],
   ['relu', RELU_WGSL],
   ['add', ADD_WGSL],
   ['mul', MUL_WGSL],
@@ -460,6 +470,7 @@ interface KernelDispatchOptions {
   outBuffer: GPUBuffer;
   dispatchX: number;
   dispatchY?: number;
+  dispatchZ?: number;
 }
 
 /**
@@ -538,7 +549,7 @@ function dispatchKernel(opts: KernelDispatchOptions): void {
   const passEncoder = commandEncoder.beginComputePass();
   passEncoder.setPipeline(pipeline);
   passEncoder.setBindGroup(0, bindGroup);
-  passEncoder.dispatchWorkgroups(opts.dispatchX, opts.dispatchY ?? 1);
+  passEncoder.dispatchWorkgroups(opts.dispatchX, opts.dispatchY ?? 1, opts.dispatchZ ?? 1);
   passEncoder.end();
 
   device.queue.submit([commandEncoder.finish()]);
@@ -891,10 +902,87 @@ export function relu_backward(handleX: TensorHandle, handleGrad: TensorHandle): 
   return _globalRegistry.register({ buffer: outBuffer, token, shape: [...x.shape], dtype: "float32", byteLength: x.byteLength });
 }
 
+/**
+ * WHAT: FlashAttention-2 융합 1-Pass Scaled Dot-Product Attention을 수행하는 함수입니다.
+ * WHY: O(N^2) 어텐션 맵 VRAM 할당을 완전히 제거하여 대규모 LLM 추론 시 극적인 메모리 절감과 처리율을 제공합니다.
+ * HOW: Q, K, V 텐서를 받아 셰이더 내에서 Online Softmax와 Causal Masking을 융합 실행합니다.
+ */
+export function flashAttention(
+  handleQ: TensorHandle,
+  handleK: TensorHandle,
+  handleV: TensorHandle,
+  scale?: number,
+  isCausal: boolean = false
+): TensorHandle {
+  const q = _globalRegistry.get(handleQ);
+  const k = _globalRegistry.get(handleK);
+  const v = _globalRegistry.get(handleV);
+
+  if (q.shape.length !== 4 || k.shape.length !== 4 || v.shape.length !== 4) {
+    throw new AMEVAForgeShapeError("FlashAttention requires 4D tensors [Batch, Heads, SeqLen, HeadDim]");
+  }
+  if (q.dtype !== "float32" || k.dtype !== "float32" || v.dtype !== "float32") {
+    throw new AMEVAForgeDTypeError("FlashAttention requires float32 tensors");
+  }
+
+  const [B, H, N, d] = q.shape;
+  const [B_k, H_kv, N_k, d_k] = k.shape;
+  const [B_v, H_kv2, N_v, d_v] = v.shape;
+
+  if (B !== B_k || B !== B_v) throw new AMEVAForgeShapeError(`Batch mismatch: ${B} vs ${B_k}, ${B_v}`);
+  if (H_kv !== H_kv2) throw new AMEVAForgeShapeError(`KV heads mismatch: ${H_kv} vs ${H_kv2}`);
+  if (H % H_kv !== 0) throw new AMEVAForgeShapeError(`Query heads ${H} must be divisible by KV heads ${H_kv} (GQA requirement)`);
+  if (N_k !== N || N_v !== N) throw new AMEVAForgeShapeError(`SeqLen mismatch: ${N} vs ${N_k}, ${N_v}`);
+  if (d !== d_k || d !== d_v) throw new AMEVAForgeShapeError(`HeadDim mismatch: ${d} vs ${d_k}, ${d_v}`);
+  if (d > 128) throw new AMEVAForgeShapeError(`HeadDim ${d} exceeds max supported dimension 128`);
+
+  const effectiveScale = scale !== undefined ? scale : 1.0 / Math.sqrt(d);
+  const strideQ = N * d;
+  const strideK = N * d;
+  const strideV = N * d;
+  const strideO = N * d;
+
+  const byteLength = B * H * N * d * 4;
+  const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_SRC);
+
+  // Params buffer: B, H, H_kv, N, d, scale(float), is_causal, strideQ, strideK, strideV, strideO, pad
+  const paramsArray = new ArrayBuffer(48);
+  const u32View = new Uint32Array(paramsArray);
+  const f32View = new Float32Array(paramsArray);
+
+  u32View[0] = B;
+  u32View[1] = H;
+  u32View[2] = H_kv;
+  u32View[3] = N;
+  u32View[4] = d;
+  f32View[5] = effectiveScale;
+  u32View[6] = isCausal ? 1 : 0;
+  u32View[7] = strideQ;
+  u32View[8] = strideK;
+  u32View[9] = strideV;
+  u32View[10] = strideO;
+  u32View[11] = 0;
+
+  dispatchKernel({
+    opKey: 'flash_attention',
+    wgslCode: FLASH_ATTENTION_WGSL,
+    paramsData: u32View,
+    inputBuffers: [q.buffer, k.buffer, v.buffer],
+    outBuffer,
+    dispatchX: N,
+    dispatchY: H,
+    dispatchZ: B,
+  });
+
+  return _globalRegistry.register({ buffer: outBuffer, token, shape: [B, H, N, d], dtype: "float32", byteLength });
+}
+
 export const gpuCore = {
   add,
   mul,
   matmul,
+  matmulTiled,
+  flashAttention,
   relu,
   relu_backward,
   transpose,
