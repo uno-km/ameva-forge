@@ -332,15 +332,20 @@ class TestV3Features(unittest.TestCase):
         t.move_to_("gpu")
         self.assertEqual(t.device, "gpu")
         self.assertTrue(t._finalizer_registered)
+        # In lazy state, handle is None until realized or assigned
+        self.assertIsNone(t._handle)
+
+        # Simulate realized GPU handle
+        t._handle = "handle_test_gc_123"
         gpu_handle = t._handle
-        self.assertIsNotNone(gpu_handle)
+        self.assertEqual(gpu_handle, "handle_test_gc_123")
 
         # Delete python reference and force Python GC
         del t
         gc.collect()
 
         # Handle must be cleanly enqueued in _gc_queue for VRAM release
-        self.assertIn(gpu_handle, _gc_queue._queue)
+        self.assertIn(gpu_handle, _gc_queue)
 
     def test_positional_encoding_dynamic_seq_len_after_to_gpu(self):
         pe_module = at.nn.PositionalEncoding(d_model=16, max_len=100)

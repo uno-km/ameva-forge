@@ -29,6 +29,7 @@ class TestExtreme(unittest.TestCase):
         self.assertEqual(x.grad.numpy()[0], 4.0 * 50)
         
     def test_xor_training(self):
+        np.random.seed(42)
         x_data = [[0, 0], [0, 1], [1, 0], [1, 1]]
         y_data = [[0], [1], [1], [0]]
         

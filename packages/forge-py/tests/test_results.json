@@ -1,12 +1,7 @@
 {
   "total": 180,
-  "passed": 179,
-  "failed": 1,
+  "passed": 180,
+  "failed": 0,
   "errors": 0,
-  "details": [
-    {
-      "test": "test_move_to_gpu_registers_finalizer_and_collects_on_gc (test_v3_features.TestV3Features.test_move_to_gpu_registers_finalizer_and_collects_on_gc)",
-      "traceback": "Traceback (most recent call last):\n  File \"C:\\Users\\GAME\\Desktop\\uno-km\\dev\\AMEVA-Tensor\\packages\\forge-py\\tests\\test_v3_features.py\", line 336, in test_move_to_gpu_registers_finalizer_and_collects_on_gc\n    self.assertIsNotNone(gpu_handle)\nAssertionError: unexpectedly None\n"
-    }
-  ]
+  "details": []
 }

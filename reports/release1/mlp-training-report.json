@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "run_id": "6d226cbd-4c2f-4d5c-ba93-d011003fb429",
-  "started_at": "2026-08-18T08:25:18.851Z",
-  "finished_at": "2026-08-18T08:25:30.443Z",
+  "run_id": "d3c29b3f-6fdb-4e77-a598-1546729eae49",
+  "started_at": "2026-08-18T08:55:56.491Z",
+  "finished_at": "2026-08-18T08:56:09.495Z",
   "git_commit": "UNKNOWN",
   "working_tree": "DIRTY",
   "browser_name": "release-webgpu",
@@ -31,16 +31,16 @@
     "gpu"
   ],
   "handles_before": [
-    "tensor_a72b16d4-3f10-43ae-9ec5-e9357dafd2f8",
-    "tensor_ac009a44-6784-461b-8ac9-05ca340e2a11",
-    "tensor_57e2847a-c1b9-47af-bb33-1174cd80c9c4",
-    "tensor_355a757e-54ee-4a95-abb7-fcb948e3fb19"
+    "tensor_ba1c05b6-fc7c-409e-9021-a64e1784fb21",
+    "tensor_0d8335d8-18ba-4ae3-9082-23c3af465b39",
+    "tensor_589ee31e-7316-4faa-bc54-55476239ca8d",
+    "tensor_c2aa2d18-e4c5-4ddd-b70c-e130fe6e6450"
   ],
   "handles_after": [
-    "tensor_a72b16d4-3f10-43ae-9ec5-e9357dafd2f8",
-    "tensor_ac009a44-6784-461b-8ac9-05ca340e2a11",
-    "tensor_57e2847a-c1b9-47af-bb33-1174cd80c9c4",
-    "tensor_355a757e-54ee-4a95-abb7-fcb948e3fb19"
+    "tensor_ba1c05b6-fc7c-409e-9021-a64e1784fb21",
+    "tensor_0d8335d8-18ba-4ae3-9082-23c3af465b39",
+    "tensor_589ee31e-7316-4faa-bc54-55476239ca8d",
+    "tensor_c2aa2d18-e4c5-4ddd-b70c-e130fe6e6450"
   ],
   "fingerprints_before": [
     {
