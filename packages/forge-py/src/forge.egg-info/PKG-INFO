@@ -4,9 +4,9 @@ Version: 0.1.0
 Summary: WebGPU-accelerated tensor computation library with autograd for deep learning training
 Author: AMEVA Team
 License: MIT
-Project-URL: Homepage, https://github.com/ameva/tensor
-Project-URL: Documentation, https://ameva-forge.readthedocs.io
-Project-URL: Repository, https://github.com/ameva/tensor
+Project-URL: Homepage, https://uno-km.github.io/ameva-forge/
+Project-URL: Documentation, https://uno-km.github.io/ameva-forge/
+Project-URL: Repository, https://github.com/uno-km/ameva-forge
 Classifier: Development Status :: 3 - Alpha
 Classifier: Intended Audience :: Developers
 Classifier: Intended Audience :: Science/Research

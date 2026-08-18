@@ -38,9 +38,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ameva/tensor"
-Documentation = "https://ameva-forge.readthedocs.io"
-Repository = "https://github.com/ameva/tensor"
+Homepage = "https://uno-km.github.io/ameva-forge/"
+Documentation = "https://uno-km.github.io/ameva-forge/"
+Repository = "https://github.com/uno-km/ameva-forge"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -2,6 +2,10 @@
   "name": "@ameva/forge",
   "version": "0.1.0",
   "description": "Browser-native Tensor Runtime for WebGPU and Pyodide",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/uno-km/ameva-forge.git"
+  },
   "main": "dist/index.js",
   "module": "dist/index.esm.js",
   "types": "dist/index.d.ts",

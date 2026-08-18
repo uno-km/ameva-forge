@@ -2,16 +2,16 @@
 
 > **Release 1.0.0 (Production Hardened)**: Browser-Native WebGPU Deep Learning & Autograd Engine
 
-[![WebGPU](https://img.shields.io/badge/WebGPU-Hardware_Accelerated-blueviolet?style=for-the-badge&logo=webgpu)](https://uno-km.github.io/AMEVA-Tensor/demo.html)
-[![Python](https://img.shields.io/badge/Python-3.11_|_3.12-blue?style=for-the-badge&logo=python)](https://github.com/uno-km/AMEVA-Tensor)
-[![Tests](https://img.shields.io/badge/Tests-100%25_PASS-success?style=for-the-badge)](https://github.com/uno-km/AMEVA-Tensor)
+[![WebGPU](https://img.shields.io/badge/WebGPU-Hardware_Accelerated-blueviolet?style=for-the-badge&logo=webgpu)](https://uno-km.github.io/ameva-forge/demo.html)
+[![Python](https://img.shields.io/badge/Python-3.11_|_3.12-blue?style=for-the-badge&logo=python)](https://github.com/uno-km/ameva-forge)
+[![Tests](https://img.shields.io/badge/Tests-100%25_PASS-success?style=for-the-badge)](https://github.com/uno-km/ameva-forge)
 [![License](https://img.shields.io/badge/License-Apache_2.0-green?style=for-the-badge)](LICENSE)
 
 **AMEVA-Forge** is a high-performance, mathematically verified deep learning framework designed to train and execute neural networks directly inside web browsers using **Pyodide (WASM)** and **native WebGPU compute shaders** with **zero server infrastructure costs**.
 
 ---
 
-## ⚡ [Try the Live WebGPU Studio Demo](https://uno-km.github.io/AMEVA-Tensor/demo.html)
+## ⚡ [Try the Live WebGPU Studio Demo](https://uno-km.github.io/ameva-forge/demo.html)
 
 No installation or CUDA configuration required! Open the interactive demo in Chrome, Edge, or Safari to train 2-Layer MLPs, inspect Causal Self-Attention heatmaps, and run matrix benchmarks in real time.
 
@@ -100,10 +100,10 @@ python scratch/dump_code.py
 
 ## 📖 Documentation & Links
 
-- **Documentation Portal**: [https://uno-km.github.io/AMEVA-Tensor/](https://uno-km.github.io/AMEVA-Tensor/)
-- **Live Studio Demo**: [https://uno-km.github.io/AMEVA-Tensor/demo.html](https://uno-km.github.io/AMEVA-Tensor/demo.html)
-- **Quickstart Guide**: [https://uno-km.github.io/AMEVA-Tensor/quickstart.html](https://uno-km.github.io/AMEVA-Tensor/quickstart.html)
-- **API Reference**: [https://uno-km.github.io/AMEVA-Tensor/api-reference.html](https://uno-km.github.io/AMEVA-Tensor/api-reference.html)
+- **Documentation Portal**: [https://uno-km.github.io/ameva-forge/](https://uno-km.github.io/ameva-forge/)
+- **Live Studio Demo**: [https://uno-km.github.io/ameva-forge/demo.html](https://uno-km.github.io/ameva-forge/demo.html)
+- **Quickstart Guide**: [https://uno-km.github.io/ameva-forge/quickstart.html](https://uno-km.github.io/ameva-forge/quickstart.html)
+- **API Reference**: [https://uno-km.github.io/ameva-forge/api-reference.html](https://uno-km.github.io/ameva-forge/api-reference.html)
 - **Architecture & Audit Scope**: [`RELEASE_1_SCOPE.md`](RELEASE_1_SCOPE.md)
 
 ---
