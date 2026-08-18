@@ -131,12 +131,20 @@ export declare function relu_backward(handleX: TensorHandle, handleGrad: TensorH
  * HOW: Q, K, V 텐서를 받아 셰이더 내에서 Online Softmax와 Causal Masking을 융합 실행합니다.
  */
 export declare function flashAttention(handleQ: TensorHandle, handleK: TensorHandle, handleV: TensorHandle, scale?: number, isCausal?: boolean): TensorHandle;
+export declare function rmsNorm(handleX: TensorHandle, handleGamma?: TensorHandle, eps?: number): TensorHandle;
+export declare function rope(handleX: TensorHandle, baseFreq?: number, offsetPos?: number): TensorHandle;
+export declare function swiglu(handleGate: TensorHandle, handleUp: TensorHandle): TensorHandle;
+export declare function unpackQuant(handlePacked: TensorHandle, handleScales: TensorHandle, handleZeros: TensorHandle, bits: number | undefined, groupSize: number | undefined, numElements: number): TensorHandle;
 export declare const gpuCore: {
     add: typeof add;
     mul: typeof mul;
     matmul: typeof matmul;
     matmulTiled: typeof matmulTiled;
     flashAttention: typeof flashAttention;
+    rmsNorm: typeof rmsNorm;
+    rope: typeof rope;
+    swiglu: typeof swiglu;
+    unpackQuant: typeof unpackQuant;
     relu: typeof relu;
     relu_backward: typeof relu_backward;
     transpose: typeof transpose;

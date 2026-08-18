@@ -11,12 +11,26 @@ export interface SamplingOptions {
   temperature?: number; // 기본값 1.0 (0이면 Greedy Argmax)
   top_k?: number;       // 상위 K개 후보 제한 (0 또는 undefined 시 비활성화)
   top_p?: number;       // 상위 P 누적 확률 컷오프 (예: 0.9, 1.0 시 비활성화)
-  seed?: number;        // 결정론적 난수 시드
+  seed?: number;        // 결정론적 난수 시드 (Xorshift32 PRNG)
+}
+
+/**
+ * Xorshift32 재현 가능한 고속 의사 난수 생성기
+ */
+function createPRNG(seed: number): () => number {
+  let s = (seed >>> 0) || 1;
+  return () => {
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    return (s >>> 0) / 4294967296;
+  };
 }
 
 export class LLMSampler {
   /**
    * 로짓(Logits) 벡터로부터 다음 토큰 ID를 샘플링합니다.
+   * 무할당(Zero-Allocation) 및 고속 인덱스 스왑 기반으로 동작하여 V8 Major GC를 원천 방지합니다.
    */
   public static sample(logits: Float32Array, options: SamplingOptions = {}): number {
     const vocabSize = logits.length;
@@ -25,6 +39,7 @@ export class LLMSampler {
     const temp = options.temperature !== undefined ? options.temperature : 1.0;
     const topK = options.top_k !== undefined ? options.top_k : 0;
     const topP = options.top_p !== undefined ? options.top_p : 1.0;
+    const rng = options.seed !== undefined ? createPRNG(options.seed) : Math.random;
 
     // 1. Greedy Sampling (Temperature <= 1e-5)
     if (temp <= 1e-5) {
@@ -39,42 +54,54 @@ export class LLMSampler {
       return maxIdx;
     }
 
-    // 2. Temperature Scaling & Index Pairing
-    const indexedLogits: { idx: number; logit: number }[] = new Array(vocabSize);
-    for (let i = 0; i < vocabSize; i++) {
-      indexedLogits[i] = { idx: i, logit: logits[i] / temp };
-    }
+    // 2. 인덱스 배열 초기화 (Int32Array 단일 할당)
+    const effectiveK = (topK > 0 && topK < vocabSize) ? topK : vocabSize;
+    const indices = new Int32Array(vocabSize);
+    for (let i = 0; i < vocabSize; i++) indices[i] = i;
 
-    // 로짓 내림차순 정렬
-    indexedLogits.sort((a, b) => b.logit - a.logit);
-
-    // 3. Top-K Filtering
-    let candidates = indexedLogits;
-    if (topK > 0 && topK < vocabSize) {
-      candidates = candidates.slice(0, topK);
+    // 3. Top-K Selection (Top-K가 작을 경우 Partial Selection Sort로 O(K*V) 처리)
+    if (effectiveK < vocabSize && effectiveK <= 128) {
+      for (let i = 0; i < effectiveK; i++) {
+        let maxPos = i;
+        let maxVal = logits[indices[i]];
+        for (let j = i + 1; j < vocabSize; j++) {
+          if (logits[indices[j]] > maxVal) {
+            maxVal = logits[indices[j]];
+            maxPos = j;
+          }
+        }
+        // Swap
+        const tmp = indices[i];
+        indices[i] = indices[maxPos];
+        indices[maxPos] = tmp;
+      }
+    } else {
+      // 전체 정렬
+      indices.sort((a, b) => logits[b] - logits[a]);
     }
 
     // 4. Softmax Probability Computation over Candidates
-    const maxLogit = candidates[0].logit;
+    const maxLogit = logits[indices[0]] / temp;
     let sumExp = 0.0;
-    const probs: number[] = new Array(candidates.length);
+    const candidateProbs = new Float32Array(effectiveK);
 
-    for (let i = 0; i < candidates.length; i++) {
-      const p = Math.exp(candidates[i].logit - maxLogit);
-      probs[i] = p;
+    for (let i = 0; i < effectiveK; i++) {
+      const p = Math.exp((logits[indices[i]] / temp) - maxLogit);
+      candidateProbs[i] = p;
       sumExp += p;
     }
 
-    for (let i = 0; i < probs.length; i++) {
-      probs[i] /= sumExp;
+    const invSum = 1.0 / Math.max(sumExp, 1e-12);
+    for (let i = 0; i < effectiveK; i++) {
+      candidateProbs[i] *= invSum;
     }
 
-    // 5. Top-P (Nucleus) Filtering
-    let cutoffIdx = candidates.length;
+    // 5. Top-P (Nucleus) Cutoff
+    let cutoffIdx = effectiveK;
     if (topP < 1.0) {
       let cumsum = 0.0;
-      for (let i = 0; i < probs.length; i++) {
-        cumsum += probs[i];
+      for (let i = 0; i < effectiveK; i++) {
+        cumsum += candidateProbs[i];
         if (cumsum >= topP) {
           cutoffIdx = i + 1;
           break;
@@ -82,24 +109,22 @@ export class LLMSampler {
       }
     }
 
-    const filteredCandidates = candidates.slice(0, cutoffIdx);
-    const filteredProbs = probs.slice(0, cutoffIdx);
-
     // Filtered Probabilities Re-normalization
     let filteredSum = 0.0;
-    for (let i = 0; i < filteredProbs.length; i++) filteredSum += filteredProbs[i];
-    for (let i = 0; i < filteredProbs.length; i++) filteredProbs[i] /= filteredSum;
+    for (let i = 0; i < cutoffIdx; i++) filteredSum += candidateProbs[i];
+    const invFilteredSum = 1.0 / Math.max(filteredSum, 1e-12);
 
-    // 6. Categorical Random Sampling
-    const rand = Math.random();
+    // 6. Categorical Random Sampling using PRNG
+    const rand = rng();
     let acc = 0.0;
-    for (let i = 0; i < filteredProbs.length; i++) {
-      acc += filteredProbs[i];
+    for (let i = 0; i < cutoffIdx; i++) {
+      acc += candidateProbs[i] * invFilteredSum;
       if (rand <= acc) {
-        return filteredCandidates[i].idx;
+        return indices[i];
       }
     }
 
-    return filteredCandidates[filteredCandidates.length - 1].idx;
+    return indices[cutoffIdx - 1];
   }
 }
+

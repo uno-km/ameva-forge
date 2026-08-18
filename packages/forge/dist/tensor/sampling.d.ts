@@ -15,6 +15,7 @@ export interface SamplingOptions {
 export declare class LLMSampler {
     /**
      * 로짓(Logits) 벡터로부터 다음 토큰 ID를 샘플링합니다.
+     * 무할당(Zero-Allocation) 및 고속 인덱스 스왑 기반으로 동작하여 V8 Major GC를 원천 방지합니다.
      */
     static sample(logits: Float32Array, options?: SamplingOptions): number;
 }

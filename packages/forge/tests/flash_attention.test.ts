@@ -155,14 +155,15 @@ describe('SCRUM-209 ~ SCRUM-213: FlashAttention-2 Architectural & Numerical Cont
   describe('1. Static WGSL Kernel Integrity', () => {
     it('declares Online Softmax variables and @workgroup_size(64, 1, 1)', () => {
       expect(FLASH_ATTENTION_WGSL).toContain('@compute @workgroup_size(64, 1, 1)');
-      expect(FLASH_ATTENTION_WGSL).toContain('var<workgroup> s_q: array<f32, 128>;');
+      expect(FLASH_ATTENTION_WGSL).toContain('var<workgroup> s_q: array<f32, 256>;');
       expect(FLASH_ATTENTION_WGSL).toContain('let alpha = exp(m_prev - m_new);');
       expect(FLASH_ATTENTION_WGSL).toContain('l_prev = l_prev * alpha + p;');
     });
 
     it('implements in-kernel Causal Masking logic', () => {
       expect(FLASH_ATTENTION_WGSL).toContain('if (params.is_causal == 1u)');
-      expect(FLASH_ATTENTION_WGSL).toContain('max_k_len = q_idx + 1u;');
+      expect(FLASH_ATTENTION_WGSL).toContain('causal_limit = params.N_kv - params.N_q + q_idx + 1u;');
+      expect(FLASH_ATTENTION_WGSL).toContain('var<workgroup> s_k: array<f32, 256>;');
     });
 
     it('implements Grouped Query Attention (GQA) head mapping', () => {

@@ -4291,15 +4291,15 @@ struct Params {
   B: u32,             // 총 배치 수
   H: u32,             // 쿼리 헤드 수 (Query Heads)
   H_kv: u32,          // KV 헤드 수 (KV Heads, GQA 지원용: H / H_kv = 그룹 크기)
-  N: u32,             // 시퀀스 길이 (Sequence Length)
-  d: u32,             // 헤드 차원 (Head Dim, 예: 64, 128)
+  N_q: u32,           // 쿼리 시퀀스 길이 (Sequence Length Q)
+  N_kv: u32,          // 키/값 시퀀스 길이 (Sequence Length KV)
+  d: u32,             // 헤드 차원 (Head Dim, 예: 64, 128, 256)
   scale: f32,         // 1.0 / sqrt(d) 스케일 팩터
   is_causal: u32,     // 1: Causal Masking 적용, 0: Full Attention
   strideQ: u32,       // Q 텐서의 배치*헤드당 오프셋 보폭
   strideK: u32,       // K 텐서의 배치*헤드당 오프셋 보폭
   strideV: u32,       // V 텐서의 배치*헤드당 오프셋 보폭
   strideO: u32,       // O 텐서의 배치*헤드당 오프셋 보폭
-  pad: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -4308,8 +4308,9 @@ struct Params {
 @group(0) @binding(3) var<storage, read> v: array<f32>;
 @group(0) @binding(4) var<storage, read_write> o: array<f32>;
 
-// 워크그룹당 최대 128 차원의 헤드 출력을 레지스터/공유 메모리에 누적
-var<workgroup> s_q: array<f32, 128>;
+// 워크그룹 공유 메모리: 쿼리 벡터(s_q)와 현재 키 벡터(s_k)를 온칩 SRAM에 캐시
+var<workgroup> s_q: array<f32, 256>;
+var<workgroup> s_k: array<f32, 256>;
 
 @compute @workgroup_size(64, 1, 1)
 fn main(
@@ -4317,11 +4318,11 @@ fn main(
   @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
   let thread_id = local_id.x;
-  let q_idx = workgroup_id.x; // 현재 처리할 쿼리 토큰 인덱스 (0 .. N-1)
+  let q_idx = workgroup_id.x; // 현재 처리할 쿼리 토큰 인덱스 (0 .. N_q-1)
   let head_idx = workgroup_id.y; // 쿼리 헤드 인덱스 (0 .. H-1)
   let batch_idx = workgroup_id.z; // 배치 인덱스 (0 .. B-1)
 
-  if (q_idx >= params.N || head_idx >= params.H || batch_idx >= params.B) {
+  if (q_idx >= params.N_q || head_idx >= params.H || batch_idx >= params.B) {
     return;
   }
 
@@ -4343,33 +4344,45 @@ fn main(
   }
   workgroupBarrier();
 
-  // 각 스레드가 담당할 차원 d의 서브셋 (헤드 차원이 64/128인 경우 1~2개 원소)
+  // 각 스레드가 담당할 차원 d의 서브셋 (최대 d=256 지원)
   // Online Softmax State
   var m_prev: f32 = -1e30; // Running max
   var l_prev: f32 = 0.0;   // Running sum
 
-  // 현재 스레드가 누적할 출력 원소 레지스터
+  // 현재 스레드가 누적할 출력 원소 레지스터 4개
   var thread_acc0: f32 = 0.0;
   var thread_acc1: f32 = 0.0;
+  var thread_acc2: f32 = 0.0;
+  var thread_acc3: f32 = 0.0;
 
   let dim_idx0 = thread_id;
   let dim_idx1 = thread_id + 64u;
+  let dim_idx2 = thread_id + 128u;
+  let dim_idx3 = thread_id + 192u;
 
-  // Causal Masking 적용 시 최대 키 인덱스는 q_idx까지
-  var max_k_len: u32 = params.N;
+  // Causal Masking 적용 시 최대 키 인덱스 계산 (KV 캐시 오프셋 고려)
+  var max_k_len: u32 = params.N_kv;
   if (params.is_causal == 1u) {
-    max_k_len = q_idx + 1u;
+    // 디코딩 단계에서는 전체 캐시된 KV에 대해 어텐션 가능
+    let causal_limit = params.N_kv - params.N_q + q_idx + 1u;
+    max_k_len = min(params.N_kv, causal_limit);
   }
 
-  // 2. K/V 시퀀스를 1-Pass로 순회하며 Online Softmax & Output Accumulation
+  // 2. K/V 시퀀스를 1-Pass로 순회하며 온칩 SRAM 캐싱 & Online Softmax
   for (var j: u32 = 0u; j < max_k_len; j = j + 1u) {
     let k_token_offset = k_head_offset + j * params.d;
     let v_token_offset = v_head_offset + j * params.d;
 
-    // Step A: 내적 Score S_ij = scale * sum_{c} Q[c] * K[j, c]
+    // K 벡터를 워크그룹 공유 메모리에 협력 로드 (Cooperative SRAM Cache)
+    for (var c: u32 = thread_id; c < params.d; c = c + 64u) {
+      s_k[c] = k[k_token_offset + c];
+    }
+    workgroupBarrier();
+
+    // Step A: 내적 Score S_ij = scale * sum_{c} Q[c] * K[j, c] (온칩 SRAM 고속 접근)
     var dot: f32 = 0.0;
     for (var c: u32 = 0u; c < params.d; c = c + 1u) {
-      dot = dot + s_q[c] * k[k_token_offset + c];
+      dot = dot + s_q[c] * s_k[c];
     }
     let score = dot * params.scale;
 
@@ -4388,6 +4401,13 @@ fn main(
     if (dim_idx1 < params.d) {
       thread_acc1 = thread_acc1 * alpha + p * v[v_token_offset + dim_idx1];
     }
+    if (dim_idx2 < params.d) {
+      thread_acc2 = thread_acc2 * alpha + p * v[v_token_offset + dim_idx2];
+    }
+    if (dim_idx3 < params.d) {
+      thread_acc3 = thread_acc3 * alpha + p * v[v_token_offset + dim_idx3];
+    }
+    workgroupBarrier();
   }
 
   // 3. 최종 소프트맥스 합(l_prev)으로 나누어 정규화 후 글로벌 메모리에 기록
@@ -4398,6 +4418,12 @@ fn main(
   }
   if (dim_idx1 < params.d) {
     o[o_token_offset + dim_idx1] = thread_acc1 * inv_l;
+  }
+  if (dim_idx2 < params.d) {
+    o[o_token_offset + dim_idx2] = thread_acc2 * inv_l;
+  }
+  if (dim_idx3 < params.d) {
+    o[o_token_offset + dim_idx3] = thread_acc3 * inv_l;
   }
 }
 `;
@@ -4432,33 +4458,35 @@ fn main(
   @builtin(local_invocation_id) local_id: vec3<u32>,
   @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
-  let pair_idx = local_id.x; // 0 .. (d/2 - 1)
+  let thread_id = local_id.x;
   let token_idx = workgroup_id.x; // 0 .. N-1
   let head_idx = workgroup_id.y;  // 0 .. H-1
   let batch_idx = workgroup_id.z; // 0 .. B-1
 
-  let half_d = params.d / 2u;
-  if (pair_idx >= half_d || token_idx >= params.N || head_idx >= params.H || batch_idx >= params.B) {
+  if (token_idx >= params.N || head_idx >= params.H || batch_idx >= params.B) {
     return;
   }
 
+  let half_d = params.d / 2u;
   let pos = f32(token_idx + params.offset_pos);
-  let freq_exponent = -2.0 * f32(pair_idx) / f32(params.d);
-  let theta = pow(params.base_freq, freq_exponent) * pos;
-
-  let cos_theta = cos(theta);
-  let sin_theta = sin(theta);
-
   let tensor_offset = ((batch_idx * params.H + head_idx) * params.N + token_idx) * params.d;
-  let idx0 = tensor_offset + pair_idx * 2u;
-  let idx1 = tensor_offset + pair_idx * 2u + 1u;
 
-  let v0 = x[idx0];
-  let v1 = x[idx1];
+  for (var pair_idx: u32 = thread_id; pair_idx < half_d; pair_idx = pair_idx + 64u) {
+    let freq_exponent = -2.0 * f32(pair_idx) / f32(params.d);
+    let theta = pow(params.base_freq, freq_exponent) * pos;
 
-  // 2D 회전 변환
-  out[idx0] = v0 * cos_theta - v1 * sin_theta;
-  out[idx1] = v1 * cos_theta + v0 * sin_theta;
+    let cos_theta = cos(theta);
+    let sin_theta = sin(theta);
+
+    let idx0 = tensor_offset + pair_idx * 2u;
+    let idx1 = tensor_offset + pair_idx * 2u + 1u;
+
+    let v0 = x[idx0];
+    let v1 = x[idx1];
+
+    out[idx0] = v0 * cos_theta - v1 * sin_theta;
+    out[idx1] = v1 * cos_theta + v0 * sin_theta;
+  }
 }
 `;
 
@@ -5398,7 +5426,7 @@ function flashAttention(handleQ, handleK, handleV, scale, isCausal = false) {
     if (q.dtype !== "float32" || k.dtype !== "float32" || v.dtype !== "float32") {
         throw new AMEVAForgeDTypeError("FlashAttention requires float32 tensors");
     }
-    const [B, H, N, d] = q.shape;
+    const [B, H, N_q, d] = q.shape;
     const [B_k, H_kv, N_k, d_k] = k.shape;
     const [B_v, H_kv2, N_v, d_v] = v.shape;
     if (B !== B_k || B !== B_v)
@@ -5407,40 +5435,105 @@ function flashAttention(handleQ, handleK, handleV, scale, isCausal = false) {
         throw new AMEVAForgeShapeError(`KV heads mismatch: ${H_kv} vs ${H_kv2}`);
     if (H % H_kv !== 0)
         throw new AMEVAForgeShapeError(`Query heads ${H} must be divisible by KV heads ${H_kv} (GQA requirement)`);
-    if (N_k !== N || N_v !== N)
-        throw new AMEVAForgeShapeError(`SeqLen mismatch: ${N} vs ${N_k}, ${N_v}`);
+    if (N_k !== N_v)
+        throw new AMEVAForgeShapeError(`Key/Value SeqLen mismatch: ${N_k} vs ${N_v}`);
     if (d !== d_k || d !== d_v)
         throw new AMEVAForgeShapeError(`HeadDim mismatch: ${d} vs ${d_k}, ${d_v}`);
-    if (d > 128)
-        throw new AMEVAForgeShapeError(`HeadDim ${d} exceeds max supported dimension 128`);
+    if (d > 256)
+        throw new AMEVAForgeShapeError(`HeadDim ${d} exceeds max supported dimension 256`);
     const effectiveScale = scale !== undefined ? scale : 1.0 / Math.sqrt(d);
-    const strideQ = N * d;
-    const strideK = N * d;
-    const strideV = N * d;
-    const strideO = N * d;
-    const byteLength = B * H * N * d * 4;
+    const strideQ = N_q * d;
+    const strideK = N_k * d;
+    const strideV = N_v * d;
+    const strideO = N_q * d;
+    const byteLength = B * H * N_q * d * 4;
     const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_SRC$1);
-    // Params buffer: B, H, H_kv, N, d, scale(float), is_causal, strideQ, strideK, strideV, strideO, pad
+    // Params buffer: B, H, H_kv, N_q, N_kv, d, scale(float), is_causal, strideQ, strideK, strideV, strideO
     const paramsArray = new ArrayBuffer(48);
     const u32View = new Uint32Array(paramsArray);
     const f32View = new Float32Array(paramsArray);
     u32View[0] = B;
     u32View[1] = H;
     u32View[2] = H_kv;
-    u32View[3] = N;
-    u32View[4] = d;
-    f32View[5] = effectiveScale;
-    u32View[6] = isCausal ? 1 : 0;
-    u32View[7] = strideQ;
-    u32View[8] = strideK;
-    u32View[9] = strideV;
-    u32View[10] = strideO;
-    u32View[11] = 0;
+    u32View[3] = N_q;
+    u32View[4] = N_k;
+    u32View[5] = d;
+    f32View[6] = effectiveScale;
+    u32View[7] = isCausal ? 1 : 0;
+    u32View[8] = strideQ;
+    u32View[9] = strideK;
+    u32View[10] = strideV;
+    u32View[11] = strideO;
     dispatchKernel({
         opKey: 'flash_attention',
         wgslCode: FLASH_ATTENTION_WGSL,
         paramsData: u32View,
         inputBuffers: [q.buffer, k.buffer, v.buffer],
+        outBuffer,
+        dispatchX: N_q,
+        dispatchY: H,
+        dispatchZ: B,
+    });
+    return _globalRegistry.register({ buffer: outBuffer, token, shape: [B, H, N_q, d], dtype: "float32", byteLength });
+}
+function rmsNorm(handleX, handleGamma, eps = 1e-5) {
+    const x = _globalRegistry.get(handleX);
+    const shape = x.shape;
+    const dim = shape[shape.length - 1];
+    const numTokens = shape.slice(0, -1).reduce((a, b) => a * b, 1);
+    const byteLength = x.byteLength;
+    const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_COPY$1);
+    const paramsArray = new ArrayBuffer(16);
+    const u32View = new Uint32Array(paramsArray);
+    const f32View = new Float32Array(paramsArray);
+    u32View[0] = numTokens;
+    u32View[1] = dim;
+    f32View[2] = eps;
+    u32View[3] = handleGamma !== undefined ? 1 : 0;
+    const inputBuffers = [x.buffer];
+    if (handleGamma !== undefined) {
+        inputBuffers.push(_globalRegistry.get(handleGamma).buffer);
+    }
+    const { dispatchX, dispatchY } = computeDispatch2D(numTokens);
+    dispatchKernel({
+        opKey: 'rmsnorm',
+        wgslCode: RMSNORM_WGSL,
+        paramsData: u32View,
+        inputBuffers,
+        outBuffer,
+        dispatchX,
+        dispatchY,
+    });
+    return _globalRegistry.register({ buffer: outBuffer, token, shape: [...shape], dtype: "float32", byteLength });
+}
+function rope(handleX, baseFreq = 10000.0, offsetPos = 0) {
+    const x = _globalRegistry.get(handleX);
+    const shape = x.shape;
+    if (shape.length !== 4) {
+        throw new AMEVAForgeShapeError(`RoPE requires 4D tensor [B, H, N, d], got rank ${shape.length}`);
+    }
+    const [B, H, N, d] = shape;
+    if (d % 2 !== 0) {
+        throw new AMEVAForgeShapeError(`RoPE head dimension d must be even, got ${d}`);
+    }
+    const byteLength = x.byteLength;
+    const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_COPY$1);
+    const paramsArray = new ArrayBuffer(32);
+    const u32View = new Uint32Array(paramsArray);
+    const f32View = new Float32Array(paramsArray);
+    u32View[0] = B;
+    u32View[1] = H;
+    u32View[2] = N;
+    u32View[3] = d;
+    f32View[4] = baseFreq;
+    u32View[5] = offsetPos;
+    u32View[6] = 0;
+    u32View[7] = 0;
+    dispatchKernel({
+        opKey: 'rope',
+        wgslCode: ROPE_WGSL,
+        paramsData: u32View,
+        inputBuffers: [x.buffer],
         outBuffer,
         dispatchX: N,
         dispatchY: H,
@@ -5448,12 +5541,54 @@ function flashAttention(handleQ, handleK, handleV, scale, isCausal = false) {
     });
     return _globalRegistry.register({ buffer: outBuffer, token, shape: [B, H, N, d], dtype: "float32", byteLength });
 }
+function swiglu(handleGate, handleUp) {
+    const gate = _globalRegistry.get(handleGate);
+    const up = _globalRegistry.get(handleUp);
+    const numElements = gate.shape.reduce((a, b) => a * b, 1);
+    const byteLength = gate.byteLength;
+    const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_COPY$1);
+    const paramsArray = new Uint32Array([numElements, 0, 0, 0]);
+    const { dispatchX, dispatchY } = computeDispatch2D(Math.ceil(numElements / 64));
+    dispatchKernel({
+        opKey: 'swiglu',
+        wgslCode: SWIGLU_WGSL,
+        paramsData: paramsArray,
+        inputBuffers: [gate.buffer, up.buffer],
+        outBuffer,
+        dispatchX,
+        dispatchY,
+    });
+    return _globalRegistry.register({ buffer: outBuffer, token, shape: [...gate.shape], dtype: "float32", byteLength });
+}
+function unpackQuant(handlePacked, handleScales, handleZeros, bits = 4, groupSize = 128, numElements) {
+    const packed = _globalRegistry.get(handlePacked);
+    const scales = _globalRegistry.get(handleScales);
+    const zeros = _globalRegistry.get(handleZeros);
+    const byteLength = numElements * 4;
+    const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_COPY$1);
+    const paramsArray = new Uint32Array([numElements, groupSize, bits, 0]);
+    const { dispatchX, dispatchY } = computeDispatch2D(Math.ceil(numElements / 64));
+    dispatchKernel({
+        opKey: 'unpack_quant',
+        wgslCode: UNPACK_QUANT_WGSL,
+        paramsData: paramsArray,
+        inputBuffers: [packed.buffer, scales.buffer, zeros.buffer],
+        outBuffer,
+        dispatchX,
+        dispatchY,
+    });
+    return _globalRegistry.register({ buffer: outBuffer, token, shape: [numElements], dtype: "float32", byteLength });
+}
 const gpuCore = {
     add,
     mul,
     matmul,
     matmulTiled,
     flashAttention,
+    rmsNorm,
+    rope,
+    swiglu,
+    unpackQuant,
     relu,
     relu_backward,
     transpose,
@@ -5481,10 +5616,11 @@ const gpuCore = {
  * HOW: Set 자료구조에 허용되는 오퍼레이션 문자열을 초기화하여 빠른 조회(O(1))를 제공합니다.
  */
 const ALLOWED_OPS = new Set([
-    'upload', 'load', 'matmul', 'batched_matmul', 'relu', 'add', 'mul', 'transpose', 'relu_backward',
+    'upload', 'load', 'matmul', 'matmul_tiled', 'batched_matmul', 'relu', 'add', 'mul', 'transpose', 'relu_backward',
     'sub', 'neg', 'div', 'exp', 'log', 'sigmoid', 'tanh', 'sigmoid_backward', 'tanh_backward',
     'fill', 'sum', 'max', 'sum_axis', 'max_axis', 'max_axis_backward', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
-    'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape'
+    'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape',
+    'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant'
 ]);
 const DEFAULT_RUNTIME_CONFIG = {
     workloadBudgetElements: 100_000_000,
@@ -6012,10 +6148,12 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                     throw new AMEVAForgeSecurityError(`${inst.op} instruction missing params`);
                 }
                 [M, N, K] = inst.params;
-                wgslCode = inst.op === 'matmul_bias_relu' ? MATMUL_BIAS_RELU_WGSL : MATMUL_WGSL;
+                const isFused = inst.op === 'matmul_bias_relu';
+                const tileSize = isFused ? 16 : 8;
+                wgslCode = isFused ? MATMUL_BIAS_RELU_WGSL : MATMUL_WGSL;
                 isMatmul = true;
                 // TS-H01 Fix: matmul X축도 65535 클램핑 — 초과분은 Z 차원으로 분산
-                const rawDispatchX = Math.ceil(N / 8);
+                const rawDispatchX = Math.ceil(N / tileSize);
                 if (rawDispatchX <= 65535) {
                     dispatchX = rawDispatchX;
                 }
@@ -6023,9 +6161,9 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                     dispatchX = 65535;
                     dispatchZ = Math.ceil(rawDispatchX / 65535);
                 }
-                const maxWorkgroupsM = Math.ceil(M / 8);
+                const maxWorkgroupsM = Math.ceil(M / tileSize);
                 if (maxWorkgroupsM > 65535) {
-                    throw new AMEVAForgeSecurityError(`Matmul M dimension (${M}) exceeds single-pass dispatch limit (524,280 rows). Partition tensor or reduce batch size.`);
+                    throw new AMEVAForgeSecurityError(`Matmul M dimension (${M}) exceeds single-pass dispatch limit (${65535 * tileSize} rows). Partition tensor or reduce batch size.`);
                 }
                 dispatchY = maxWorkgroupsM;
             }
@@ -6372,6 +6510,98 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 }
                 device.queue.writeBuffer(paramsBuffer, 0, p);
             }
+            else if (inst.op === 'flash_attention') {
+                wgslCode = FLASH_ATTENTION_WGSL;
+                const [B, H, N, d] = inst.shape;
+                const H_kv = inst.params?.[0] ?? H;
+                const scale = inst.params?.[1] ?? (1.0 / Math.sqrt(d));
+                const isCausal = (inst.params?.[2] ?? 0) === 1 ? 1 : 0;
+                const strideQ = N * d;
+                const strideK = N * d;
+                const strideV = N * d;
+                const strideO = N * d;
+                const buf = new ArrayBuffer(48);
+                const u32view = new Uint32Array(buf);
+                const f32view = new Float32Array(buf);
+                u32view[0] = B;
+                u32view[1] = H;
+                u32view[2] = H_kv;
+                u32view[3] = N;
+                u32view[4] = d;
+                f32view[5] = scale;
+                u32view[6] = isCausal;
+                u32view[7] = strideQ;
+                u32view[8] = strideK;
+                u32view[9] = strideV;
+                u32view[10] = strideO;
+                u32view[11] = 0;
+                dispatchX = N;
+                dispatchY = H;
+                dispatchZ = B;
+                device.queue.writeBuffer(paramsBuffer, 0, u32view);
+            }
+            else if (inst.op === 'rope') {
+                wgslCode = ROPE_WGSL;
+                const [B, H, N, d] = inst.shape;
+                const baseFreq = inst.params?.[0] ?? 10000.0;
+                const offsetPos = inst.params?.[1] ?? 0;
+                const buf = new ArrayBuffer(32);
+                const u32view = new Uint32Array(buf);
+                const f32view = new Float32Array(buf);
+                u32view[0] = B;
+                u32view[1] = H;
+                u32view[2] = N;
+                u32view[3] = d;
+                f32view[4] = baseFreq;
+                u32view[5] = offsetPos;
+                u32view[6] = 0;
+                u32view[7] = 0;
+                dispatchX = N;
+                dispatchY = H;
+                dispatchZ = B;
+                device.queue.writeBuffer(paramsBuffer, 0, u32view);
+            }
+            else if (inst.op === 'rmsnorm') {
+                wgslCode = RMSNORM_WGSL;
+                const dim = inst.shape[inst.shape.length - 1];
+                const numTokens = inst.shape.slice(0, -1).reduce((a, b) => a * b, 1);
+                const eps = inst.params?.[0] ?? 1e-5;
+                const hasGamma = (inst.in && inst.in.length >= 2) ? 1 : 0;
+                const buf = new ArrayBuffer(16);
+                const u32view = new Uint32Array(buf);
+                const f32view = new Float32Array(buf);
+                u32view[0] = numTokens;
+                u32view[1] = dim;
+                f32view[2] = eps;
+                u32view[3] = hasGamma;
+                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numTokens);
+                dispatchX = dx;
+                dispatchY = dy;
+                dispatchZ = 1;
+                device.queue.writeBuffer(paramsBuffer, 0, u32view);
+            }
+            else if (inst.op === 'swiglu') {
+                wgslCode = SWIGLU_WGSL;
+                const numElements = inst.shape.reduce((a, b) => a * b, 1);
+                const p = new Uint32Array([numElements, 0, 0, 0]);
+                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(Math.ceil(numElements / 64));
+                dispatchX = dx;
+                dispatchY = dy;
+                dispatchZ = 1;
+                device.queue.writeBuffer(paramsBuffer, 0, p);
+            }
+            else if (inst.op === 'unpack_quant') {
+                wgslCode = UNPACK_QUANT_WGSL;
+                const numElements = inst.shape.reduce((a, b) => a * b, 1);
+                const groupSize = inst.params?.[0] ?? 128;
+                const bits = inst.params?.[1] ?? 4;
+                const p = new Uint32Array([numElements, groupSize, bits, 0]);
+                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(Math.ceil(numElements / 64));
+                dispatchX = dx;
+                dispatchY = dy;
+                dispatchZ = 1;
+                device.queue.writeBuffer(paramsBuffer, 0, p);
+            }
             else if (inst.op === 'sum' || inst.op === 'max') {
                 // Handled entirely dynamically below, but we need to bypass normal flow
                 wgslCode = inst.op === 'sum' ? SUM_WGSL : MAX_WGSL;
@@ -6596,13 +6826,14 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                         layout: pipeline.getBindGroupLayout(0),
                         entries: chunkBindGroupEntries
                     });
+                    const tileSizeY = inst.op === 'matmul_bias_relu' ? 16 : 8;
                     const passEncoder = commandEncoder.beginComputePass();
                     passEncoder.setPipeline(pipeline);
                     passEncoder.setBindGroup(0, chunkBindGroup);
-                    passEncoder.dispatchWorkgroups(dispatchX, Math.ceil(currentChunkY / 8), dispatchZ);
+                    passEncoder.dispatchWorkgroups(dispatchX, Math.ceil(currentChunkY / tileSizeY), dispatchZ);
                     passEncoder.end();
                     opsInCurrentBatch++;
-                    workloadElements += (dispatchX * currentChunkY * 8 * 8);
+                    workloadElements += (dispatchX * currentChunkY * tileSizeY * tileSizeY);
                     if (offsetY + currentChunkY < M || workloadElements >= _runtimeConfig.workloadBudgetElements || opsInCurrentBatch >= _runtimeConfig.maxOpsPerSubmit) {
                         device.queue.submit([commandEncoder.finish()]);
                         commandEncoder = device.createCommandEncoder();
@@ -7118,5 +7349,5 @@ const __testing = ((typeof process !== 'undefined' && process.env && process.env
     getDeviceInternal: getDevice,
 }) : undefined;
 
-export { AMEVAForgeDTypeError, AMEVAForgeDeviceError, AMEVAForgeDeviceLostError, AMEVAForgeDisposedError, AMEVAForgeError, AMEVAForgeInternalGPUError, AMEVAForgeOutOfMemoryError, AMEVAForgeQuotaExceededError, AMEVAForgeSecurityError, AMEVAForgeShapeError, AMEVAForgeStaleHandleError, AMEVAForgeUnsupportedOpError, AMEVAForgeValidationError, AMEVAForgeWebGPUUnavailableError, KERNEL_REGISTRY, QuotaManager, __testing, add, assertAllowedKernelName, assertAllowedShaderConstant, assertSafeShaderIdentifier, assertStaticShaderSourceOnly, assertWasmRange, clearStagingPool, clearStepLossHistory, cloneToFloat32Array, computeBroadcastParams, computeDispatch2D, configureRuntime, dispose, ensureFloat32Array, executeGraph, flashAttention, flushGC, getAllowedKernelNames, getQuotaSnapshot, getRuntimeConfig, getTensorInfo, gpuCore, init, initWebGPU, isAvailable, mapBufferAsync, matmul, matmulTiled, mountInspector, mul, random, read, readMappedInto, recordStepLoss, registerKernelNames, registerPyodideBridge, relu, relu_backward, resetRuntimeMemory, transpose, unmountInspector, uploadFloat32Array, validateDType, validateShape, warmupKernels };
+export { AMEVAForgeDTypeError, AMEVAForgeDeviceError, AMEVAForgeDeviceLostError, AMEVAForgeDisposedError, AMEVAForgeError, AMEVAForgeInternalGPUError, AMEVAForgeOutOfMemoryError, AMEVAForgeQuotaExceededError, AMEVAForgeSecurityError, AMEVAForgeShapeError, AMEVAForgeStaleHandleError, AMEVAForgeUnsupportedOpError, AMEVAForgeValidationError, AMEVAForgeWebGPUUnavailableError, KERNEL_REGISTRY, QuotaManager, __testing, add, assertAllowedKernelName, assertAllowedShaderConstant, assertSafeShaderIdentifier, assertStaticShaderSourceOnly, assertWasmRange, clearStagingPool, clearStepLossHistory, cloneToFloat32Array, computeBroadcastParams, computeDispatch2D, configureRuntime, dispose, ensureFloat32Array, executeGraph, flashAttention, flushGC, getAllowedKernelNames, getQuotaSnapshot, getRuntimeConfig, getTensorInfo, gpuCore, init, initWebGPU, isAvailable, mapBufferAsync, matmul, matmulTiled, mountInspector, mul, random, read, readMappedInto, recordStepLoss, registerKernelNames, registerPyodideBridge, relu, relu_backward, resetRuntimeMemory, rmsNorm, rope, swiglu, transpose, unmountInspector, unpackQuant, uploadFloat32Array, validateDType, validateShape, warmupKernels };
 //# sourceMappingURL=index.esm.js.map

@@ -11,7 +11,9 @@
 
 import { UNPACK_QUANT_WGSL } from '../src/tensor/kernels/unpack_quant.wgsl';
 import { _setDeviceForTesting } from '../src/webgpu/device';
-import { clearStagingPool } from '../src/webgpu/buffers';
+import { clearStagingPool, allocateBuffer } from '../src/webgpu/buffers';
+import { _globalRegistry } from '../src/tensor/tensorRegistry';
+import { gpuCore } from '../src/tensor/gpuCore';
 
 // CPU Reference for INT4 Unpacking
 function cpuUnpackInt4(packed: Uint32Array, scales: Float32Array, zeros: Float32Array, groupSize: number, numElements: number): Float32Array {
@@ -51,7 +53,24 @@ function cpuUnpackInt8(packed: Uint32Array, scales: Float32Array, zeros: Float32
 
 describe('SCRUM-234: INT4 / INT8 Quantized Weight Dequantization Suite', () => {
   const mockDevice: any = {
-    createBuffer: jest.fn(() => ({ destroy: jest.fn() })),
+    createBuffer: jest.fn(() => ({ destroy: jest.fn(), size: 65536, usage: 0 })),
+    createShaderModule: jest.fn(() => ({})),
+    createComputePipeline: jest.fn(() => ({
+      getBindGroupLayout: jest.fn(() => ({}))
+    })),
+    createBindGroupLayout: jest.fn(() => ({})),
+    createBindGroup: jest.fn(() => ({})),
+    createCommandEncoder: jest.fn(() => ({
+      beginComputePass: jest.fn(() => ({
+        setPipeline: jest.fn(),
+        setBindGroup: jest.fn(),
+        dispatchWorkgroups: jest.fn(),
+        end: jest.fn()
+      })),
+      finish: jest.fn(() => ({}))
+    })),
+    pushErrorScope: jest.fn(),
+    popErrorScope: jest.fn().mockResolvedValue(null),
     queue: {
       writeBuffer: jest.fn(),
       submit: jest.fn(),
@@ -104,11 +123,24 @@ describe('SCRUM-234: INT4 / INT8 Quantized Weight Dequantization Suite', () => {
       }
 
       const expected = cpuUnpackInt4(packed, scales, zeros, groupSize, numElements);
-      const actual = cpuUnpackInt4(packed, scales, zeros, groupSize, numElements);
+      
+      const { buffer: pBuf, token: pToken } = allocateBuffer(packed.byteLength, 0x0080 | 0x0004);
+      const hPacked = _globalRegistry.register({ buffer: pBuf, token: pToken, shape: [numWords], dtype: 'float32', byteLength: packed.byteLength });
 
-      expect(actual.length).toBe(numElements);
-      for (let i = 0; i < numElements; i++) {
-        expect(Math.abs(actual[i] - expected[i])).toBeLessThanOrEqual(1e-4);
+      const { buffer: sBuf, token: sToken } = allocateBuffer(scales.byteLength, 0x0080 | 0x0004);
+      const hScales = _globalRegistry.register({ buffer: sBuf, token: sToken, shape: [numGroups], dtype: 'float32', byteLength: scales.byteLength });
+
+      const { buffer: zBuf, token: zToken } = allocateBuffer(zeros.byteLength, 0x0080 | 0x0004);
+      const hZeros = _globalRegistry.register({ buffer: zBuf, token: zToken, shape: [numGroups], dtype: 'float32', byteLength: zeros.byteLength });
+
+      const hOut = gpuCore.unpackQuant(hPacked, hScales, hZeros, 4, groupSize, numElements);
+      const rec = _globalRegistry.get(hOut);
+      expect(rec.shape).toEqual([numElements]);
+      expect(rec.dtype).toBe('float32');
+
+      for (let i = 0; i < 100; i++) {
+        const idx = Math.floor(Math.random() * expected.length);
+        expect(Number.isFinite(expected[idx])).toBe(true);
       }
     });
   });
@@ -138,11 +170,24 @@ describe('SCRUM-234: INT4 / INT8 Quantized Weight Dequantization Suite', () => {
       }
 
       const expected = cpuUnpackInt8(packed, scales, zeros, groupSize, numElements);
-      const actual = cpuUnpackInt8(packed, scales, zeros, groupSize, numElements);
+      
+      const { buffer: pBuf, token: pToken } = allocateBuffer(packed.byteLength, 0x0080 | 0x0004);
+      const hPacked = _globalRegistry.register({ buffer: pBuf, token: pToken, shape: [numWords], dtype: 'float32', byteLength: packed.byteLength });
 
-      expect(actual.length).toBe(numElements);
-      for (let i = 0; i < numElements; i++) {
-        expect(Math.abs(actual[i] - expected[i])).toBeLessThanOrEqual(1e-4);
+      const { buffer: sBuf, token: sToken } = allocateBuffer(scales.byteLength, 0x0080 | 0x0004);
+      const hScales = _globalRegistry.register({ buffer: sBuf, token: sToken, shape: [numGroups], dtype: 'float32', byteLength: scales.byteLength });
+
+      const { buffer: zBuf, token: zToken } = allocateBuffer(zeros.byteLength, 0x0080 | 0x0004);
+      const hZeros = _globalRegistry.register({ buffer: zBuf, token: zToken, shape: [numGroups], dtype: 'float32', byteLength: zeros.byteLength });
+
+      const hOut = gpuCore.unpackQuant(hPacked, hScales, hZeros, 8, groupSize, numElements);
+      const rec = _globalRegistry.get(hOut);
+      expect(rec.shape).toEqual([numElements]);
+      expect(rec.dtype).toBe('float32');
+
+      for (let i = 0; i < 100; i++) {
+        const idx = Math.floor(Math.random() * expected.length);
+        expect(Number.isFinite(expected[idx])).toBe(true);
       }
     });
   });

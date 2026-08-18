@@ -516,6 +516,20 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     import math
     
     orig_shape = query.shape
+    if len(orig_shape) == 4 and query.device == 'gpu' and hasattr(query, '_handle') and query._handle is not None and dropout_p == 0.0 and attn_mask is None:
+        from .bridge import is_webgpu_available
+        if is_webgpu_available():
+            from .graph import trace_or_execute
+            B, H, N_q, d = query.shape
+            H_kv = key.shape[1]
+            scale = 1.0 / math.sqrt(d)
+            return trace_or_execute(
+                'flash_attention',
+                [query, key, value],
+                query.shape,
+                params=[float(H_kv), float(scale), 1.0 if is_causal else 0.0]
+            )
+            
     if len(orig_shape) == 4:
         B, H, L, D = orig_shape
         # 무엇을: 배치와 헤드 차원을 하나로 합친다.
@@ -605,8 +619,15 @@ def rope(x, base_freq=10000.0, offset_pos=0):
     무엇을: Rotary Position Embedding (RoPE) 2D 복소수 평면 회전을 수행한다.
     왜: 토큰 위치 정보를 Query와 Key 벡터에 인플레이스로 주입하기 위함이다.
     """
-    # CPU/GPU 텐서에 대해 정확한 짝수 페어 회전 적용
     from .ops import tensor
+    if x.device == 'gpu' and hasattr(x, '_handle') and x._handle is not None:
+        from .bridge import is_webgpu_available
+        if is_webgpu_available():
+            # WebGPU Graph Instruction Dispatch
+            from .graph import trace_or_execute
+            return trace_or_execute('rope', [x], x.shape, params=[float(base_freq), float(offset_pos)])
+    
+    # CPU Reference Math
     data = x.numpy()
     orig_shape = data.shape
     B, H, N, d = orig_shape
@@ -628,4 +649,5 @@ def rope(x, base_freq=10000.0, offset_pos=0):
         out_np[b, h, :, 1::2] = v1 * cos_theta + v0 * sin_theta
         
     return tensor(out_np, device=x.device, dtype=x.dtype, requires_grad=x.requires_grad)
+
 

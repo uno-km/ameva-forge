@@ -65,6 +65,12 @@ import { CAT_WGSL } from "./kernels/cat.wgsl";
 import { WHERE_WGSL } from "./kernels/where.wgsl";
 import { DROPOUT_WGSL } from "./kernels/dropout.wgsl";
 import { PERMUTE_WGSL } from "./kernels/permute.wgsl";
+import { MATMUL_TILED_WGSL } from "./kernels/matmul_tiled.wgsl";
+import { FLASH_ATTENTION_WGSL } from "./kernels/flash_attention.wgsl";
+import { ROPE_WGSL } from "./kernels/rope.wgsl";
+import { RMSNORM_WGSL } from "./kernels/rmsnorm.wgsl";
+import { SWIGLU_WGSL } from "./kernels/swiglu.wgsl";
+import { UNPACK_QUANT_WGSL } from "./kernels/unpack_quant.wgsl";
 
 /** 
  * WHAT: 그래프 실행기가 처리할 수 있는 모든 허용된 오퍼레이션(op)의 집합입니다.
@@ -72,10 +78,11 @@ import { PERMUTE_WGSL } from "./kernels/permute.wgsl";
  * HOW: Set 자료구조에 허용되는 오퍼레이션 문자열을 초기화하여 빠른 조회(O(1))를 제공합니다.
  */
 const ALLOWED_OPS = new Set([
-  'upload', 'load', 'matmul', 'batched_matmul', 'relu', 'add', 'mul', 'transpose', 'relu_backward',
+  'upload', 'load', 'matmul', 'matmul_tiled', 'batched_matmul', 'relu', 'add', 'mul', 'transpose', 'relu_backward',
   'sub', 'neg', 'div', 'exp', 'log', 'sigmoid', 'tanh', 'sigmoid_backward', 'tanh_backward',
   'fill', 'sum', 'max', 'sum_axis', 'max_axis', 'max_axis_backward', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
-  'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape'
+  'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape',
+  'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant'
 ]);
 
 export type ForgeRuntimeConfig = {
@@ -720,20 +727,22 @@ async function _executeGraphCore(
           throw new AMEVAForgeSecurityError(`${inst.op} instruction missing params`);
         }
         [M, N, K] = inst.params;
-        wgslCode = inst.op === 'matmul_bias_relu' ? MATMUL_BIAS_RELU_WGSL : MATMUL_WGSL;
+        const isFused = inst.op === 'matmul_bias_relu';
+        const tileSize = isFused ? 16 : 8;
+        wgslCode = isFused ? MATMUL_BIAS_RELU_WGSL : MATMUL_WGSL;
         isMatmul = true;
         // TS-H01 Fix: matmul X축도 65535 클램핑 — 초과분은 Z 차원으로 분산
-        const rawDispatchX = Math.ceil(N / 8);
+        const rawDispatchX = Math.ceil(N / tileSize);
         if (rawDispatchX <= 65535) {
           dispatchX = rawDispatchX;
         } else {
           dispatchX = 65535;
           dispatchZ = Math.ceil(rawDispatchX / 65535);
         }
-        const maxWorkgroupsM = Math.ceil(M / 8);
+        const maxWorkgroupsM = Math.ceil(M / tileSize);
         if (maxWorkgroupsM > 65535) {
           throw new AMEVAForgeSecurityError(
-            `Matmul M dimension (${M}) exceeds single-pass dispatch limit (524,280 rows). Partition tensor or reduce batch size.`
+            `Matmul M dimension (${M}) exceeds single-pass dispatch limit (${65535 * tileSize} rows). Partition tensor or reduce batch size.`
           );
         }
         dispatchY = maxWorkgroupsM;
@@ -1074,6 +1083,100 @@ async function _executeGraphCore(
            p[outStrideOffset] = outStrides[i];
         }
         device.queue.writeBuffer(paramsBuffer, 0, p);
+      } else if (inst.op === 'flash_attention') {
+        wgslCode = FLASH_ATTENTION_WGSL;
+        const [B, H, N, d] = inst.shape;
+        const H_kv = inst.params?.[0] ?? H;
+        const scale = inst.params?.[1] ?? (1.0 / Math.sqrt(d));
+        const isCausal = (inst.params?.[2] ?? 0) === 1 ? 1 : 0;
+        
+        const strideQ = N * d;
+        const strideK = N * d;
+        const strideV = N * d;
+        const strideO = N * d;
+
+        const buf = new ArrayBuffer(48);
+        const u32view = new Uint32Array(buf);
+        const f32view = new Float32Array(buf);
+        u32view[0] = B;
+        u32view[1] = H;
+        u32view[2] = H_kv;
+        u32view[3] = N;
+        u32view[4] = d;
+        f32view[5] = scale;
+        u32view[6] = isCausal;
+        u32view[7] = strideQ;
+        u32view[8] = strideK;
+        u32view[9] = strideV;
+        u32view[10] = strideO;
+        u32view[11] = 0;
+
+        dispatchX = N;
+        dispatchY = H;
+        dispatchZ = B;
+        device.queue.writeBuffer(paramsBuffer, 0, u32view);
+      } else if (inst.op === 'rope') {
+        wgslCode = ROPE_WGSL;
+        const [B, H, N, d] = inst.shape;
+        const baseFreq = inst.params?.[0] ?? 10000.0;
+        const offsetPos = inst.params?.[1] ?? 0;
+
+        const buf = new ArrayBuffer(32);
+        const u32view = new Uint32Array(buf);
+        const f32view = new Float32Array(buf);
+        u32view[0] = B;
+        u32view[1] = H;
+        u32view[2] = N;
+        u32view[3] = d;
+        f32view[4] = baseFreq;
+        u32view[5] = offsetPos;
+        u32view[6] = 0;
+        u32view[7] = 0;
+
+        dispatchX = N;
+        dispatchY = H;
+        dispatchZ = B;
+        device.queue.writeBuffer(paramsBuffer, 0, u32view);
+      } else if (inst.op === 'rmsnorm') {
+        wgslCode = RMSNORM_WGSL;
+        const dim = inst.shape[inst.shape.length - 1];
+        const numTokens = inst.shape.slice(0, -1).reduce((a, b) => a * b, 1);
+        const eps = inst.params?.[0] ?? 1e-5;
+        const hasGamma = (inst.in && inst.in.length >= 2) ? 1 : 0;
+
+        const buf = new ArrayBuffer(16);
+        const u32view = new Uint32Array(buf);
+        const f32view = new Float32Array(buf);
+        u32view[0] = numTokens;
+        u32view[1] = dim;
+        f32view[2] = eps;
+        u32view[3] = hasGamma;
+
+        const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numTokens);
+        dispatchX = dx;
+        dispatchY = dy;
+        dispatchZ = 1;
+        device.queue.writeBuffer(paramsBuffer, 0, u32view);
+      } else if (inst.op === 'swiglu') {
+        wgslCode = SWIGLU_WGSL;
+        const numElements = inst.shape.reduce((a, b) => a * b, 1);
+        const p = new Uint32Array([numElements, 0, 0, 0]);
+        const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(Math.ceil(numElements / 64));
+        dispatchX = dx;
+        dispatchY = dy;
+        dispatchZ = 1;
+        device.queue.writeBuffer(paramsBuffer, 0, p);
+      } else if (inst.op === 'unpack_quant') {
+        wgslCode = UNPACK_QUANT_WGSL;
+        const numElements = inst.shape.reduce((a, b) => a * b, 1);
+        const groupSize = inst.params?.[0] ?? 128;
+        const bits = inst.params?.[1] ?? 4;
+        const p = new Uint32Array([numElements, groupSize, bits, 0]);
+        const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(Math.ceil(numElements / 64));
+        dispatchX = dx;
+        dispatchY = dy;
+        dispatchZ = 1;
+        device.queue.writeBuffer(paramsBuffer, 0, p);
       } else if (inst.op === 'sum' || inst.op === 'max') {
         // Handled entirely dynamically below, but we need to bypass normal flow
         wgslCode = inst.op === 'sum' ? SUM_WGSL : MAX_WGSL;
@@ -1315,14 +1418,15 @@ async function _executeGraphCore(
             entries: chunkBindGroupEntries
           });
 
+          const tileSizeY = inst.op === 'matmul_bias_relu' ? 16 : 8;
           const passEncoder = commandEncoder.beginComputePass();
           passEncoder.setPipeline(pipeline);
           passEncoder.setBindGroup(0, chunkBindGroup);
-          passEncoder.dispatchWorkgroups(dispatchX, Math.ceil(currentChunkY / 8), dispatchZ);
+          passEncoder.dispatchWorkgroups(dispatchX, Math.ceil(currentChunkY / tileSizeY), dispatchZ);
           passEncoder.end();
 
           opsInCurrentBatch++;
-          workloadElements += (dispatchX * currentChunkY * 8 * 8); 
+          workloadElements += (dispatchX * currentChunkY * tileSizeY * tileSizeY); 
           
           if (offsetY + currentChunkY < M || workloadElements >= _runtimeConfig.workloadBudgetElements || opsInCurrentBatch >= _runtimeConfig.maxOpsPerSubmit) {
             device.queue.submit([commandEncoder.finish()]);

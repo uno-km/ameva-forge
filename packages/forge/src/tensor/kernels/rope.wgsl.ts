@@ -29,32 +29,34 @@ fn main(
   @builtin(local_invocation_id) local_id: vec3<u32>,
   @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
-  let pair_idx = local_id.x; // 0 .. (d/2 - 1)
+  let thread_id = local_id.x;
   let token_idx = workgroup_id.x; // 0 .. N-1
   let head_idx = workgroup_id.y;  // 0 .. H-1
   let batch_idx = workgroup_id.z; // 0 .. B-1
 
-  let half_d = params.d / 2u;
-  if (pair_idx >= half_d || token_idx >= params.N || head_idx >= params.H || batch_idx >= params.B) {
+  if (token_idx >= params.N || head_idx >= params.H || batch_idx >= params.B) {
     return;
   }
 
+  let half_d = params.d / 2u;
   let pos = f32(token_idx + params.offset_pos);
-  let freq_exponent = -2.0 * f32(pair_idx) / f32(params.d);
-  let theta = pow(params.base_freq, freq_exponent) * pos;
-
-  let cos_theta = cos(theta);
-  let sin_theta = sin(theta);
-
   let tensor_offset = ((batch_idx * params.H + head_idx) * params.N + token_idx) * params.d;
-  let idx0 = tensor_offset + pair_idx * 2u;
-  let idx1 = tensor_offset + pair_idx * 2u + 1u;
 
-  let v0 = x[idx0];
-  let v1 = x[idx1];
+  for (var pair_idx: u32 = thread_id; pair_idx < half_d; pair_idx = pair_idx + 64u) {
+    let freq_exponent = -2.0 * f32(pair_idx) / f32(params.d);
+    let theta = pow(params.base_freq, freq_exponent) * pos;
 
-  // 2D 회전 변환
-  out[idx0] = v0 * cos_theta - v1 * sin_theta;
-  out[idx1] = v1 * cos_theta + v0 * sin_theta;
+    let cos_theta = cos(theta);
+    let sin_theta = sin(theta);
+
+    let idx0 = tensor_offset + pair_idx * 2u;
+    let idx1 = tensor_offset + pair_idx * 2u + 1u;
+
+    let v0 = x[idx0];
+    let v1 = x[idx1];
+
+    out[idx0] = v0 * cos_theta - v1 * sin_theta;
+    out[idx1] = v1 * cos_theta + v0 * sin_theta;
+  }
 }
 `;

@@ -925,27 +925,27 @@ export function flashAttention(
     throw new AMEVAForgeDTypeError("FlashAttention requires float32 tensors");
   }
 
-  const [B, H, N, d] = q.shape;
+  const [B, H, N_q, d] = q.shape;
   const [B_k, H_kv, N_k, d_k] = k.shape;
   const [B_v, H_kv2, N_v, d_v] = v.shape;
 
   if (B !== B_k || B !== B_v) throw new AMEVAForgeShapeError(`Batch mismatch: ${B} vs ${B_k}, ${B_v}`);
   if (H_kv !== H_kv2) throw new AMEVAForgeShapeError(`KV heads mismatch: ${H_kv} vs ${H_kv2}`);
   if (H % H_kv !== 0) throw new AMEVAForgeShapeError(`Query heads ${H} must be divisible by KV heads ${H_kv} (GQA requirement)`);
-  if (N_k !== N || N_v !== N) throw new AMEVAForgeShapeError(`SeqLen mismatch: ${N} vs ${N_k}, ${N_v}`);
+  if (N_k !== N_v) throw new AMEVAForgeShapeError(`Key/Value SeqLen mismatch: ${N_k} vs ${N_v}`);
   if (d !== d_k || d !== d_v) throw new AMEVAForgeShapeError(`HeadDim mismatch: ${d} vs ${d_k}, ${d_v}`);
-  if (d > 128) throw new AMEVAForgeShapeError(`HeadDim ${d} exceeds max supported dimension 128`);
+  if (d > 256) throw new AMEVAForgeShapeError(`HeadDim ${d} exceeds max supported dimension 256`);
 
   const effectiveScale = scale !== undefined ? scale : 1.0 / Math.sqrt(d);
-  const strideQ = N * d;
-  const strideK = N * d;
-  const strideV = N * d;
-  const strideO = N * d;
+  const strideQ = N_q * d;
+  const strideK = N_k * d;
+  const strideV = N_v * d;
+  const strideO = N_q * d;
 
-  const byteLength = B * H * N * d * 4;
+  const byteLength = B * H * N_q * d * 4;
   const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_SRC);
 
-  // Params buffer: B, H, H_kv, N, d, scale(float), is_causal, strideQ, strideK, strideV, strideO, pad
+  // Params buffer: B, H, H_kv, N_q, N_kv, d, scale(float), is_causal, strideQ, strideK, strideV, strideO
   const paramsArray = new ArrayBuffer(48);
   const u32View = new Uint32Array(paramsArray);
   const f32View = new Float32Array(paramsArray);
@@ -953,21 +953,97 @@ export function flashAttention(
   u32View[0] = B;
   u32View[1] = H;
   u32View[2] = H_kv;
-  u32View[3] = N;
-  u32View[4] = d;
-  f32View[5] = effectiveScale;
-  u32View[6] = isCausal ? 1 : 0;
-  u32View[7] = strideQ;
-  u32View[8] = strideK;
-  u32View[9] = strideV;
-  u32View[10] = strideO;
-  u32View[11] = 0;
+  u32View[3] = N_q;
+  u32View[4] = N_k;
+  u32View[5] = d;
+  f32View[6] = effectiveScale;
+  u32View[7] = isCausal ? 1 : 0;
+  u32View[8] = strideQ;
+  u32View[9] = strideK;
+  u32View[10] = strideV;
+  u32View[11] = strideO;
 
   dispatchKernel({
     opKey: 'flash_attention',
     wgslCode: FLASH_ATTENTION_WGSL,
     paramsData: u32View,
     inputBuffers: [q.buffer, k.buffer, v.buffer],
+    outBuffer,
+    dispatchX: N_q,
+    dispatchY: H,
+    dispatchZ: B,
+  });
+
+  return _globalRegistry.register({ buffer: outBuffer, token, shape: [B, H, N_q, d], dtype: "float32", byteLength });
+}
+
+export function rmsNorm(handleX: TensorHandle, handleGamma?: TensorHandle, eps = 1e-5): TensorHandle {
+  const x = _globalRegistry.get(handleX);
+  const shape = x.shape;
+  const dim = shape[shape.length - 1];
+  const numTokens = shape.slice(0, -1).reduce((a, b) => a * b, 1);
+
+  const byteLength = x.byteLength;
+  const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_COPY);
+
+  const paramsArray = new ArrayBuffer(16);
+  const u32View = new Uint32Array(paramsArray);
+  const f32View = new Float32Array(paramsArray);
+  u32View[0] = numTokens;
+  u32View[1] = dim;
+  f32View[2] = eps;
+  u32View[3] = handleGamma !== undefined ? 1 : 0;
+
+  const inputBuffers = [x.buffer];
+  if (handleGamma !== undefined) {
+    inputBuffers.push(_globalRegistry.get(handleGamma).buffer);
+  }
+
+  const { dispatchX, dispatchY } = computeDispatch2D(numTokens);
+  dispatchKernel({
+    opKey: 'rmsnorm',
+    wgslCode: RMSNORM_WGSL,
+    paramsData: u32View,
+    inputBuffers,
+    outBuffer,
+    dispatchX,
+    dispatchY,
+  });
+
+  return _globalRegistry.register({ buffer: outBuffer, token, shape: [...shape], dtype: "float32", byteLength });
+}
+
+export function rope(handleX: TensorHandle, baseFreq = 10000.0, offsetPos = 0): TensorHandle {
+  const x = _globalRegistry.get(handleX);
+  const shape = x.shape;
+  if (shape.length !== 4) {
+    throw new AMEVAForgeShapeError(`RoPE requires 4D tensor [B, H, N, d], got rank ${shape.length}`);
+  }
+  const [B, H, N, d] = shape;
+  if (d % 2 !== 0) {
+    throw new AMEVAForgeShapeError(`RoPE head dimension d must be even, got ${d}`);
+  }
+
+  const byteLength = x.byteLength;
+  const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_COPY);
+
+  const paramsArray = new ArrayBuffer(32);
+  const u32View = new Uint32Array(paramsArray);
+  const f32View = new Float32Array(paramsArray);
+  u32View[0] = B;
+  u32View[1] = H;
+  u32View[2] = N;
+  u32View[3] = d;
+  f32View[4] = baseFreq;
+  u32View[5] = offsetPos;
+  u32View[6] = 0;
+  u32View[7] = 0;
+
+  dispatchKernel({
+    opKey: 'rope',
+    wgslCode: ROPE_WGSL,
+    paramsData: u32View,
+    inputBuffers: [x.buffer],
     outBuffer,
     dispatchX: N,
     dispatchY: H,
@@ -977,14 +1053,74 @@ export function flashAttention(
   return _globalRegistry.register({ buffer: outBuffer, token, shape: [B, H, N, d], dtype: "float32", byteLength });
 }
 
+export function swiglu(handleGate: TensorHandle, handleUp: TensorHandle): TensorHandle {
+  const gate = _globalRegistry.get(handleGate);
+  const up = _globalRegistry.get(handleUp);
+  const numElements = gate.shape.reduce((a, b) => a * b, 1);
+
+  const byteLength = gate.byteLength;
+  const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_COPY);
+
+  const paramsArray = new Uint32Array([numElements, 0, 0, 0]);
+  const { dispatchX, dispatchY } = computeDispatch2D(Math.ceil(numElements / 64));
+
+  dispatchKernel({
+    opKey: 'swiglu',
+    wgslCode: SWIGLU_WGSL,
+    paramsData: paramsArray,
+    inputBuffers: [gate.buffer, up.buffer],
+    outBuffer,
+    dispatchX,
+    dispatchY,
+  });
+
+  return _globalRegistry.register({ buffer: outBuffer, token, shape: [...gate.shape], dtype: "float32", byteLength });
+}
+
+export function unpackQuant(
+  handlePacked: TensorHandle,
+  handleScales: TensorHandle,
+  handleZeros: TensorHandle,
+  bits = 4,
+  groupSize = 128,
+  numElements: number
+): TensorHandle {
+  const packed = _globalRegistry.get(handlePacked);
+  const scales = _globalRegistry.get(handleScales);
+  const zeros = _globalRegistry.get(handleZeros);
+
+  const byteLength = numElements * 4;
+  const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_COPY);
+
+  const paramsArray = new Uint32Array([numElements, groupSize, bits, 0]);
+  const { dispatchX, dispatchY } = computeDispatch2D(Math.ceil(numElements / 64));
+
+  dispatchKernel({
+    opKey: 'unpack_quant',
+    wgslCode: UNPACK_QUANT_WGSL,
+    paramsData: paramsArray,
+    inputBuffers: [packed.buffer, scales.buffer, zeros.buffer],
+    outBuffer,
+    dispatchX,
+    dispatchY,
+  });
+
+  return _globalRegistry.register({ buffer: outBuffer, token, shape: [numElements], dtype: "float32", byteLength });
+}
+
 export const gpuCore = {
   add,
   mul,
   matmul,
   matmulTiled,
   flashAttention,
+  rmsNorm,
+  rope,
+  swiglu,
+  unpackQuant,
   relu,
   relu_backward,
   transpose,
 };
+
 
