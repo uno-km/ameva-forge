@@ -65,20 +65,29 @@ class Context:
         """
         # 역전파 시 사용할 텐서들을 보관할 빈 튜플을 초기화합니다.
         self.saved_tensors = ()
+        self.saved_versions = ()
 
     def save_for_backward(self, *args):
         """
-        [WHAT] 
-        주어진 인자들을 역전파 계산을 위해 저장하는 메서드입니다.
-        
-        [WHY] 
-        역전파 시 그래디언트 도함수를 계산할 때, 순전파에서 쓰였던 특정 입력값들이 요구되기 때문입니다.
-        
-        [HOW] 
-        전달받은 모든 가변 인자(*args)를 튜플 형태로 묶어 self.saved_tensors 속성에 할당합니다.
+        [WHAT] 주어진 인자들과 그 시점의 버전을 역전파 계산을 위해 저장하는 메서드입니다.
         """
-        # 전달받은 인자들을 그대로 튜플로 만들어 인스턴스 변수에 저장합니다.
         self.saved_tensors = args
+        self.saved_versions = tuple(
+            getattr(tensor, "_version", 0)
+            for tensor in args
+        )
+
+    def validate_saved_tensor_versions(self):
+        """
+        [WHAT] 순전파 시 저장된 텐서들이 이후 in-place 수정되었는지 검증합니다.
+        """
+        for tensor, saved_version in zip(self.saved_tensors, self.saved_versions):
+            current_version = getattr(tensor, "_version", 0)
+            if current_version != saved_version:
+                raise RuntimeError(
+                    "Saved tensor was modified in-place after forward execution. "
+                    "Re-run forward before backward."
+                )
 
 
 class Function:

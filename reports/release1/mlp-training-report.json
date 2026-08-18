@@ -1,24 +1,145 @@
 {
-  "timestamp": "2026-08-13T15:05:30.000Z",
-  "status": "NOT RUN",
-  "reason": "WebGPU browser environment not attached during CLI test run (requires Chrome with --enable-unsafe-webgpu and Pyodide runtime)",
-  "fixed_seed": 1337,
-  "dataset": {
-    "inputs": [[0, 0], [0, 1], [1, 0], [1, 1]],
-    "targets": [[0], [1], [1], [0]]
+  "schema_version": 1,
+  "run_id": "6d226cbd-4c2f-4d5c-ba93-d011003fb429",
+  "started_at": "2026-08-18T08:25:18.851Z",
+  "finished_at": "2026-08-18T08:25:30.443Z",
+  "git_commit": "UNKNOWN",
+  "working_tree": "DIRTY",
+  "browser_name": "release-webgpu",
+  "status": "EXECUTED",
+  "classification": "PASS",
+  "console_errors": [],
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+  "adapterInfo": {
+    "vendor": "nvidia",
+    "architecture": "pascal",
+    "device": "",
+    "description": ""
   },
-  "initial_weights": {
-    "W1": [[0.5, -0.2], [0.1, 0.4]],
-    "b1": [0.0, 0.0],
-    "W2": [[0.8], [-0.6]],
-    "b2": [0.0]
-  },
-  "initial_loss": null,
-  "step_losses": [],
-  "final_loss": null,
-  "gradient_norms": [],
-  "weight_checksums": {},
-  "allocation_snapshots": [],
-  "browser_console_errors": [],
-  "webgpu_adapter_info": null
+  "input_device": "gpu",
+  "target_device": "gpu",
+  "parameter_devices": [
+    "gpu",
+    "gpu",
+    "gpu",
+    "gpu"
+  ],
+  "gradient_devices": [
+    "gpu",
+    "gpu",
+    "gpu",
+    "gpu"
+  ],
+  "handles_before": [
+    "tensor_a72b16d4-3f10-43ae-9ec5-e9357dafd2f8",
+    "tensor_ac009a44-6784-461b-8ac9-05ca340e2a11",
+    "tensor_57e2847a-c1b9-47af-bb33-1174cd80c9c4",
+    "tensor_355a757e-54ee-4a95-abb7-fcb948e3fb19"
+  ],
+  "handles_after": [
+    "tensor_a72b16d4-3f10-43ae-9ec5-e9357dafd2f8",
+    "tensor_ac009a44-6784-461b-8ac9-05ca340e2a11",
+    "tensor_57e2847a-c1b9-47af-bb33-1174cd80c9c4",
+    "tensor_355a757e-54ee-4a95-abb7-fcb948e3fb19"
+  ],
+  "fingerprints_before": [
+    {
+      "sum": -5.294996410608292,
+      "weighted_sum": -21.906793415546417,
+      "l2": 2.903593245005149
+    },
+    {
+      "sum": 0,
+      "weighted_sum": 0,
+      "l2": 0
+    },
+    {
+      "sum": 0.9361577332019806,
+      "weighted_sum": 1.3897346258163452,
+      "l2": 1.7870880516421077
+    },
+    {
+      "sum": 0,
+      "weighted_sum": 0,
+      "l2": 0
+    }
+  ],
+  "fingerprints_after": [
+    {
+      "sum": -4.9383450746536255,
+      "weighted_sum": -20.150893300771713,
+      "l2": 2.95122992327093
+    },
+    {
+      "sum": -0.01600794307887554,
+      "weighted_sum": -0.05714267585426569,
+      "l2": 0.011428605063097086
+    },
+    {
+      "sum": 1.4488435983657837,
+      "weighted_sum": 3.3124605417251587,
+      "l2": 1.8611967490581054
+    },
+    {
+      "sum": 0.33299702405929565,
+      "weighted_sum": 0.33299702405929565,
+      "l2": 0.33299702405929565
+    }
+  ],
+  "initial_loss": 0.4411328434944153,
+  "final_loss": 0.14938610792160034,
+  "losses": [
+    0.4411328434944153,
+    0.3337476849555969,
+    0.27636826038360596,
+    0.24491912126541138,
+    0.2268606573343277,
+    0.215704083442688,
+    0.20812788605690002,
+    0.20244666934013367,
+    0.19780854880809784,
+    0.19378173351287842,
+    0.1901443749666214,
+    0.18677972257137299,
+    0.18362361192703247,
+    0.18063858151435852,
+    0.17780092358589172,
+    0.17703968286514282,
+    0.17501172423362732,
+    0.1747068166732788,
+    0.17352400720119476,
+    0.17221477627754211,
+    0.17206093668937683,
+    0.17130304872989655,
+    0.17027562856674194,
+    0.16940267384052277,
+    0.1694948375225067,
+    0.1687977910041809,
+    0.16798171401023865,
+    0.16725751757621765,
+    0.16663095355033875,
+    0.16669023036956787,
+    0.1659429669380188,
+    0.16525402665138245,
+    0.16459867358207703,
+    0.1639597862958908,
+    0.16332469880580902,
+    0.16309058666229248,
+    0.1625274419784546,
+    0.16174529492855072,
+    0.1609647423028946,
+    0.16016821563243866,
+    0.1593427211046219,
+    0.1584780067205429,
+    0.15756525099277496,
+    0.15659648180007935,
+    0.1558273583650589,
+    0.1548181027173996,
+    0.15356607735157013,
+    0.1522534042596817,
+    0.1508641541004181,
+    0.14938610792160034
+  ],
+  "next_output_sum": 2.0340309143066406,
+  "fingerprints_changed": true
 }

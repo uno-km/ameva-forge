@@ -1,11 +1,28 @@
 import { test, expect } from '@playwright/test';
-import * as path from 'path';
 
 test.describe('E2E Training Cycle (F-041)', () => {
   test('initializes WebGPU and runs a complete forward/backward pass', async ({ page }) => {
-    const htmlPath = 'file:///' + path.resolve(__dirname, '../../test.html').replace(/\\/g, '/');
-    await page.goto(htmlPath);
-    page.on('console', msg => console.log('Browser:', msg.text()));
+    await page.goto('/test.html');
+
+    const gpuAvailable = await page.evaluate(async () => {
+      if (typeof navigator === 'undefined' || !('gpu' in navigator)) return false;
+      try {
+        const adapter = await navigator.gpu.requestAdapter();
+        return adapter !== null;
+      } catch {
+        return false;
+      }
+    });
+    const releaseGate = test.info().project.name === 'release-webgpu';
+    if (!gpuAvailable && releaseGate) {
+      throw new Error('RELEASE_GATE_WEBGPU_UNAVAILABLE: A physical WebGPU adapter is required.');
+    }
+    if (!gpuAvailable) {
+      if (process.env.REQUIRE_WEBGPU === '1') {
+        throw new Error('REQUIRE_WEBGPU=1 but WebGPU adapter is unavailable');
+      }
+      test.skip(!gpuAvailable, 'WebGPU adapter is unavailable outside release-webgpu project');
+    }
 
     // Wait for the script to load
     await page.waitForFunction(() => (window as any).testReady === true);
@@ -13,6 +30,7 @@ test.describe('E2E Training Cycle (F-041)', () => {
     const result = await page.evaluate(async () => {
       try {
         const forge = (window as any).forge;
+        if (!forge) throw new Error('window.forge is not defined');
         // 1. Initialize
         await forge.initWebGPU();
 
@@ -50,7 +68,7 @@ test.describe('E2E Training Cycle (F-041)', () => {
           data: Array.from(outData)
         };
       } catch (e: any) {
-        return { success: false, error: e.message };
+        return { success: false, error: e ? (e.stack || e.message) : String(e) };
       }
     });
 

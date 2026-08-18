@@ -26,7 +26,7 @@ export declare const KERNEL_REGISTRY: ReadonlyMap<string, string>;
  * WHY: 디바이스 유실(Device Lost) 이벤트가 발생하거나 시스템 강제 리셋 시 남은 자원의 메모리 누수를 방지하기 위해 존재합니다.
  * HOW: 텐서 레지스트리, 쿼터 매니저, 파이프라인 캐시를 지우고, 대기 중인 스테이징 버퍼들도 순회하여 언맵(unmap) 및 파괴(destroy)합니다.
  */
-export declare function resetRuntimeMemory(): void;
+export declare function resetRuntimeMemory(reason?: string): void;
 /**
  * WHAT: WebGPU 하위 시스템을 초기화하고 메모리 한도 설정 및 셰이더 컴파일을 수행하는 비동기 진입점 함수입니다.
  * WHY: 텐서 연산을 수행하기 전에 GPU 디바이스를 획득하고 하드웨어 제약을 파악하며 파이프라인을 준비하기 위해 필수적입니다.
@@ -119,3 +119,11 @@ export declare function transpose(handle: TensorHandle): TensorHandle;
  * HOW: 원본 입력 텐서(x)와 위층에서 전달된 그래디언트 텐서(grad)를 받아, x가 0보다 큰 곳은 grad를, 아니면 0을 출력 버퍼에 씁니다.
  */
 export declare function relu_backward(handleX: TensorHandle, handleGrad: TensorHandle): TensorHandle;
+export declare const gpuCore: {
+    add: typeof add;
+    mul: typeof mul;
+    matmul: typeof matmul;
+    relu: typeof relu;
+    relu_backward: typeof relu_backward;
+    transpose: typeof transpose;
+};

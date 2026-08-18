@@ -17,6 +17,16 @@
 import { TensorRegistry } from "./tensorRegistry";
 import { TensorHandle, DType } from "../types";
 import { AllocationToken } from "../webgpu/quota";
+export type ForgeRuntimeConfig = {
+    workloadBudgetElements?: number;
+    maxOpsPerSubmit?: number;
+    maxShapeDim?: number;
+    maxElements?: number;
+    maxInstructions?: number;
+    allowNonFinite?: boolean;
+};
+export declare function configureRuntime(config: ForgeRuntimeConfig): void;
+export declare function getRuntimeConfig(): Required<ForgeRuntimeConfig>;
 export interface PendingTensorRecord {
     handle: TensorHandle;
     buffer: GPUBuffer;

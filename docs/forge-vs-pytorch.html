@@ -1,99 +1,122 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Forge vs PyTorch vs TensorFlow</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Comparison between AMEVA-Forge and PyTorch.">
+  <title>Forge vs PyTorch — AMEVA-Forge</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="./dist/index.js"></script>
 </head>
 <body>
-    <header>
-        <h1>AMEVA-Forge Documentation</h1>
-    </header>
-    
-    <div class="container">
-        <nav class="sidebar">
-            <h3>Navigation</h3>
-            <ul>
-                <li><a href="index.html">Home</a></li>
-                <li><a href="what-is-forge.html">What is Forge?</a></li>
-                <li><a href="forge-vs-pytorch.html">Forge vs PyTorch</a></li>
-                <li><a href="playgrounds/benchmark.html">Benchmark Playground</a></li>
-                <li><a href="playgrounds/mnist.html">MNIST Playground</a></li>
-            </ul>
-        </nav>
-        
-        <main class="content">
-            <h2>Comparison with Other Frameworks</h2>
-            <p>How does AMEVA-Forge compare to existing titans of the industry like PyTorch and TensorFlow?</p>
-            
-            <table>
-                <thead>
-                    <tr>
-                        <th>Feature</th>
-                        <th>AMEVA-Forge</th>
-                        <th>PyTorch</th>
-                        <th>TensorFlow.js</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td><strong>Primary Environment</strong></td>
-                        <td>Browser (Pyodide) & Native Python</td>
-                        <td>Native Python (Server/Desktop)</td>
-                        <td>Browser (JavaScript)</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Hardware Acceleration</strong></td>
-                        <td>WebGPU</td>
-                        <td>CUDA, ROCm, MPS</td>
-                        <td>WebGL, WebGPU</td>
-                    </tr>
-                    <tr>
-                        <td><strong>API Language</strong></td>
-                        <td>Pure Python</td>
-                        <td>Pure Python</td>
-                        <td>JavaScript / TypeScript</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Training Support</strong></td>
-                        <td>Basic (2-Layer MLP, SGD, MSELoss)</td>
-                        <td>Full</td>
-                        <td>Limited (mostly inference focused)</td>
-                    </tr>
-                    <tr>
-                        <td><strong>Zero-Server Setup</strong></td>
-                        <td>Yes</td>
-                        <td>No (requires local setup)</td>
-                        <td>Yes</td>
-                    </tr>
-                </tbody>
-            </table>
-            
-            <h3>The PyTorch Compatibility</h3>
-            <p>If you're migrating from PyTorch, AMEVA-Forge adopts PyTorch-like naming conventions for basic operations:</p>
-            
-            <h4>PyTorch:</h4>
-            <pre><code>import torch
-import torch.nn as nn
-import torch.optim as optim
-
-model = nn.Sequential(nn.Linear(2, 4), nn.ReLU())
-opt = optim.Adam(model.parameters(), lr=0.01)</code></pre>
-
-            <h4>AMEVA-Forge:</h4>
-            <pre><code>import forge as fg
-import forge.nn as nn
-import forge.optim as optim
-
-model = nn.Sequential(nn.Linear(2, 4), nn.ReLU())
-opt = optim.SGD(model.parameters(), lr=0.01)</code></pre>
-            
-        </main>
+  <header class="site-header">
+    <a href="index.html" class="brand-area">
+      <div class="brand-logo">A</div>
+      <span class="brand-title">AMEVA-Forge</span>
+      <span class="brand-badge">v1.0.0</span>
+    </a>
+    <div class="header-actions">
+      <a href="demo.html" class="cta-button">⚡ Try Live Studio</a>
+      <a href="https://github.com/uno-km/AMEVA-Tensor" target="_blank" class="cta-button" style="background-color: var(--bg-tertiary);">GitHub</a>
     </div>
-    
-    <footer>
-        &copy; 2026 AMEVA AI. All rights reserved.
-    </footer>
+  </header>
+
+  <div class="container">
+    <nav class="sidebar">
+      <div class="nav-group">
+        <h3>Playground</h3>
+        <ul>
+          <li><a href="demo.html">⚡ Live WebGPU Studio</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <h3>Documentation</h3>
+        <ul>
+          <li><a href="index.html">🏠 Home</a></li>
+          <li><a href="installation.html">📦 Installation</a></li>
+          <li><a href="quickstart.html">🚀 Quickstart Guide</a></li>
+          <li><a href="api-reference.html">📖 API Reference</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <h3>Concepts & Architecture</h3>
+        <ul>
+          <li><a href="what-is-forge.html">🎯 What is Forge?</a></li>
+          <li><a href="forge-vs-pytorch.html" class="active">⚖️ Forge vs PyTorch</a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <main class="content">
+      <h1>AMEVA-Forge vs PyTorch Comparison</h1>
+      <p>AMEVA-Forge is designed with full PyTorch API compatibility in mind, but targets browser-first WebGPU execution rather than server-side CUDA.</p>
+
+      <h2>Feature Comparison Table</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Dimension</th>
+            <th>PyTorch (Standard)</th>
+            <th>AMEVA-Forge (Release 1.0)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Runtime Target</strong></td>
+            <td>Native OS (Linux/Windows/macOS), CUDA, ROCm</td>
+            <td>Web Browsers (WASM + WebGPU), CPython, Node.js</td>
+          </tr>
+          <tr>
+            <td><strong>Installation Footprint</strong></td>
+            <td>~2-5 GB (CUDA binaries + torch wheel)</td>
+            <td>&lt; 500 KB (WASM + WGSL shaders)</td>
+          </tr>
+          <tr>
+            <td><strong>Installation Speed</strong></td>
+            <td>Minutes (requires pip, driver configuration)</td>
+            <td>Instantaneous (Zero-install web page)</td>
+          </tr>
+          <tr>
+            <td><strong>API Syntax</strong></td>
+            <td><code>import torch</code>, <code>torch.nn</code>, <code>torch.optim</code></td>
+            <td><code>import forge as torch</code>, <code>torch.nn</code>, <code>torch.optim</code></td>
+          </tr>
+          <tr>
+            <td><strong>Autograd Engine</strong></td>
+            <td>C++ ATen Tape Autograd</td>
+            <td>Dynamic Python + WebGPU Graph Autograd</td>
+          </tr>
+          <tr>
+            <td><strong>Memory Management</strong></td>
+            <td>CUDA Caching Allocator</td>
+            <td>Staging & Uniform Pool + Weakref Finalizers</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Syntax Parity Example</h2>
+      <pre><code># ── PyTorch Native Code ──
+import torch
+import torch.nn as nn
+
+linear = nn.Linear(4, 2).cuda()
+out = linear(torch.randn(1, 4).cuda())
+loss = out.sum()
+loss.backward()
+
+# ── AMEVA-Forge Code (100% Identical!) ──
+import forge as torch
+import forge.nn as nn
+
+linear = nn.Linear(4, 2).to('gpu')
+out = linear(torch.randn((1, 4), device='gpu'))
+loss = out.sum()
+loss.backward()</code></pre>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    &copy; 2026 AMEVA-Forge Team. Released under Apache-2.0 License.
+  </footer>
 </body>
 </html>

@@ -62,6 +62,7 @@ export function assertStaticShaderSourceOnly(source: string): void {
  */
 let ALLOWED_KERNEL_NAMES = new Set([
   "matmul",
+  "batched_matmul",
   "relu",
   "relu_backward",
   "add",
@@ -81,16 +82,21 @@ let ALLOWED_KERNEL_NAMES = new Set([
   "sum",
   "max",
   "sum_axis",
+  "max_axis",
+  "max_axis_backward",
   "axpy",
   "pad",
   "gather",
   "scatter",
+  "cat",
+  "where",
   "dropout",
   "maxpool2d",
   "avgpool2d",
   "im2col",
   "col2im",
   "permute",
+  "matmul_bias_relu",
 ]);
 
 /**
@@ -99,7 +105,10 @@ let ALLOWED_KERNEL_NAMES = new Set([
  * HOW: 제공된 Iterable 인터페이스(예: 배열)를 받아 새로운 Set 객체를 생성하고 `ALLOWED_KERNEL_NAMES` 변수를 갱신합니다.
  */
 export function registerKernelNames(names: Iterable<string>): void {
-  ALLOWED_KERNEL_NAMES = new Set(names);
+  for (const name of names) {
+    assertSafeShaderIdentifier(name);
+    ALLOWED_KERNEL_NAMES.add(name);
+  }
 }
 
 /**

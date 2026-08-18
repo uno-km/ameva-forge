@@ -39,12 +39,13 @@ from .errors import (
     AMEVAForgeDeviceError,
     AMEVAForgeShapeError,
     AMEVAForgeDisposedError,
+    AMEVAForgeUnsupportedOperationError,
 )
 
 # WHAT: 자동 미분(autograd) 구현을 위한 베이스 클래스들을 임포트합니다.
 # WHY: 각 수학 연산이 순전파와 역전파를 지원하는 연산 노드로 동작하게 만들기 위함입니다.
 # HOW: 모든 연산 클래스는 Function을 상속받고 forward/backward에서 Context(ctx)를 사용합니다.
-from .autograd import Function, Context
+from .autograd import Function, Context, no_grad
 
 # ─── Debug Mode ──────────────────────────────────────────────────────────────
 # VUL-003/004: NumPy/PyTorch 기본 동작 유지, debug mode에서만 경고 활성화
@@ -302,8 +303,14 @@ class AddFunction(Function):
         ctx.b_shape = b.shape
             
         if _should_use_gpu(a, b):
+            a_numel = 1
+            for s in a.shape:
+                a_numel *= s
+            b_numel = 1
+            for s in b.shape:
+                b_numel *= s
             return Tensor(shape=out_shape, dtype="float32", device="gpu",
-                          op='add', parents=(a, b))
+                          op='add', parents=(a, b), op_params=[a_numel, b_numel])
         else:
             data_a = _require_cpu_data(a, "a")
             data_b = _require_cpu_data(b, "b")
@@ -338,8 +345,14 @@ class MulFunction(Function):
         ctx.b_shape = b.shape
             
         if _should_use_gpu(a, b):
+            a_numel = 1
+            for s in a.shape:
+                a_numel *= s
+            b_numel = 1
+            for s in b.shape:
+                b_numel *= s
             return Tensor(shape=out_shape, dtype="float32", device="gpu",
-                          op='mul', parents=(a, b))
+                          op='mul', parents=(a, b), op_params=[a_numel, b_numel])
         else:
             data_a = _require_cpu_data(a, "a")
             data_b = _require_cpu_data(b, "b")
@@ -519,7 +532,13 @@ class SubFunction(Function):
         ctx.a_shape = a.shape
         ctx.b_shape = b.shape
         if _should_use_gpu(a, b):
-            return Tensor(shape=out_shape, dtype='float32', device='gpu', op='sub', parents=(a, b))
+            a_numel = 1
+            for s in a.shape:
+                a_numel *= s
+            b_numel = 1
+            for s in b.shape:
+                b_numel *= s
+            return Tensor(shape=out_shape, dtype='float32', device='gpu', op='sub', parents=(a, b), op_params=[a_numel, b_numel])
         else:
             return Tensor(shape=out_shape, dtype='float32', device='cpu', data=_require_cpu_data(a, "a") - _require_cpu_data(b, "b"))
     
@@ -770,11 +789,12 @@ class MeanFunction(Function):
         ctx.numel = n
         
         if _should_use_gpu(x):
-            # WHAT: GPU에서는 별도의 mean 커널 없이 기존 sum과 div를 조합하여 처리합니다.
-            # WHY: 중복된 커널 구현을 피하고 기존 최적화된 연산들을 재사용하기 위함입니다.
-            # HOW: sum_op 결과를 원소 수 n 텐서로 나눕니다.
-            s = sum_op(x)
-            return div(s, tensor(np.array([float(n)], dtype=np.float32), device=x.device))
+            # WHAT: GPU에서는 no_grad() 격리를 통해 임시 Autograd 노드 생성을 차단하고 sum과 div를 조합합니다.
+            # WHY: 중복된 커널 구현을 피하고 Autograd 컨텍스트 오염을 원천 차단하기 위함입니다.
+            with no_grad():
+                s = sum_op(x)
+                res = div(s, tensor(np.array([float(n)], dtype=np.float32), device=x.device))
+            return res
         else:
             return Tensor(shape=(), dtype='float32', device='cpu',
                          data=np.array(np.mean(_require_cpu_data(x, 'x')), dtype=np.float32))
@@ -972,10 +992,15 @@ class SumAxisFunction(Function):
     @staticmethod
     def forward(ctx, x, axis):
         ctx.save_for_backward(x)
-        # WHAT: 대상 축과 원래 형태를 저장합니다.
-        # WHY: 역전파 시 줄어든 차원을 다시 복구(unsqueeze)하여 기울기를 흩뿌려주기 위함입니다.
-        # HOW: 컨텍스트 객체에 할당합니다.
-        ctx.axis = axis
+        # WHAT: 대상 축과 원래 형태를 저장합니다. 음수 축(-1 등)은 양수 랭크 인덱스로 정규화합니다.
+        # WHY: 역전파 시 줄어든 차원을 다시 복구(unsqueeze)하고 VRAM 스트라이드를 정확히 계산하기 위함입니다.
+        # HOW: norm_axis = axis if axis >= 0 else axis + rank
+        rank = len(x.shape)
+        norm_axis = axis if axis >= 0 else axis + rank
+        if norm_axis < 0 or norm_axis >= rank:
+            raise AMEVAForgeShapeError(f"Invalid axis {axis} for tensor with rank {rank}")
+
+        ctx.axis = norm_axis
         ctx.input_shape = x.shape
         
         if x.device == 'gpu':
@@ -983,24 +1008,24 @@ class SumAxisFunction(Function):
             # WHY: 축소된 차원이 제거된 새로운 shape 튜플을 만들기 위함입니다.
             # HOW: 리스트 변환 후 해당 인덱스를 지우고 다시 튜플로 만듭니다.
             new_shape = list(x.shape)
-            del new_shape[axis]
+            del new_shape[norm_axis]
             new_shape = tuple(new_shape) if new_shape else ()
             
             # WHAT: GPU 커널이 사용할 다차원 합산 파라미터(stride)를 계산합니다.
             # WHY: 1차원 선형 배열 형태인 VRAM 데이터를 특정 차원 간격으로 순회하며 합쳐야 하기 때문입니다.
             # HOW: 축 바깥쪽 크기(outer_size)와 축 안쪽 간격(inner_stride)을 구하여 op_params로 넘깁니다.
             outer_size = 1
-            for i in range(axis):
+            for i in range(norm_axis):
                 outer_size *= x.shape[i]
-            reduction_size = x.shape[axis]
+            reduction_size = x.shape[norm_axis]
             inner_stride = 1
-            for i in range(axis + 1, len(x.shape)):
+            for i in range(norm_axis + 1, rank):
                 inner_stride *= x.shape[i]
                 
             return Tensor(shape=new_shape, dtype='float32', device='gpu',
-                         op='sum_axis', parents=(x,), op_params=[reduction_size, inner_stride])
+                         op='sum_axis', parents=(x,), op_params=[outer_size, reduction_size, inner_stride])
         else:
-            data = np.sum(_require_cpu_data(x, 'x'), axis=axis)
+            data = np.sum(_require_cpu_data(x, 'x'), axis=norm_axis)
             return Tensor(shape=data.shape, dtype='float32', device='cpu', data=data)
     
     @staticmethod
@@ -1219,30 +1244,67 @@ class MaxAxisFunction(Function):
     @staticmethod
     def forward(ctx, x, axis):
         ctx.save_for_backward(x)
-        ctx.axis = axis
-        data = _require_cpu_data(x, "x")
-        # WHAT: 주어진 축을 따라 최댓값을 구합니다.
-        # WHY: 역전파 시 마스킹 비교에 사용하기 위함입니다.
-        # HOW: np.max를 적용하고 컨텍스트에 기록합니다.
-        m = np.max(data, axis=axis)
-        ctx.max_val = m
-        return Tensor(shape=m.shape, dtype="float32", device="cpu", data=m)
+        rank = len(x.shape)
+        norm_axis = axis if axis >= 0 else axis + rank
+        if norm_axis < 0 or norm_axis >= rank:
+            raise AMEVAForgeShapeError(f"Invalid axis {axis} for tensor with rank {rank}")
+
+        ctx.axis = norm_axis
+        ctx.input_shape = x.shape
+        
+        if x.device == 'gpu':
+            new_shape = list(x.shape)
+            del new_shape[norm_axis]
+            new_shape = tuple(new_shape) if new_shape else ()
+            
+            outer_size = 1
+            for i in range(norm_axis):
+                outer_size *= x.shape[i]
+            reduction_size = x.shape[norm_axis]
+            inner_stride = 1
+            for i in range(norm_axis + 1, rank):
+                inner_stride *= x.shape[i]
+                
+            return Tensor(shape=new_shape, dtype='float32', device='gpu',
+                         op='max_axis', parents=(x,), op_params=[outer_size, reduction_size, inner_stride])
+        else:
+            data = _require_cpu_data(x, "x")
+            m = np.max(data, axis=norm_axis)
+            ctx.max_val = m
+            return Tensor(shape=m.shape, dtype="float32", device="cpu", data=m)
 
     @staticmethod
     def backward(ctx, grad_output):
         x, = ctx.saved_tensors
+        axis = ctx.axis
+        rank = len(x.shape)
+        
+        if x.device == "gpu":
+            outer_size = 1
+            for i in range(axis):
+                outer_size *= x.shape[i]
+            reduction_size = x.shape[axis]
+            inner_stride = 1
+            for i in range(axis + 1, rank):
+                inner_stride *= x.shape[i]
+                
+            return (
+                Tensor(
+                    shape=x.shape,
+                    dtype="float32",
+                    device="gpu",
+                    op="max_axis_backward",
+                    parents=(x, grad_output),
+                    op_params=[outer_size, reduction_size, inner_stride],
+                ),
+            )
+        
         data = _require_cpu_data(x, "x")
         grad = _require_cpu_data(grad_output, "grad")
         
-        # WHAT: 브로드캐스팅을 위해 차원을 하나 늘립니다.
-        # WHY: 축소되었던 차원(axis)을 다시 복원하여 원본 텐서와 비교 연산을 하기 위함입니다.
-        # HOW: np.expand_dims를 사용합니다.
-        m_exp = np.expand_dims(ctx.max_val, axis=ctx.axis)
+        m_exp = np.expand_dims(ctx.max_val, axis=ctx.axis) if hasattr(ctx, 'max_val') else np.expand_dims(np.max(data, axis=ctx.axis), axis=ctx.axis)
         grad_exp = np.expand_dims(grad, axis=ctx.axis)
         
-        # WHAT: 최댓값이 있던 위치의 마스크를 생성하고 동일 값 처리(평균화)를 합니다.
-        # WHY: 중복된 최대값에 대해 기울기가 올바르게 분산되도록 하기 위함입니다.
-        # HOW: np.sum으로 개수를 세고, np.divide로 나눕니다(0으로 나누는 것 방지).
         mask = (data == m_exp).astype(np.float32)
         sum_mask = np.sum(mask, axis=ctx.axis, keepdims=True)
         mask = np.divide(mask, sum_mask, out=np.zeros_like(mask), where=sum_mask != 0)
@@ -1298,14 +1360,12 @@ def var(x: Tensor, axis=None, unbiased=True) -> Tensor:
 class SqrtFunction(Function):
     @staticmethod
     def forward(ctx, x):
-        ctx.save_for_backward(x)
         if _should_use_gpu(x):
-            # WHAT: GPU 에러 처리입니다.
-            # WHY: 아직 GPU에서 제곱근 커널이 구현되지 않았기 때문입니다.
-            # HOW: AMEVAForgeDeviceError를 발생시킵니다.
-            from .errors import AMEVAForgeDeviceError
-            raise AMEVAForgeDeviceError("GPU sqrt (pow) kernel not registered.")
+            # GPU sqrt via mathematical identity: exp(0.5 * log(x))
+            half = full(x.shape, 0.5, device='gpu')
+            return exp_op(mul(log_op(x), half))
         else:
+            ctx.save_for_backward(x)
             data = _require_cpu_data(x, "x")
             res = np.sqrt(data)
             return Tensor(shape=x.shape, dtype="float32", device="cpu", data=res)
@@ -1313,9 +1373,6 @@ class SqrtFunction(Function):
     @staticmethod
     def backward(ctx, grad_output):
         x, = ctx.saved_tensors
-        # WHAT: 제곱근의 미분값 계산입니다.
-        # WHY: f(x) = sqrt(x) 이면 df/dx = 1 / (2 * sqrt(x)) 이기 때문입니다.
-        # HOW: 값이 2인 텐서를 만들어 분모를 구성하고 나눕니다.
         two = full(x.shape, 2.0, device=x.device)
         return (div(grad_output, mul(two, sqrt(x))),)
 
@@ -1370,13 +1427,12 @@ class CatFunction(Function):
         a, b = ctx.saved_tensors
         dim = ctx.dim
         
-        if grad_output.device == 'cpu':
-            g = _require_cpu_data(grad_output, 'grad_output')
-        else:
-            # WHAT: 슬라이싱을 위해 임시로 CPU로 폴백(Fallback)하는 처리입니다.
-            # WHY: 아직 GPU 상의 슬라이싱/cat 백워드 커널이 최적화되지 않았기 때문입니다.
-            # HOW: numpy()를 호출해 데이터를 내립니다.
-            g = grad_output.numpy()
+        if grad_output.device == 'gpu':
+            raise AMEVAForgeDeviceError(
+                "Cat backward on GPU tensors is not supported in Release 1. "
+                "Execute model on CPU or transfer tensors to CPU before backward."
+            )
+        g = _require_cpu_data(grad_output, 'grad_output')
             
         # WHAT: 병합되었던 차원을 원래 a와 b의 크기로 쪼개기 위한 슬라이스 객체 생성입니다.
         # WHY: 역전파 시 각 입력 크기만큼 기울기를 나눠 주어야 하기 때문입니다.
@@ -1395,11 +1451,8 @@ class CatFunction(Function):
         ga = np.ascontiguousarray(ga)
         gb = np.ascontiguousarray(gb)
         
-        if grad_output.device == 'cpu':
-            return (Tensor(shape=a.shape, dtype="float32", device="cpu", data=ga),
-                    Tensor(shape=b.shape, dtype="float32", device="cpu", data=gb))
-        else:
-            return (tensor(ga, device="gpu"), tensor(gb, device="gpu"))
+        return (Tensor(shape=a.shape, dtype="float32", device="cpu", data=ga),
+                Tensor(shape=b.shape, dtype="float32", device="cpu", data=gb))
 
 # WHAT: 리스트에 담긴 텐서들을 순차적으로 병합(Cat)하는 편의 함수입니다.
 # WHY: 두 개뿐만 아니라 N개의 텐서를 쉽게 합치기 위함입니다.
@@ -1414,7 +1467,7 @@ def cat(tensors: list, dim: int = 0) -> Tensor:
         res = CatFunction.apply(res, t, dim)
     return res
 
-# WHAT: 조건 텐서에 따라 참이면 x, 거짓이면 y 요소를 선택하는 연산입니다.
+# WHAT: 조건 텐서에 따라 참이면 x, 거짓이면 y 요소를 선택하는 연산.
 # WHY: 마스킹된 데이터 추출이나 조건부 활성화 함수(LeakyReLU 등)를 간결하게 구현하기 위함입니다.
 # HOW: 순전파는 np.where를, 역전파도 where를 재사용해 조건에 맞게 기울기를 분배합니다.
 class WhereFunction(Function):
@@ -1556,11 +1609,11 @@ class GatherFunction(Function):
             out_strides = get_strides(index.shape)
             rank = len(x.shape)
             
-            # WHAT: GPU 커널이 사용할 파라미터 리스트를 고정된 포맷(8차원 패딩)으로 만듭니다.
-            # WHY: C++ 기반 커널이 일관된 구조로 데이터를 파싱할 수 있게 하기 위함입니다.
-            # HOW: 리스트 안에 stride와 원래 형태 정보를 이어 붙입니다.
+            numel = 1
+            for d in index.shape:
+                numel *= d
             op_params = [
-                0, dim, rank, 0,
+                numel, dim, rank, 0,
                 *(x_strides + [0]*(8-rank)),
                 *(out_strides + [0]*(8-rank)),
                 *(list(x.shape) + [0]*(8-rank))
@@ -1575,9 +1628,12 @@ class GatherFunction(Function):
     @staticmethod
     def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, None]:
         x, index = ctx.saved_tensors
-        # WHAT: 수집(Gather)의 역전파 연산입니다.
-        # WHY: 추출해온 위치에 미분값을 정확히 되돌려놓아야 하기 때문입니다.
-        # HOW: scatter 연산을 이용해 x와 같은 크기의 0 텐서에 grad_output을 뿌립니다.
+        if x.device == 'gpu':
+            raise AMEVAForgeUnsupportedOperationError(
+                "GPU gather backward requires atomic scatter_add for duplicate index correctness. "
+                "Release 1 supports GPU gather forward, but duplicate-safe GPU backward is planned for Release 2. "
+                "Transfer tensor to CPU before backward if gather gradient calculation is required."
+            )
         grad_x = scatter(zeros_like(x), ctx.dim, index, grad_output)
         return (grad_x, None)
 
@@ -1639,8 +1695,12 @@ class ScatterFunction(Function):
 
 # WHAT: 산포(Scatter) 편의 함수입니다.
 # WHY: 외부에서 텐서의 특정 위치를 쉽게 업데이트하기 위함입니다.
-# HOW: ScatterFunction.apply를 호출합니다.
-def scatter(x: Tensor, dim: int, index: Tensor, src: Tensor) -> Tensor:
+# HOW: ScatterFunction.apply를 호출합니다. Release 1 GPU는 assign semantics를 기본으로 지원합니다.
+def scatter(x: Tensor, dim: int, index: Tensor, src: Tensor, reduce: str = "assign") -> Tensor:
+    if x.device == "gpu" and reduce != "assign":
+        raise AMEVAForgeUnsupportedOperationError(
+            "GPU scatter with reduction is not supported in Release 1. Use assign semantics."
+        )
     return ScatterFunction.apply(x, dim, index, src)
 
 # WHAT: 텐서 슬라이싱(Slicing) 연산을 지원하는 클래스입니다.
@@ -1732,6 +1792,12 @@ class Conv2dFunction(Function):
         # HOW: 일반적인 Conv2D 출력 크기 공식을 적용합니다.
         H_out = (H + 2 * padding - K_h) // stride + 1
         W_out = (W + 2 * padding - K_w) // stride + 1
+        
+        if x.device == "gpu" and (x.requires_grad or weight.requires_grad or (bias is not None and bias.requires_grad)):
+            raise AMEVAForgeUnsupportedOperationError(
+                "GPU Conv2d backward is not supported in Release 1. "
+                "Use CPU Conv2d training or mark tensors requires_grad=False for GPU inference."
+            )
         
         if _should_use_gpu(x, weight):
             # WHAT: GPU 경로에서 이미지를 열(Column)로 전개하는 im2col 연산을 수행합니다.
@@ -1934,6 +2000,12 @@ class MaxPool2dFunction(Function):
         out_h = (in_h + 2 * ctx.pH - ctx.kH) // ctx.sH + 1
         out_w = (in_w + 2 * ctx.pW - ctx.kW) // ctx.sW + 1
         
+        if x.device == 'gpu' and x.requires_grad:
+            raise AMEVAForgeUnsupportedOperationError(
+                "GPU MaxPool2d backward is not supported in Release 1. "
+                "GPU pooling is inference-only in this release."
+            )
+        
         if x.device == 'gpu':
             # WHAT: GPU 기반 풀링 처리입니다.
             # WHY: 풀링 연산을 커널로 위임해 속도를 높이기 위함입니다.
@@ -1955,12 +2027,14 @@ class MaxPool2dFunction(Function):
             
     @staticmethod
     def backward(ctx, grad_output: Tensor) -> Tuple[Tensor]:
+        if grad_output.device == 'gpu':
+            raise AMEVAForgeDeviceError(
+                "MaxPool2d backward is not supported on GPU tensors in the synchronous autograd engine in Release 1. "
+                "Execute model on CPU or use Release 1 GPU-supported operators."
+            )
         x, = ctx.saved_tensors
-        # WHAT: GPU 텐서이더라도 현재 백엔드는 CPU로 넘겨 계산합니다.
-        # WHY: GPU 전용 풀링 역전파 커널이 미구현 상태이므로, Fallback 전략을 쓰기 때문입니다.
-        # HOW: numpy() 코루틴이 아닌 일반 메서드를 호출해 CPU 메모리로 복사합니다.
-        grad_out_np = grad_output.numpy()
-        x_np = x.numpy()
+        grad_out_np = _require_cpu_data(grad_output, 'grad_output')
+        x_np = _require_cpu_data(x, 'x')
         B, C, in_h, in_w = x_np.shape
         out_h = (in_h + 2 * ctx.pH - ctx.kH) // ctx.sH + 1
         out_w = (in_w + 2 * ctx.pW - ctx.kW) // ctx.sW + 1
@@ -2022,6 +2096,12 @@ class AvgPool2dFunction(Function):
         out_h = (in_h + 2 * ctx.pH - ctx.kH) // ctx.sH + 1
         out_w = (in_w + 2 * ctx.pW - ctx.kW) // ctx.sW + 1
         
+        if x.device == 'gpu' and x.requires_grad:
+            raise AMEVAForgeUnsupportedOperationError(
+                "GPU AvgPool2d backward is not supported in Release 1. "
+                "GPU pooling is inference-only in this release."
+            )
+        
         if x.device == 'gpu':
             op_params = [B, C, in_h, in_w, out_h, out_w, ctx.kH, ctx.kW, ctx.sH, ctx.sW, ctx.pH, ctx.pW]
             return Tensor(shape=(B, C, out_h, out_w), dtype='float32', device='gpu', op='avgpool2d', parents=(x,), op_params=op_params)
@@ -2043,12 +2123,14 @@ class AvgPool2dFunction(Function):
             
     @staticmethod
     def backward(ctx, grad_output: Tensor) -> Tuple[Tensor]:
+        if grad_output.device == 'gpu':
+            raise AMEVAForgeDeviceError(
+                "AvgPool2d backward is not supported on GPU tensors in the synchronous autograd engine in Release 1. "
+                "Execute model on CPU or use Release 1 GPU-supported operators."
+            )
         x, = ctx.saved_tensors
-        # WHAT: 평균 풀링의 CPU 기반 역전파입니다.
-        # WHY: 평균 풀링은 미분 시 각 출력에 대한 그래디언트를 원래 윈도우의 모든 픽셀에 동일하게(1/면적 비율로) 나눠주어야 하기 때문입니다.
-        # HOW: grad_out_np를 넓이로 나누어 윈도우 크기로 복사해 누적 더하기를 수행합니다.
-        grad_out_np = grad_output.numpy()
-        x_np = x.numpy()
+        grad_out_np = _require_cpu_data(grad_output, 'grad_output')
+        x_np = _require_cpu_data(x, 'x')
         B, C, in_h, in_w = x_np.shape
         out_h = (in_h + 2 * ctx.pH - ctx.kH) // ctx.sH + 1
         out_w = (in_w + 2 * ctx.pW - ctx.kW) // ctx.sW + 1
@@ -2097,10 +2179,8 @@ class DropoutFunction(Function):
             
         # WHAT: 평가(Evaluation) 모드이거나 확률이 0인 경우의 처리입니다.
         # WHY: 추론 시에는 드롭아웃을 적용하지 않고 그대로 통과시켜야 하기 때문입니다.
-        # HOW: 마스크를 None으로 설정하고 원본을 리턴합니다.
+        # HOW: 마스크를 None으로 설정하고 x의 데이터를 복제하거나 그대로 리턴합니다.
         if not training or p == 0.0:
-            ctx.save_for_backward(x)
-            ctx.mask = None
             return x
         
         ctx.p = p
@@ -2150,8 +2230,12 @@ class DropoutFunction(Function):
 
 # WHAT: 드롭아웃(Dropout) 편의 함수입니다.
 # WHY: 모듈이나 함수형 API에서 쉽게 사용할 수 있도록 하기 위함입니다.
-# HOW: DropoutFunction.apply를 호출합니다.
+# HOW: training=False 이거나 p=0.0 일 때는 Function.apply를 거치지 않고 순수 x를 반환하여 이전 autograd 그래프를 안전하게 보존합니다.
 def dropout(x: Tensor, p: float = 0.5, training: bool = True) -> Tensor:
+    if not (0.0 <= p < 1.0):
+        raise ValueError(f"Dropout probability p must be in [0, 1), but got {p}")
+    if not training or p == 0.0:
+        return x
     return DropoutFunction.apply(x, p, training)
 
 # WHAT: 임베딩(Embedding) 룩업을 수행하는 클래스입니다.
@@ -2160,6 +2244,11 @@ def dropout(x: Tensor, p: float = 0.5, training: bool = True) -> Tensor:
 class EmbeddingFunction(Function):
     @staticmethod
     def forward(ctx, weight: Tensor, index: Tensor) -> Tensor:
+        if weight.device == "gpu" or index.device == "gpu":
+            raise AMEVAForgeUnsupportedOperationError(
+                "GPU Embedding is not supported in Release 1. "
+                "Embedding requires GPU scatter-add or atomic accumulation for correct backward."
+            )
         ctx.save_for_backward(weight, index)
         data_w = _require_cpu_data(weight, "weight")
         data_i = _require_cpu_data(index, "index").astype(int)
@@ -2172,6 +2261,10 @@ class EmbeddingFunction(Function):
 
     @staticmethod
     def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, type(None)]:
+        if grad_output.device == "gpu":
+            raise AMEVAForgeUnsupportedOperationError(
+                "GPU Embedding backward is not supported in Release 1."
+            )
         weight, index = ctx.saved_tensors
         data_i = _require_cpu_data(index, "index").astype(int)
         data_g = _require_cpu_data(grad_output, "grad_output")

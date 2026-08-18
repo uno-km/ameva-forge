@@ -27,8 +27,8 @@ from .ops import (
     unsqueeze, squeeze, flatten, permute, max_op, max_axis, var, std, sqrt,
     cat, where, pad, gather, scatter, dropout, conv2d, max_pool2d, avg_pool2d, bmm
 )
-# 텐서 객체 자체를 정의하는 클래스 임포트
-from .tensor import Tensor
+# 텐서 객체 자체를 정의하는 클래스 및 GC 함수 임포트
+from .tensor import Tensor, flush_gc
 # 자동 미분 기능 관련 모듈 임포트
 from .autograd import no_grad, set_max_graph_nodes
 # 디버그 모드를 설정하고 가져오는 유틸리티 함수 임포트
@@ -103,6 +103,7 @@ __all__ = [
     "ones",
     "full",
     "Tensor",
+    "flush_gc",
     "no_grad",
     "BatchNorm2d",
     "Dropout",

@@ -63,35 +63,24 @@ class SoftmaxFunction(Function):
             ctx.save_for_backward(Tensor(shape=result.shape, dtype='float32', device='cpu', data=result))
             return Tensor(shape=result.shape, dtype='float32', device='cpu', data=result)
         else:
-            from .ops import exp_op, div, transpose, sum_axis, reshape
-            # 무엇을: GPU 텐서에 대해 exp를 취한다.
-            # 왜: softmax 공식 분자를 계산하기 위함이다.
-            # 어떻게: exp_op를 호출한다.
-            e = exp_op(x)
+            from .ops import exp_op, div, sub, sum_axis, max_axis, reshape
+            norm_axis = axis if axis >= 0 else axis + len(x.shape)
             
-            if axis == -1 or axis == 1:
-                # 무엇을: 전치 연산 후 합을 구하고 형태를 맞춘다.
-                # 왜: GPU 커널이 특정 차원의 리덕션만 지원할 경우 이를 우회하기 위함이다.
-                # 어떻게: transpose -> sum_axis -> reshape 순으로 호출한다.
-                t = transpose(e)
-                s = sum_axis(t, axis=0)
-                s_reshaped = reshape(s, (x.shape[0], 1))
-            elif axis == 0:
-                # 무엇을: 첫 번째 축에 대해 합을 구한다.
-                # 왜: 배치 차원 등 지정된 축 방향으로 정규화하기 위함이다.
-                # 어떻게: sum_axis 후 reshape한다.
-                s = sum_axis(e, axis=0)
-                s_reshaped = reshape(s, (1, x.shape[1]))
-            else:
-                # 무엇을: 그 외 축에 대해 합을 구한다.
-                # 왜: 기본적으로 axis=0과 유사하게 동작하도록 폴백(fallback) 처리한다.
-                # 어떻게: sum_axis 후 브로드캐스팅을 위해 reshape한다.
-                s = sum_axis(e, axis=0)
-                s_reshaped = reshape(s, (1, x.shape[1]))
+            # 수치 안정성 (Numerical Stability): x - max(x) <= 0
+            m = max_axis(x, axis=norm_axis)
+            s_shape = list(x.shape)
+            s_shape[norm_axis] = 1
+            m_reshaped = reshape(m, tuple(s_shape))
+            shifted_x = sub(x, m_reshaped)
+
+            # 무엇을: 수치 안정화된 텐서에 대해 exp를 취한다 (exp(x - max(x)) <= 1.0, overflow 불가).
+            e = exp_op(shifted_x)
+            
+            # 무엇을: N차원 범용 축소(sum_axis)를 수행하고 브로드캐스팅 형태로 변환한다.
+            s = sum_axis(e, axis=norm_axis)
+            s_reshaped = reshape(s, tuple(s_shape))
                 
             # 무엇을: 분자(e)를 분모(s_reshaped)로 나눈다.
-            # 왜: 최종 softmax 확률을 구하기 위해서다.
-            # 어떻게: div 연산을 사용한다.
             res = div(e, s_reshaped)
             ctx.save_for_backward(res)
             return res
@@ -108,8 +97,9 @@ class SoftmaxFunction(Function):
         # 어떻게: 언패킹을 통해 할당한다.
         res, = ctx.saved_tensors
         if res.device == 'cpu':
-            res_data = res.numpy()
-            grad_data = grad_output.numpy()
+            from .ops import _require_cpu_data
+            res_data = _require_cpu_data(res, 'res')
+            grad_data = _require_cpu_data(grad_output, 'grad_output')
             axis = ctx.axis
             
             # 무엇을: 그래디언트와 결과의 내적(sum)을 구한다.
@@ -123,24 +113,18 @@ class SoftmaxFunction(Function):
             grad_in = res_data * (grad_data - sum_val)
             return (Tensor(shape=res.shape, dtype='float32', device='cpu', data=grad_in),)
         else:
-            from .ops import mul, sub, transpose, sum_axis, reshape
-            axis = ctx.axis
+            from .ops import mul, sub, sum_axis, reshape
+            norm_axis = ctx.axis if ctx.axis >= 0 else ctx.axis + len(res.shape)
             
             # 무엇을: 출력 그래디언트와 순전파 결과를 원소별로 곱한다.
             # 왜: 그래디언트 합(sum)을 구하기 위한 중간 단계이다.
             # 어떻게: mul 연산을 사용한다.
             m = mul(grad_output, res)
             
-            if axis == -1 or axis == 1:
-                t = transpose(m)
-                s = sum_axis(t, axis=0)
-                sum_val = reshape(s, (res.shape[0], 1))
-            elif axis == 0:
-                s = sum_axis(m, axis=0)
-                sum_val = reshape(s, (1, res.shape[1]))
-            else:
-                s = sum_axis(m, axis=0)
-                sum_val = reshape(s, (1, res.shape[1]))
+            s = sum_axis(m, axis=norm_axis)
+            s_shape = list(res.shape)
+            s_shape[norm_axis] = 1
+            sum_val = reshape(s, tuple(s_shape))
                 
             # 무엇을: grad_output에서 sum_val을 뺀다.
             # 왜: Softmax 야코비안 수식의 괄호 안 부분을 계산하기 위함이다.
@@ -186,23 +170,26 @@ class LogSoftmaxFunction(Function):
             ctx.save_for_backward(Tensor(shape=result.shape, dtype='float32', device='cpu', data=np.exp(result)))
             return Tensor(shape=result.shape, dtype='float32', device='cpu', data=result)
         else:
-            from .ops import exp_op, div, transpose, sum_axis, reshape, log_op, sub
-            e = exp_op(x)
+            from .ops import exp_op, div, sum_axis, max_axis, reshape, log_op, sub
+            norm_axis = axis if axis >= 0 else axis + len(x.shape)
             
-            if axis == -1 or axis == 1:
-                t = transpose(e)
-                s = sum_axis(t, axis=0)
-                s_reshaped = reshape(s, (x.shape[0], 1))
-            elif axis == 0:
-                s = sum_axis(e, axis=0)
-                s_reshaped = reshape(s, (1, x.shape[1]))
-            else:
-                s = sum_axis(e, axis=0)
-                s_reshaped = reshape(s, (1, x.shape[1]))
-                
-            res = sub(x, log_op(s_reshaped))
-            ctx.save_for_backward(div(e, s_reshaped))
-            return res
+            # 수치 안정성 (Numerical Stability): x - max(x) - log(sum(exp(x - max(x))))
+            m = max_axis(x, axis=norm_axis)
+            s_shape = list(x.shape)
+            s_shape[norm_axis] = 1
+            m_reshaped = reshape(m, tuple(s_shape))
+            shifted_x = sub(x, m_reshaped)
+            
+            e = exp_op(shifted_x)
+            s = sum_axis(e, axis=norm_axis)
+            s_reshaped = reshape(s, tuple(s_shape))
+            log_sum = log_op(s_reshaped)
+            
+            result = sub(shifted_x, log_sum)
+            # backward를 위해 softmax 확률 저장
+            res = div(e, s_reshaped)
+            ctx.save_for_backward(res)
+            return result
 
     @staticmethod
     def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor]:
@@ -283,57 +270,81 @@ class CrossEntropyFunction(Function):
             return Tensor(shape=(), dtype='float32', device='cpu', data=np.array(loss, dtype=np.float32))
         else:
             from .ops import _require_cpu_data, tensor, mul, sum_op, div, neg
-            target_data = _require_cpu_data(targets, 'targets').astype(np.int64)
+            if targets.device == 'cpu':
+                target_data = _require_cpu_data(targets, 'targets').astype(np.int64)
+            elif hasattr(targets, '_data') and targets._data is not None:
+                target_data = targets._data.astype(np.int64)
+            else:
+                from .errors import AMEVAForgeDeviceError
+                raise AMEVAForgeDeviceError(
+                    "CrossEntropyLoss expects target class indices on CPU (e.g., forge.tensor(y, device='cpu')) "
+                    "in Release 1 for host-side one-hot indexing."
+                )
             n, c = predictions.shape
+            if n * c > 4_000_000:
+                from .errors import AMEVAForgeUnsupportedOperationError
+                raise AMEVAForgeUnsupportedOperationError(
+                    f"GPU CrossEntropy currently uses dense one-hot targets in Release 1. "
+                    f"Requested one-hot size is {n}x{c} ({n * c * 4 / (1024 * 1024):.1f} MB). "
+                    f"Use smaller class count or wait for sparse_cross_entropy GPU kernel in Release 2."
+                )
             
-            # 무엇을: 타겟 레이블을 원-핫 인코딩(One-hot encoding) 벡터로 변환한다.
-            # 왜: GPU 텐서에서는 인덱싱 연산이 번거로우므로, 원-핫 행렬과의 내적(mul -> sum)으로 NLLLoss를 대체하기 위함이다.
-            # 어떻게: numpy로 0 행렬을 만들고 정답 위치에 1.0을 넣은 뒤 GPU 텐서로 올린다.
+            # 1. GPU Log-Softmax 계산
+            log_probs = log_softmax(predictions, axis=-1)
+            
+            # 2. Host에서 One-Hot 행렬 생성 후 GPU 텐서로 변환
             one_hot = np.zeros((n, c), dtype=np.float32)
             one_hot[np.arange(n), target_data] = 1.0
-            one_hot_t = tensor(one_hot, device='gpu')
+            one_hot_t = tensor(one_hot, device=predictions.device, requires_grad=False)
+            
+            # 3. NLL Loss = -sum(one_hot * log_probs) / n
+            nll = neg(sum_op(mul(one_hot_t, log_probs)))
+            loss = div(nll, tensor(float(n), device=predictions.device, requires_grad=False))
+            
+            # 4. Softmax 확률 및 메타데이터 저장 (역전파용)
+            probs = softmax(predictions, axis=-1)
+            ctx.probs = probs
             ctx.one_hot_t = one_hot_t
-            
-            log_sm = log_softmax(predictions)
-            prod = mul(log_sm, one_hot_t)
-            s = sum_op(prod)
-            
-            loss = neg(div(s, tensor(np.array([float(n)], dtype=np.float32), device='gpu')))
+            ctx.batch_size = float(n)
             return loss
 
     @staticmethod
-    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, type(None)]:
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, None]:
         """
-        무엇을: Cross Entropy 연산의 역전파를 수행한다.
-        왜: 손실에 대한 모델 예측값의 미분값을 구하여 네트워크 파라미터를 업데이트하기 위해서다.
-        어떻게: 수식 `(probs - one_hot) / N` 을 적용한다. 타겟 텐서는 미분 불가능하므로 None을 반환한다.
+        무엇을: Cross Entropy 손실 함수의 역전파를 수행한다.
+        왜: 소프트맥스와 NLLLoss의 결합 도함수인 (probs - one_hot) / N 을 통해 입력 로짓의 그래디언트를 구하기 위함이다.
+        어떻게: GPU/CPU 디바이스별로 최적화된 연산 체인을 적용하여 그래디언트를 산출한다.
         """
-        if ctx.saved_tensors[0].device == 'cpu':
-            probs = ctx.probs.numpy()
+        predictions, targets = ctx.saved_tensors
+        if predictions.device == 'cpu':
+            probs_data = ctx.probs.numpy()
             target_data = ctx.target_data
-            n = probs.shape[0]
-            
-            # 무엇을: 그래디언트를 구한다.
-            # 왜: CE loss와 Softmax가 결합된 야코비안은 단순히 정답 위치의 확률에서 1을 빼는 것으로 단순화되기 때문이다.
-            # 어떻게: 정답 인덱스에서 1.0을 빼고 배치 크기(n)로 나눈다.
-            grad_pred = probs.copy()
+            n = probs_data.shape[0]
+            grad_pred = probs_data.copy()
             grad_pred[np.arange(n), target_data] -= 1.0
-            grad_pred /= n
+            grad_pred = grad_pred / n
             
-            grad_tensor = Tensor(shape=grad_pred.shape, dtype='float32', device='cpu', data=grad_pred.astype(np.float32))
-            from .ops import mul
-            return mul(grad_output, grad_tensor), None
+            if grad_output.shape != ():
+                grad_pred = grad_pred * grad_output.numpy()
+            else:
+                grad_pred = grad_pred * float(grad_output.numpy())
+            return (Tensor(shape=grad_pred.shape, dtype='float32', device='cpu', data=grad_pred), None)
         else:
-            predictions, targets = ctx.saved_tensors
-            n = predictions.shape[0]
-            
-            sm = softmax(predictions)
             from .ops import sub, div, mul, tensor
-            import numpy as np
-            diff = sub(sm, ctx.one_hot_t)
-            grad_pred = div(diff, tensor(np.array([float(n)], dtype=np.float32), device='gpu'))
+            probs = ctx.probs
+            one_hot_t = ctx.one_hot_t
+            n = ctx.batch_size
             
-            return mul(grad_output, grad_pred), None
+            # grad_pred = (probs - one_hot) / n
+            grad_unscaled = sub(probs, one_hot_t)
+            grad_pred = div(grad_unscaled, tensor(n, device=predictions.device, requires_grad=False))
+            
+            if grad_output.shape != ():
+                grad_pred = mul(grad_pred, grad_output)
+            elif float(getattr(grad_output, '_data', 1.0) if hasattr(grad_output, '_data') and grad_output._data is not None else 1.0) != 1.0:
+                grad_pred = mul(grad_pred, grad_output)
+                
+            return (grad_pred, None)
 
 def cross_entropy(predictions, targets):
     """
@@ -356,6 +367,41 @@ def mse_loss(predictions, targets):
     diff = sub(predictions, targets)
     sq = mul(diff, diff)
     return mean_op(sq)
+
+def _move_tensor_state(dst, src) -> None:
+    """
+    WHAT: src 텐서의 상태와 지연 연산 그래프를 dst 텐서로 안전하게 이동(Move)합니다.
+    WHY: BatchNorm의 running_mean/running_var 같은 in-place 통계량 갱신 시,
+         src의 식별자/그래프/데이터 소유권을 dst로 이전하여 dst 객체의 참조 동일성을 유지하기 위함입니다.
+    HOW: dst 필드 덮어쓰기 -> src 필드 None 초기화.
+    """
+    dst._data = src._data
+    dst._handle = src._handle
+    if hasattr(dst, "_handle_cell"):
+        dst._handle_cell.handle = src._handle
+
+    dst._lazy_op = getattr(src, "_lazy_op", None)
+    dst._op = getattr(src, "_op", None)
+    dst._parents = getattr(src, "_parents", ())
+    dst._op_params = getattr(src, "_op_params", None)
+
+    dst.shape = src.shape
+    dst.dtype = src.dtype
+    dst.device = src.device
+    dst.requires_grad = False
+    dst.grad = None
+    dst._version += 1
+
+    if dst.device == "gpu" and not getattr(dst, "_finalizer_registered", False):
+        import weakref
+        from .tensor import Tensor
+        weakref.finalize(dst, Tensor._finalize_buffer, dst._handle_cell)
+        dst._finalizer_registered = True
+
+    src._handle = None
+    if hasattr(src, "_handle_cell"):
+        src._handle_cell.handle = None
+    src._data = None
 
 def batch_norm2d(x, running_mean, running_var, weight, bias, training=False, momentum=0.1, eps=1e-5):
     """
@@ -386,15 +432,34 @@ def batch_norm2d(x, running_mean, running_var, weight, bias, training=False, mom
             # 어떻게: 지수 이동 평균(EMA) 수식을 적용한다.
             running_mean._data = (1 - momentum) * running_mean._data + momentum * m_c._data
             running_var._data = (1 - momentum) * running_var._data + momentum * unbiased_v
+            running_mean._version += 1
+            running_var._version += 1
         else:
-            new_rm = add(mul(running_mean, full(running_mean.shape, 1 - momentum, device='gpu')), mul(m_c, full(m_c.shape, momentum, device='gpu')))
-            unbiased_v = mul(v_c, full(v_c.shape, n / (n - 1) if n > 1 else 1.0, device='gpu'))
-            new_rv = add(mul(running_var, full(running_var.shape, 1 - momentum, device='gpu')), mul(unbiased_v, full(unbiased_v.shape, momentum, device='gpu')))
-            # 무엇을: 기존 텐서 인스턴스에 새로운 상태를 덮어씌운다.
-            # 왜: call-by-reference로 넘어온 인자의 실제 데이터를 갱신해야 하기 때문이다.
-            # 어떻게: __dict__.update() 매직 메서드를 이용해 객체 상태를 통째로 교체한다.
-            running_mean.__dict__.update(new_rm.__dict__)
-            running_var.__dict__.update(new_rv.__dict__)
+            old_rm = Tensor(
+                shape=running_mean.shape,
+                dtype=running_mean.dtype,
+                device=running_mean.device,
+                handle=running_mean._handle,
+                data=running_mean._data,
+                op=running_mean._lazy_op,
+                parents=running_mean._parents,
+                op_params=running_mean._lazy_params
+            )
+            old_rv = Tensor(
+                shape=running_var.shape,
+                dtype=running_var.dtype,
+                device=running_var.device,
+                handle=running_var._handle,
+                data=running_var._data,
+                op=running_var._lazy_op,
+                parents=running_var._parents,
+                op_params=running_var._lazy_params
+            )
+            new_rm = add(mul(old_rm, full(running_mean.shape, 1 - momentum, device=x.device)), mul(m_c, full(m_c.shape, momentum, device=x.device)))
+            unbiased_v = mul(v_c, full(v_c.shape, n / (n - 1) if n > 1 else 1.0, device=x.device))
+            new_rv = add(mul(old_rv, full(running_var.shape, 1 - momentum, device=x.device)), mul(unbiased_v, full(unbiased_v.shape, momentum, device=x.device)))
+            _move_tensor_state(running_mean, new_rm)
+            _move_tensor_state(running_var, new_rv)
             
         mean_use, var_use = m_view, v_view
     else:
@@ -474,6 +539,15 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     # 어떻게: full 텐서를 만들고 div 연산을 적용한다.
     scores = div(scores, full(scores.shape, math.sqrt(d_k), device=query.device))
     
+    if is_causal:
+        from .ops import tensor
+        L_q, L_k = scores.shape[-2], scores.shape[-1]
+        mask_np = np.triu(np.full((L_q, L_k), -1e4, dtype=np.float32), k=1)
+        causal_mask = tensor(mask_np, device=scores.device)
+        scores = add(scores, causal_mask)
+    elif attn_mask is not None:
+        scores = add(scores, attn_mask)
+
     attn = softmax(scores, axis=-1)
     
     if dropout_p > 0.0:

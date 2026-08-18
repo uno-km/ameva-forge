@@ -24,6 +24,7 @@ export declare function initWebGPU(options?: GPURequestAdapterOptions): Promise<
  * HOW: 내부 `device` 변수가 초기화되어 있는지 확인하고, 없을 경우 예외(AMEVAForgeDeviceError)를 발생시키며, 존재할 경우 그대로 반환합니다.
  */
 export declare function getDevice(): GPUDevice;
+export declare function _setDeviceForTesting(d: any): void;
 /**
  * WHAT: 전역에 캐시된 WebGPU 어댑터(Adapter) 인스턴스를 반환합니다.
  * WHY: GPU의 하드웨어 스펙(limits, features 등)을 조회하거나 디바이스 기능 제약 조건을 파악하기 위해 외부 모듈에서 어댑터에 접근할 수 있게 합니다.

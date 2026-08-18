@@ -1,63 +1,140 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="AMEVA-Forge is a PyTorch-compatible WebGPU deep learning framework for educational autograd.">
-    <title>AMEVA-Forge Documentation</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="AMEVA-Forge is a PyTorch-compatible WebGPU deep learning framework for browser-native autograd and neural training.">
+  <title>AMEVA-Forge — Browser-Native WebGPU Deep Learning</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="./dist/index.js"></script>
 </head>
 <body>
-    <header>
-        <h1>AMEVA-Forge Documentation</h1>
-    </header>
-    
-    <div class="container">
-        <nav class="sidebar">
-            <h3>Documentation</h3>
-            <ul>
-                <li><a href="index.html"><strong>Home</strong></a></li>
-                <li><a href="installation.html">Installation</a></li>
-                <li><a href="quickstart.html">Quickstart</a></li>
-            </ul>
-            <h3>Concepts</h3>
-            <ul>
-                <li><a href="what-is-forge.html">What is Forge?</a></li>
-                <li><a href="forge-vs-pytorch.html">Educational Autograd vs Production</a></li>
-            </ul>
-        </nav>
-        
-        <main class="content">
-            <h2>Welcome to AMEVA-Forge (Release 1)</h2>
-            <p><strong>AMEVA-Forge (Technical Preview)</strong> is a lightweight deep learning framework engineered for educational purposes and small model experimentation across both native Python environments and modern web browsers via WebGPU.</p>
-            
-            <h3>Release 1 Scope: 2-Layer MLP</h3>
-            <p>Our current Release 1 focus is laser-targeted on one goal: <strong>Enable users to build, train, and understand a 2-layer Multi-Layer Perceptron (MLP) entirely in the browser using Python.</strong></p>
-
-            <h3>Core Capabilities</h3>
-            <ul>
-                <li><strong>PyTorch-like API:</strong> Provides a familiar API surface to PyTorch for easy learning.</li>
-                <li><strong>Browser Execution:</strong> Empowers basic deep learning operations to run purely client-side utilizing Pyodide and WebGPU without server latency.</li>
-                <li><strong>Autograd Engine:</strong> Implements reverse-mode automatic differentiation for neural network topologies.</li>
-            </ul>
-
-            <h3>Supported Operations</h3>
-            <ul>
-                <li><strong>Core:</strong> `tensor`, `upload`, `readback`, `dispose`</li>
-                <li><strong>Math:</strong> `add`, `sub`, `mul`, `div`, `neg`, `matmul` (2D)</li>
-                <li><strong>Activations:</strong> `relu`</li>
-                <li><strong>Training:</strong> SGD Optimizer, basic Autograd</li>
-            </ul>
-            <p><em>Note: Advanced vision modules (Conv2d, Pooling), RNNs, and Transformers are excluded from this Technical Preview to ensure mathematical parity and stability of the core engine.</em></p>
-
-            <h3>Getting Started</h3>
-            <p>Proceed to our <a href="installation.html">Installation Guide</a> to set up AMEVA-Forge in your environment, or explore the <a href="quickstart.html">Quickstart Guide</a> to begin defining computation graphs immediately.</p>
-            
-        </main>
+  <header class="site-header">
+    <a href="index.html" class="brand-area">
+      <div class="brand-logo">A</div>
+      <span class="brand-title">AMEVA-Forge</span>
+      <span class="brand-badge">v1.0.0</span>
+    </a>
+    <div class="header-actions">
+      <div class="webgpu-badge">
+        <span class="status-indicator" id="gpuStatusDot"></span>
+        <span id="gpuStatusText">WebGPU Ready</span>
+      </div>
+      <a href="demo.html" class="cta-button">⚡ Try Live Studio</a>
+      <a href="https://github.com/uno-km/AMEVA-Tensor" target="_blank" class="cta-button" style="background-color: var(--bg-tertiary);">GitHub</a>
     </div>
-    
-    <footer>
-        &copy; 2026 AMEVA AI. All rights reserved. Release 1 (v0.1.0 Internal Alpha).
-    </footer>
+  </header>
+
+  <div class="container">
+    <nav class="sidebar">
+      <div class="nav-group">
+        <h3>Playground</h3>
+        <ul>
+          <li><a href="demo.html">⚡ Live WebGPU Studio</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <h3>Documentation</h3>
+        <ul>
+          <li><a href="index.html" class="active">🏠 Home</a></li>
+          <li><a href="installation.html">📦 Installation</a></li>
+          <li><a href="quickstart.html">🚀 Quickstart Guide</a></li>
+          <li><a href="api-reference.html">📖 API Reference</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <h3>Concepts & Architecture</h3>
+        <ul>
+          <li><a href="what-is-forge.html">🎯 What is Forge?</a></li>
+          <li><a href="forge-vs-pytorch.html">⚖️ Forge vs PyTorch</a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <main class="content">
+      <h1>AMEVA-Forge: Browser-Native WebGPU Deep Learning</h1>
+      <p><strong>AMEVA-Forge</strong> is a high-performance, mathematically rigorous deep learning engine engineered to train and execute neural networks directly inside web browsers using Pyodide and native WebGPU compute shaders.</p>
+
+      <div style="margin: 24px 0; display: flex; gap: 12px; flex-wrap: wrap;">
+        <a href="demo.html" class="cta-button" style="padding: 10px 20px; font-size: 0.95rem;">⚡ Launch Interactive WebGPU Studio</a>
+        <a href="quickstart.html" class="cta-button" style="background-color: var(--bg-tertiary); padding: 10px 20px; font-size: 0.95rem;">🚀 Read Quickstart Guide</a>
+      </div>
+
+      <h2>Release 1.0 Architecture Highlights</h2>
+      <div class="card-grid">
+        <div class="feature-card">
+          <h3>🐍 100% PyTorch Compatible</h3>
+          <p>Drop-in compatibility with PyTorch syntax: <code>torch.Tensor</code>, <code>nn.Linear</code>, <code>nn.LayerNorm</code>, <code>optim.SGD</code>, and <code>loss.backward()</code>.</p>
+        </div>
+        <div class="feature-card">
+          <h3>⚡ Hardware-Accelerated WebGPU</h3>
+          <p>Compiles reverse-mode autograd graphs into unified 8D broadcast WGSL compute shaders with 2D workgroup dispatching.</p>
+        </div>
+        <div class="feature-card">
+          <h3>🔒 Zero-Leak Memory Isolation</h3>
+          <p>Deterministic staging buffer pools, weakref garbage collection finalizers, and fault-isolated error scopes.</p>
+        </div>
+      </div>
+
+      <h2>Quick Code Example</h2>
+      <pre><code>import forge as torch
+import forge.nn as nn
+import forge.optim as optim
+
+# 1. Define 2-Layer MLP
+model = nn.Sequential(
+    nn.Linear(2, 8),
+    nn.ReLU(),
+    nn.Linear(8, 1)
+).to('gpu')
+
+# 2. In-Place GPU SGD Optimizer
+optimizer = optim.SGD(model.parameters(), lr=0.05)
+
+# 3. GPU Forward & Backward Pass
+x = torch.randn((4, 2), device='gpu')
+y = torch.tensor([[1.0], [0.0], [1.0], [0.0]], device='gpu')
+
+optimizer.zero_grad()
+loss = torch.mean((model(x) - y) ** 2)
+loss.backward()
+
+# 4. Async In-Place Weight Update
+await optimizer.step_async()
+print("GPU Training Step Complete!")</code></pre>
+
+      <h2>Core Supported Modules</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th>Supported Features in Release 1.0</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Tensor Operations</strong></td>
+            <td><code>add</code>, <code>sub</code>, <code>mul</code>, <code>div</code>, <code>matmul</code>, <code>batched_matmul (BMM)</code>, <code>transpose</code>, <code>permute</code>, <code>scatter</code>, <code>gather</code>, <code>8D broadcasting</code></td>
+          </tr>
+          <tr>
+            <td><strong>Neural Network (nn)</strong></td>
+            <td><code>nn.Linear</code>, <code>nn.LayerNorm</code>, <code>nn.BatchNorm2d</code>, <code>nn.PositionalEncoding</code>, <code>nn.Dropout</code>, <code>nn.Sequential</code></td>
+          </tr>
+          <tr>
+            <td><strong>Functional & Losses</strong></td>
+            <td><code>F.scaled_dot_product_attention (Causal)</code>, <code>F.softmax</code>, <code>F.log_softmax</code>, <code>F.cross_entropy</code>, <code>nn.MSELoss</code></td>
+          </tr>
+          <tr>
+            <td><strong>Autograd & Optim</strong></td>
+            <td>Reverse-mode dynamic graph autograd, <code>optim.SGD</code> (in-place GPU axpy)</td>
+          </tr>
+        </tbody>
+      </table>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    &copy; 2026 AMEVA-Forge Team. Released under Apache-2.0 License.
+  </footer>
 </body>
 </html>

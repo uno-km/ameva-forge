@@ -64,10 +64,15 @@ scripts/venv/
 
 # Benchmark Reports & Dev Scripts
 docs/tests/results/
-scripts/
+scripts/venv/
+scripts/codes/
+scripts/__pycache__/
 
 # Temporary Logs and Exports
 .temp_logs/
 scripts/codes/
 docs/audits/
 packages/forge/test-results/
+test-results/
+scratch/
+scripts/scratch/

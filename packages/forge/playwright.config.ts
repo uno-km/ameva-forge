@@ -1,17 +1,37 @@
-import { defineConfig, devices } from '@playwright/test';
+import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests/e2e',
-  timeout: 30 * 1000,
-  expect: {
-    timeout: 5000
-  },
+  timeout: 180_000,
   use: {
-    browserName: 'chromium',
-    headless: false,
-    // Enable WebGPU in headless chrome
+    baseURL: 'http://127.0.0.1:4173',
+    channel: 'chrome',
+    headless: true,
     launchOptions: {
-      args: ['--enable-unsafe-webgpu']
-    }
+      args: [
+        '--enable-unsafe-webgpu',
+        '--enable-features=WebGPU',
+        '--use-angle=d3d11',
+        '--use-gl=angle',
+        '--ignore-gpu-blocklist',
+        '--enable-gpu-rasterization',
+      ],
+    },
+  },
+  projects: [
+    {
+      name: 'dev-webgpu',
+      testDir: './tests/e2e',
+    },
+    {
+      name: 'release-webgpu',
+      testDir: './tests/e2e',
+    },
+  ],
+  webServer: {
+    command: 'npx http-server . -p 4173 -c-1',
+    url: 'http://127.0.0.1:4173/test.html',
+    reuseExistingServer: true,
+    timeout: 30_000,
   },
 });

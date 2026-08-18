@@ -15,9 +15,11 @@ struct Params {
   // 변수: numElements
   // 역할: 텐서 내 존재하는 전체 데이터 요소의 개수
   numElements: u32,
-  // 변수: pad1, pad2
+  // 변수: workgroups_x
+  // 역할: X축 방향으로 할당된 워크그룹(workgroup)의 총 개수
+  workgroups_x: u32,
+  // 변수: pad2
   // 역할: 16바이트 메모리 정렬을 위한 패딩 변수
-  pad1: u32,
   pad2: u32,
   // 변수: in_strides
   // 역할: 입력 텐서의 첫 4차원(0~3)에 대한 메모리 보폭
@@ -25,8 +27,6 @@ struct Params {
   // 변수: in_strides_ext
   // 역할: 입력 텐서의 확장 4차원(4~7)에 대한 메모리 보폭
   in_strides_ext: vec4<u32>,
-  // 변수: out_shape
-  // 역할: 출력 텐서의 첫 4차원(0~3)에 대한 크기(Shape)
   out_shape: vec4<u32>,
   // 변수: out_shape_ext
   // 역할: 출력 텐서의 확장 4차원(4~7)에 대한 크기(Shape)
@@ -60,7 +60,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   // 변수: out_idx
   // 역할: 2D 그리드 디스패치(dispatch)를 지원하기 위해 글로벌 ID x, y를 결합하여 만든 1차원 출력 인덱스
   // 주석: Compute global index supporting 2D grid dispatch
-  let out_idx = global_id.x + global_id.y * 65535u * 64u;
+  let out_idx = global_id.x + global_id.y * params.workgroups_x * 64u;
   
   // 조건문: 데이터 범위 초과 검사
   // 역할: 스레드의 계산된 인덱스가 전체 요소 크기를 넘어서는지 판단하여 초과 시 연산을 중지합니다.

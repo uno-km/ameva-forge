@@ -1,53 +1,84 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>What is AMEVA-Forge?</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="What is AMEVA-Forge? Philosophy, architecture, and mission.">
+  <title>What is Forge? — AMEVA-Forge</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="./dist/index.js"></script>
 </head>
 <body>
-    <header>
-        <h1>AMEVA-Forge Documentation</h1>
-    </header>
-    
-    <div class="container">
-        <nav class="sidebar">
-            <h3>Navigation</h3>
-            <ul>
-                <li><a href="index.html">Home</a></li>
-                <li><a href="what-is-forge.html">What is Forge?</a></li>
-                <li><a href="forge-vs-pytorch.html">Forge vs PyTorch</a></li>
-                <li><a href="playgrounds/benchmark.html">Benchmark Playground</a></li>
-                <li><a href="playgrounds/mnist.html">MNIST Playground</a></li>
-            </ul>
-        </nav>
-        
-        <main class="content">
-            <h2>What is AMEVA-Forge?</h2>
-            <p>AMEVA-Forge is a specialized deep learning framework designed to bridge the gap between Python syntax and Browser execution.</p>
-            
-            <h3>Core Concepts</h3>
-            
-            <h4>1. WebGPU First</h4>
-            <p>Instead of relying on CUDA or server-side GPUs, AMEVA-Forge compiles its tensor operations down to standard WebGPU Shader Language (WGSL). This allows your Python code to tap directly into the user's local GPU from inside the web browser.</p>
-            
-            <h4>2. Pyodide Integration</h4>
-            <p>Through Pyodide (CPython compiled to WebAssembly), AMEVA-Forge can run pure Python code directly in the browser. You do not need to rewrite your training logic in JavaScript or TypeScript. Just import the library and run.</p>
-            
-            <h4>3. PyTorch-like API</h4>
-            <p>If you know PyTorch, you already know AMEVA-Forge. The API for <code>Tensor</code>, <code>nn.Linear</code>, <code>optim.SGD</code>, and backward propagation provides a PyTorch-like interface for basic MLP training.</p>
-            
-            <h4>4. Autograd Engine</h4>
-            <p>AMEVA-Forge includes a robust, iterative automatic differentiation engine capable of processing deep computation graphs without recursion errors, supporting 2D matrix multiplications, ReLU activation, and MSE loss gradients for small MLP models.</p>
-            
-            <h3>Why build a browser framework?</h3>
-            <p>Running models in the browser means zero server-side compute costs for inference and fine-tuning. It guarantees data privacy since user data never leaves their local machine, while still providing GPU acceleration.</p>
-        </main>
+  <header class="site-header">
+    <a href="index.html" class="brand-area">
+      <div class="brand-logo">A</div>
+      <span class="brand-title">AMEVA-Forge</span>
+      <span class="brand-badge">v1.0.0</span>
+    </a>
+    <div class="header-actions">
+      <a href="demo.html" class="cta-button">⚡ Try Live Studio</a>
+      <a href="https://github.com/uno-km/AMEVA-Tensor" target="_blank" class="cta-button" style="background-color: var(--bg-tertiary);">GitHub</a>
     </div>
-    
-    <footer>
-        &copy; 2026 AMEVA AI. All rights reserved.
-    </footer>
+  </header>
+
+  <div class="container">
+    <nav class="sidebar">
+      <div class="nav-group">
+        <h3>Playground</h3>
+        <ul>
+          <li><a href="demo.html">⚡ Live WebGPU Studio</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <h3>Documentation</h3>
+        <ul>
+          <li><a href="index.html">🏠 Home</a></li>
+          <li><a href="installation.html">📦 Installation</a></li>
+          <li><a href="quickstart.html">🚀 Quickstart Guide</a></li>
+          <li><a href="api-reference.html">📖 API Reference</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <h3>Concepts & Architecture</h3>
+        <ul>
+          <li><a href="what-is-forge.html" class="active">🎯 What is Forge?</a></li>
+          <li><a href="forge-vs-pytorch.html">⚖️ Forge vs PyTorch</a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <main class="content">
+      <h1>What is AMEVA-Forge?</h1>
+      <p><strong>AMEVA-Forge</strong> is a browser-first deep learning acceleration framework designed to democratize machine learning education, research, and client-side privacy-preserving computation.</p>
+
+      <h2>Core Philosophy</h2>
+      <div class="card-grid">
+        <div class="feature-card">
+          <h3>1. Zero Installation Barrier</h3>
+          <p>Traditional deep learning setups require gigabytes of CUDA drivers, PyTorch binaries, and compilation tools. Forge runs instantly inside any modern browser with a single URL visit.</p>
+        </div>
+        <div class="feature-card">
+          <h3>2. Absolute Privacy</h3>
+          <p>By executing forward and backward training passes on the client device's GPU, user data never traverses external network boundaries.</p>
+        </div>
+        <div class="feature-card">
+          <h3>3. Mathematical Parity</h3>
+          <p>Every kernel and backward step is verified against CPU analytical ground truth to ensure absolute numerical correctness.</p>
+        </div>
+      </div>
+
+      <h2>How It Works</h2>
+      <p>AMEVA-Forge bridges high-level Python autograd graphs with low-level GPU compute pipelines:</p>
+      <ol>
+        <li><strong>Frontend (Python / Pyodide):</strong> Intercepts user model code (e.g. <code>nn.Linear</code>, <code>F.scaled_dot_product_attention</code>) and constructs computation graphs.</li>
+        <li><strong>Bridge Layer (JS / WASM):</strong> Serializes graph instructions with shape validation and memory quota pre-checking.</li>
+        <li><strong>Backend Engine (TypeScript / WebGPU):</strong> Compiles instructions into optimized WGSL shader dispatches using 8D uniform strides and pooled buffers.</li>
+      </ol>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    &copy; 2026 AMEVA-Forge Team. Released under Apache-2.0 License.
+  </footer>
 </body>
 </html>

@@ -1,91 +1,184 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AMEVA-Forge: API Reference</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="AMEVA-Forge API Reference for Tensor, nn, functional, and optim modules.">
+  <title>API Reference — AMEVA-Forge</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="./dist/index.js"></script>
 </head>
 <body>
-    <header>
-        <h1>AMEVA-Forge Release 1 Documentation</h1>
-    </header>
-    
-    <div class="container">
-        <nav class="sidebar">
-            <h3>Documentation</h3>
-            <ul>
-                <li><a href="index.html">Home</a></li>
-                <li><a href="installation.html">Installation</a></li>
-                <li><a href="quickstart.html">Quickstart</a></li>
-                <li><a href="api-reference.html"><strong>API Reference</strong></a></li>
-            </ul>
-            <h3>Concepts</h3>
-            <ul>
-                <li><a href="what-is-forge.html">What is Forge?</a></li>
-                <li><a href="forge-vs-pytorch.html">Forge vs PyTorch</a></li>
-            </ul>
-            <h3>Playgrounds</h3>
-            <ul>
-                <li><a href="playgrounds/benchmark.html">Benchmark Playground</a></li>
-                <li><a href="playgrounds/mnist.html">MNIST Playground</a></li>
-            </ul>
-        </nav>
-        
-        <main class="content">
-            <h2>API Reference</h2>
-            <p>This document details the primary public interfaces exposed by AMEVA-Forge Release 1.</p>
-            
-            <h3>Module: <code>forge</code></h3>
-            
-            <h4><code>forge.tensor(data, requires_grad=False, dtype=None)</code></h4>
-            <p>Constructs a Tensor from a Python list or NumPy array.</p>
-            <ul>
-                <li><strong>data</strong>: Array-like object containing numerical data.</li>
-                <li><strong>requires_grad</strong> (bool): If True, operations on this tensor are tracked by the Autograd engine.</li>
-                <li><strong>dtype</strong>: Data type configuration (default: <code>forge.float32</code>).</li>
-            </ul>
-            
-            <h4><code>forge.randn(shape, requires_grad=False)</code></h4>
-            <p>Generates a Tensor populated with values from a standard normal distribution (mean=0, variance=1).</p>
-            
-            <h4><code>forge.zeros(shape)</code> / <code>forge.ones(shape)</code></h4>
-            <p>Generates a Tensor populated exclusively with scalar 0.0 or 1.0 values, respectively.</p>
-
-            <hr>
-
-            <h3>Module: <code>forge.nn</code></h3>
-            <p>Contains layers and loss functions for building neural network architectures.</p>
-            
-            <h4><code>nn.Module</code></h4>
-            <p>Base class for all neural network modules. Custom architectures should inherit from this class and implement the <code>forward()</code> method.</p>
-            
-            <h4><code>nn.Linear(in_features, out_features, bias=True)</code></h4>
-            <p>Applies a linear transformation to the incoming data: <code>y = xA^T + b</code>.</p>
-            
-            <h4><code>nn.ReLU()</code></h4>
-            <p>Standard non-linear activation functions. Note: <code>nn.Sigmoid()</code> and <code>nn.Tanh()</code> are planned for future releases.</p>
-
-            <h4><code>nn.MSELoss()</code></h4>
-            <p>Computes the mean squared error between network outputs and empirical targets.</p>
-
-            <hr>
-
-            <h3>Module: <code>forge.optim</code></h3>
-            <p>Implements standard optimization algorithms for gradient descent.</p>
-            
-            <h4><code>optim.SGD(params, lr=0.01)</code></h4>
-            <p>Standard Stochastic Gradient Descent optimization.</p>
-            
-            <h4><code>optim.Adam(params, lr=0.001, betas=(0.9, 0.999))</code></h4>
-            <p>Adaptive Moment Estimation (Adam) optimizer. Recommended for standard deep learning workflows.</p>
-            <!-- Note: optim.Adam is planned. Release 1 supports optim.SGD only. -->
-
-        </main>
+  <header class="site-header">
+    <a href="index.html" class="brand-area">
+      <div class="brand-logo">A</div>
+      <span class="brand-title">AMEVA-Forge</span>
+      <span class="brand-badge">v1.0.0</span>
+    </a>
+    <div class="header-actions">
+      <a href="demo.html" class="cta-button">⚡ Try Live Studio</a>
+      <a href="https://github.com/uno-km/AMEVA-Tensor" target="_blank" class="cta-button" style="background-color: var(--bg-tertiary);">GitHub</a>
     </div>
-    
-    <footer>
-        &copy; 2026 AMEVA AI. All rights reserved. Release 1 (v0.1.0).
-    </footer>
+  </header>
+
+  <div class="container">
+    <nav class="sidebar">
+      <div class="nav-group">
+        <h3>Playground</h3>
+        <ul>
+          <li><a href="demo.html">⚡ Live WebGPU Studio</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <h3>Documentation</h3>
+        <ul>
+          <li><a href="index.html">🏠 Home</a></li>
+          <li><a href="installation.html">📦 Installation</a></li>
+          <li><a href="quickstart.html">🚀 Quickstart Guide</a></li>
+          <li><a href="api-reference.html" class="active">📖 API Reference</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <h3>Concepts & Architecture</h3>
+        <ul>
+          <li><a href="what-is-forge.html">🎯 What is Forge?</a></li>
+          <li><a href="forge-vs-pytorch.html">⚖️ Forge vs PyTorch</a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <main class="content">
+      <h1>API Reference</h1>
+      <p>Comprehensive reference for all core classes and functions exported by <code>forge</code> in Release 1.0.</p>
+
+      <h2>1. <code>forge.Tensor</code></h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Method / Property</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>forge.tensor(data, device='cpu', requires_grad=False)</code></td>
+            <td>Creates a tensor from numpy arrays or nested lists.</td>
+          </tr>
+          <tr>
+            <td><code>forge.randn(shape, device='cpu', requires_grad=False)</code></td>
+            <td>Creates a tensor with standard normal distribution.</td>
+          </tr>
+          <tr>
+            <td><code>tensor.to(device)</code></td>
+            <td>Transfers tensor state between <code>'cpu'</code> and <code>'gpu'</code>.</td>
+          </tr>
+          <tr>
+            <td><code>tensor.backward(gradient=None)</code></td>
+            <td>Accumulates reverse gradients into <code>tensor.grad</code>.</td>
+          </tr>
+          <tr>
+            <td><code>await tensor.realize()</code></td>
+            <td>Forces execution of lazy GPU computation graphs.</td>
+          </tr>
+          <tr>
+            <td><code>await tensor.numpy_async()</code></td>
+            <td>Asynchronously reads back GPU tensor data to a NumPy array.</td>
+          </tr>
+          <tr>
+            <td><code>tensor.dispose()</code></td>
+            <td>Immediately frees associated GPU buffers and returns quota.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>2. <code>forge.nn</code> Modules</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Module</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>nn.Linear(in_features, out_features, bias=True)</code></td>
+            <td>Fully connected linear transformation layer.</td>
+          </tr>
+          <tr>
+            <td><code>nn.LayerNorm(normalized_shape, eps=1e-5)</code></td>
+            <td>Layer normalization across feature dimensions.</td>
+          </tr>
+          <tr>
+            <td><code>nn.BatchNorm2d(num_features, eps=1e-5, momentum=0.1)</code></td>
+            <td>Batch normalization with running mean and variance tracking.</td>
+          </tr>
+          <tr>
+            <td><code>nn.PositionalEncoding(d_model, max_len=5000)</code></td>
+            <td>Sinusoidal positional encoding with bounded LRU tensor cache.</td>
+          </tr>
+          <tr>
+            <td><code>nn.Dropout(p=0.5)</code></td>
+            <td>Deterministic or pseudo-random dropout masking.</td>
+          </tr>
+          <tr>
+            <td><code>nn.Sequential(*layers)</code></td>
+            <td>Sequential container of neural network modules.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>3. <code>forge.functional</code> (F)</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Function</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>F.scaled_dot_product_attention(q, k, v, is_causal=False)</code></td>
+            <td>Scaled dot-product attention with optional causal triangular masking.</td>
+          </tr>
+          <tr>
+            <td><code>F.softmax(x, axis=-1)</code></td>
+            <td>Numerically stable softmax activation along specified axis.</td>
+          </tr>
+          <tr>
+            <td><code>F.log_softmax(x, axis=-1)</code></td>
+            <td>Numerically stable log-softmax using max-subtraction.</td>
+          </tr>
+          <tr>
+            <td><code>F.cross_entropy(predictions, targets)</code></td>
+            <td>CrossEntropy loss with closed-form $(P - Y)/N$ backward gradient.</td>
+          </tr>
+          <tr>
+            <td><code>F.relu(x)</code></td>
+            <td>Rectified linear unit activation function.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>4. <code>forge.optim</code></h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Class</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>optim.SGD(params, lr=0.01)</code></td>
+            <td>In-place stochastic gradient descent optimizer using WebGPU AXPY kernel.</td>
+          </tr>
+        </tbody>
+      </table>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    &copy; 2026 AMEVA-Forge Team. Released under Apache-2.0 License.
+  </footer>
 </body>
 </html>

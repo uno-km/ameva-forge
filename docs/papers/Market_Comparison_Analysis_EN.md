@@ -12,7 +12,7 @@ This document provides a highly rigorous and objective comparative analysis betw
 ### 🔴 1. wgpu-py (Python Native WebGPU)
 The most representative Python WebGPU library. It wraps the Rust-based `wgpu-native` binaries to operate in desktop environments.
 * **Pros:**
-  - Perfectly supports WebGPU APIs in desktop Python environments (Windows, Mac, Linux).
+  - Supports WebGPU APIs in desktop Python environments (Windows, Mac, Linux).
   - Excellent compatibility with 3D rendering libraries (e.g., pygfx).
 * **Cons:**
   - **Does not operate natively within web browser (Pyodide/WASM) environments.** (Browsers cannot execute C/Rust `.dll` binaries due to sandbox security).
@@ -33,26 +33,32 @@ A deep learning compiler framework that analyzes model code and compiles it down
 * **Pros:**
   - Achieves extreme hardware-dependent optimization by analyzing the model structure itself and compiling raw WebGPU shaders.
 * **Cons:**
-  - **The Developer Experience (DX) is hellish.** Moving a Python model to the browser requires a heavy Ahead-of-Time (AOT) compilation pipeline. Dynamically writing scripts and testing them instantly on the fly is structurally very difficult.
+  - Moving a Python model to the browser requires a heavy Ahead-of-Time (AOT) compilation pipeline. Dynamically writing scripts and testing them instantly on the fly is structurally very difficult.
 
 ---
 
 ## 2. In-Depth Dissection of AMEVA WebGPU-Python Bridge
 
-**Core Philosophy:** *"Allow Data Scientists to type the Python (Numpy-style) code they love 100% live inside a browser sandbox, and instantly pull the browser's WebGPU to execute massive AI workloads."*
+- Supports WebGPU APIs in desktop Python environments (Windows, Mac, Linux).
+- **Core Philosophy:** *"Allow Data Scientists to write Python code inside a browser sandbox, and dispatches to the browser's WebGPU for AI workloads (UNVERIFIED TARGET)."*
 
 ### ✅ Absolute Strengths (Pros)
-1. **Zero-Copy Architecture (OOM Eradication):** Passing massive arrays from Pyodide to JavaScript previously mandated a deep copy, invariably crashing the browser. The AMEVA bridge eradicated the root cause of OOM by sharing the WASM heap memory pointer directly with the WebGPU renderer without any data copying.
-2. **True Interactive Python in Browser:** No AOT compilation or ONNX conversion. Just like in a Jupyter Notebook, you type `import ameva_tensor` in the browser and execute real-time computations instantly.
-3. **Custom LLM WGSL Kernels:** Rather than simple graphics pipelines, it embeds 'Tensor Math Optimization Kernels'—such as Matrix Multiplication Tiling and Fused Softmax—specifically written to run ultra-large AI models on the web.
+> **Scope note (UNVERIFIED PROJECTION):** This document describes an architectural direction. Release 1 validates only the small-MLP scope listed in `reports/release1/RELEASE_DECISION.md`. LLM-scale kernels, extreme benchmarks, and production claims are not validated.
 
-### ⚠️ Strict Weaknesses and Limitations (Cons)
-1. **Performance Inversion in Micro-Data (Communication Overhead):** As seen in Empirical Test 3 (1024x1024 matrix), there is a 'Shipping Cost' delay inherent in invoking the bridge and exchanging memory pointers. For small and trivial calculations, the CPU is actually much faster.
-2. **Lack of PyTorch Ecosystem (No Autograd):** Currently, the AMEVA bridge is spectacularly fast at Forward Pass tensor math, but it does not support an automatic differentiation (Autograd) tree for Backpropagation like PyTorch does. Therefore, while 'Inference' in the browser is possible, complex 'Model Training' requires writing the gradient formulas manually.
-3. **JS Bridge Dependency:** It relies heavily on message passing or proxies between the Pyodide runtime and the Main Thread (JS). If the browser's Web Worker environment is unstable, communication bottlenecks can occur.
+# Market Comparison & Competitive Position Analysis (UNVERIFIED)
 
----
+## 1. Competitive Matrix
 
-## 3. Conclusion
-The AMEVA Bridge has perfectly carved out an unprecedented niche position: **"A Real-Time, Ultra-Large GPU Accelerator specifically for Browser-based Python Users,"** solving a problem that both TensorFlow.js (forced JS) and wgpu-py (desktop only) could not.
+| Feature | TensorFlow.js | ONNX Runtime Web | WebDNN | wgpu-py | **AMEVA Bridge (Target)** |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Primary Language** | JS / TS | JS / TS | JS | Python | **Python (Pyodide)** |
+| **GPU Acceleration** | WebGL / WebGPU | WebGL / WebGPU | WebGPU | WebGPU (Desktop) | **WebGPU (Browser)** |
+| **PyTorch API Parity** | Low (Custom API) | Medium (ONNX Ops) | Low | High (Python) | **High (PyTorch-like)** |
+| **Browser Execution** | Native | Native | Native | Impossible | **Native (WASM + FFI)** |
+
+## 2. Competitive Positioning
+The AMEVA Bridge aims to target a niche position: **"A Real-Time GPU Accelerator specifically designed for Browser-based Python Users (UNVERIFIED TARGET),"** aiming to bridge gaps in existing browser-based execution tools.
+
+## 3. Autograd & Training Scope Note
+Release 1 contains a basic autograd implementation for the supported MLP path. Its correctness and resource stability are not generalized to CNN, attention, or production-scale training.
 Our goal is not to defeat TensorFlow.js. **Our goal is to provide a local web OS tensor engine to the millions of AI researchers worldwide who use web browsers like Jupyter Notebooks, empowering them to multiply 550 billion matrices without ever freezing their tab.**

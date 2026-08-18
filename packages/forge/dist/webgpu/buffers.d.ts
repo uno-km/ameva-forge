@@ -27,6 +27,18 @@ export declare function allocateBuffer(byteLength: number, usage: GPUBufferUsage
  * HOW: WebGPU 큐(`device.queue.writeBuffer`)를 사용하여 주어진 데이터의 전체 크기만큼 지정된 버퍼의 오프셋 0부터 복사합니다.
  */
 export declare function writeFloat32Array(buffer: GPUBuffer, data: Float32Array): void;
+interface StagingPoolEntry {
+    buffer: GPUBuffer;
+    token: AllocationToken;
+}
+export declare const _stagingPool: Map<number, StagingPoolEntry[]>;
+export declare function clearStagingPool(): void;
+export declare function flushGC(): Promise<void>;
+export declare function acquireStagingBuffer(byteLength: number): {
+    buffer: GPUBuffer;
+    token: AllocationToken;
+};
+export declare function releaseStagingBuffer(buffer: GPUBuffer, token: AllocationToken, byteLength: number, isCorrupted?: boolean): void;
 /**
  * WHAT: GPU 버퍼의 데이터를 읽어서 CPU 메모리 상의 Float32Array로 반환합니다.
  * WHY: GPU에서 처리된 결과 데이터를 CPU로 가져와서 애플리케이션 수준에서 활용(예: 출력, 저장)하기 위해 존재합니다.
@@ -45,11 +57,12 @@ export declare function readBufferToFloat32Array(buffer: GPUBuffer, byteLength: 
 export declare function mapBufferAsync(buffer: GPUBuffer, byteLength: number): Promise<{
     stagingBuffer: GPUBuffer;
     token: AllocationToken;
+    byteLength: number;
 }>;
 /**
  * WHAT: 맵핑이 완료된 Staging 버퍼의 데이터를 외부에서 제공된 Float32Array 배열에 직접 복사합니다.
  * WHY: 새로운 배열 객체를 생성하지 않고 기존 메모리(Pre-allocated buffer)를 재사용하여 메모리 할당 및 가비지 컬렉션(GC) 부하를 줄이기 위해 사용됩니다.
- * HOW: Staging 버퍼의 맵핑 범위를 가져와서 전달된 `outArray`에 `set` 메서드로 데이터를 덮어쓴 후, 맵핑을 해제(unmap), 버퍼 파괴(destroy) 및 메모리 토큰을 해제합니다.
+ * HOW: Staging 버퍼의 맵핑 범위를 가져와서 전달된 `outArray`에 `set` 메서드로 데이터를 덮어쓴 후, unmap 후 Staging Pool로 반환합니다.
  */
 export declare function readMappedInto(stagingBuffer: GPUBuffer, token: AllocationToken, outArray: Float32Array): void;
 /**
@@ -58,3 +71,4 @@ export declare function readMappedInto(stagingBuffer: GPUBuffer, token: Allocati
  * HOW: `buffer.destroy()`를 호출하여 실제 GPU 리소스를 해제한 다음, `_globalQuotaManager.releaseToken(token)`을 통해 예약된 메모리 용량을 반환합니다.
  */
 export declare function freeBuffer(buffer: GPUBuffer, token: AllocationToken): void;
+export {};

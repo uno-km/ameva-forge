@@ -18,9 +18,9 @@ struct Params {
   // 변수: pad_val
   // 역할: 빈 공간에 채워 넣을 상수 값(패딩 값)
   pad_val: f32,
-  // 변수: _pad
-  // 역할: WebGPU 메모리 정렬(16바이트)을 맞추기 위한 여분(padding) 변수
-  _pad: u32,
+  // 변수: workgroups_x
+  // 역할: 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수
+  workgroups_x: u32,
   // 변수: in_strides
   // 역할: 최대 8차원까지 지원하는 원본 입력 텐서의 차원별 메모리 보폭(Stride) 배열
   in_strides: array<u32, 8>,
@@ -54,8 +54,8 @@ struct Params {
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   // 변수: idx
-  // 역할: 현재 스레드가 담당하는 출력 텐서의 1차원 전역 인덱스
-  let idx = global_id.x;
+  // 역할: 2D 디스패치 그리드로부터 복원한 현재 스레드의 1차원 전역 인덱스
+  let idx = global_id.x + global_id.y * params.workgroups_x * 64u;
   
   // 조건문: 인덱스 범위 확인
   // 역할: idx가 결과 텐서의 전체 크기를 넘어서면 실행을 중지하여 유효하지 않은 메모리 접근을 방지합니다.

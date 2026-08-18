@@ -156,17 +156,22 @@ def js_dispose_batch(handles: list) -> None:
     core = get_js_core()
     # 파이썬 객체를 JS 객체로 변환하기 위한 유틸리티를 Pyodide에서 가져옵니다.
     from pyodide.ffi import to_js
-    # 파이썬 리스트인 handles를 JS에서 인식할 수 있는 배열로 변환합니다.
     js_handles = to_js(handles)
-    
-    if hasattr(core, 'disposeBatch'):
-        # JS 측에 배치 해제 기능이 존재한다면, 변환된 배열을 넘겨 일괄 해제를 요청합니다.
-        core.disposeBatch(js_handles)
-    else:
-        # JS 측에 배치 기능이 없다면, 반복문을 돌며 기존 단일 해제 메서드를 사용합니다.
-        for h in handles:
-            # 리스트에 담긴 개별 핸들에 대해 순차적으로 해제를 요청합니다.
-            core.dispose(h)
+    try:
+        if hasattr(core, 'disposeBatch'):
+            # JS 측에 배치 해제 기능이 존재한다면, 변환된 배열을 넘겨 일괄 해제를 요청합니다.
+            core.disposeBatch(js_handles)
+        else:
+            # JS 측에 배치 기능이 없다면, 반복문을 돌며 기존 단일 해제 메서드를 사용합니다.
+            for h in handles:
+                # 리스트에 담긴 개별 핸들에 대해 순차적으로 해제를 요청합니다.
+                core.dispose(h)
+    finally:
+        try:
+            if hasattr(js_handles, 'destroy'):
+                js_handles.destroy()
+        except Exception:
+            pass
 
 
 def _map_js_error(e: Exception) -> None:
@@ -211,11 +216,13 @@ async def js_execute_graph(instructions_json: str, inputs) -> dict:
         if js_inputs is not None:
             try:
                 js_inputs.destroy()
-            except Exception:
-                pass
+            except Exception as e:
+                import warnings
+                warnings.warn(f"[AMEVA Bridge] Proxy cleanup failed: {e}", RuntimeWarning)
         if result_proxy is not None:
             try:
                 result_proxy.destroy()
-            except Exception:
-                pass
+            except Exception as e:
+                import warnings
+                warnings.warn(f"[AMEVA Bridge] Proxy cleanup failed: {e}", RuntimeWarning)
 

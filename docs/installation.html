@@ -1,107 +1,101 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AMEVA-Forge: Installation Guide</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Installation instructions for AMEVA-Forge in Python, Node.js, and browser environments.">
+  <title>Installation — AMEVA-Forge</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="./dist/index.js"></script>
 </head>
 <body>
-    <header>
-        <h1>AMEVA-Forge Release 1 Documentation</h1>
-    </header>
-    
-    <div class="container">
-        <nav class="sidebar">
-            <h3>Documentation</h3>
-            <ul>
-                <li><a href="index.html">Home</a></li>
-                <li><a href="installation.html"><strong>Installation</strong></a></li>
-                <li><a href="quickstart.html">Quickstart</a></li>
-                <li><a href="api-reference.html">API Reference</a></li>
-            </ul>
-            <h3>Concepts</h3>
-            <ul>
-                <li><a href="what-is-forge.html">What is Forge?</a></li>
-                <li><a href="forge-vs-pytorch.html">Forge vs PyTorch</a></li>
-            </ul>
-            <h3>Playgrounds</h3>
-            <ul>
-                <li><a href="playgrounds/benchmark.html">Benchmark Playground</a></li>
-                <li><a href="playgrounds/mnist.html">MNIST Playground</a></li>
-            </ul>
-        </nav>
-        
-        <main class="content">
-            <h2>Installation Guide</h2>
-            <p>AMEVA-Forge Release 1 introduces basic MLP training workflows bridging standard Python and Browser environments. We outline installation procedures for both architectures below.</p>
-            
-            <h3>1. Standard Python Environment (CPU/NumPy Backend)</h3>
-            <p>For server-side or desktop environments, AMEVA-Forge operates via its robust CPU backend, optimizing operations leveraging native NumPy kernels.</p>
-            
-            <h4>Prerequisites</h4>
-            <ul>
-                <li>Python 3.9 or higher</li>
-                <li>pip (Python package installer)</li>
-            </ul>
-            
-            <h4>Installation Command</h4>
-            <p>Execute the following command in your terminal:</p>
-            <pre><code>pip install ./packages/forge-py</code></pre>
-            
-            <p>Verify the installation via Python interactive shell:</p>
-            <pre><code>import forge as fg
-print(f"AMEVA-Forge Version: {fg.__version__}")
-# Output: AMEVA-Forge Version: 0.1.0</code></pre>
+  <header class="site-header">
+    <a href="index.html" class="brand-area">
+      <div class="brand-logo">A</div>
+      <span class="brand-title">AMEVA-Forge</span>
+      <span class="brand-badge">v1.0.0</span>
+    </a>
+    <div class="header-actions">
+      <a href="demo.html" class="cta-button">⚡ Try Live Studio</a>
+      <a href="https://github.com/uno-km/AMEVA-Tensor" target="_blank" class="cta-button" style="background-color: var(--bg-tertiary);">GitHub</a>
+    </div>
+  </header>
 
-            <h3>2. Browser Environment (Pyodide & WebGPU)</h3>
-            <p>To execute operations in a browser context leveraging local GPU acceleration, AMEVA-Forge utilizes Pyodide (WASM) alongside our WebGPU bridge.</p>
-            
-            <h4>Prerequisites</h4>
-            <ul>
-                <li>A modern web browser supporting WebGPU (e.g., Google Chrome 113+, Microsoft Edge 113+)</li>
-            </ul>
-            
-            <h4>Implementation</h4>
-            <p>Embed the requisite scripts within your HTML document. Ensure both the Pyodide runtime and the AMEVA-Forge bridge are initialized.</p>
-            
-            <pre><code>&lt;!-- 1. Load Pyodide --&gt;
-&lt;script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"&gt;&lt;/script&gt;
+  <div class="container">
+    <nav class="sidebar">
+      <div class="nav-group">
+        <h3>Playground</h3>
+        <ul>
+          <li><a href="demo.html">⚡ Live WebGPU Studio</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <h3>Documentation</h3>
+        <ul>
+          <li><a href="index.html">🏠 Home</a></li>
+          <li><a href="installation.html" class="active">📦 Installation</a></li>
+          <li><a href="quickstart.html">🚀 Quickstart Guide</a></li>
+          <li><a href="api-reference.html">📖 API Reference</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <h3>Concepts & Architecture</h3>
+        <ul>
+          <li><a href="what-is-forge.html">🎯 What is Forge?</a></li>
+          <li><a href="forge-vs-pytorch.html">⚖️ Forge vs PyTorch</a></li>
+        </ul>
+      </div>
+    </nav>
 
-&lt;!-- 2. Load AMEVA-Forge WebGPU Bridge --&gt;
-&lt;script&gt;var exports = {};&lt;/script&gt;
-&lt;script src="https://cdn.jsdelivr.net/npm/@ameva/forge@0.1.0/dist/index.js"&gt;&lt;/script&gt;
+    <main class="content">
+      <h1>Installation & Environment Setup</h1>
+      <p>AMEVA-Forge supports multiple execution targets: pure Python (CPython for testing/prototyping), TypeScript/JavaScript for web apps, and in-browser Pyodide with WebGPU.</p>
 
-&lt;!-- 3. Initialize Environment --&gt;
+      <h2>1. Python Package Installation</h2>
+      <p>Install the Python wheel package directly via pip:</p>
+      <pre><code># Build and install the wheel locally
+pip install forge-0.1.0-py3-none-any.whl</code></pre>
+
+      <h2>2. NPM Package for Web & Node Applications</h2>
+      <pre><code>npm install @ameva/forge</code></pre>
+
+      <h2>3. Web Browser & Pyodide Integration</h2>
+      <p>Include the TypeScript bundle and load Pyodide from CDN:</p>
+      <pre><code>&lt;!-- Load AMEVA-Forge WebGPU Backend --&gt;
+&lt;script src="https://cdn.jsdelivr.net/npm/@ameva/forge/dist/index.js"&gt;&lt;/script&gt;
+
+&lt;!-- Load Pyodide WASM Runtime --&gt;
+&lt;script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"&gt;&lt;/script&gt;
 &lt;script&gt;
-    if (exports.registerPyodideBridge) {
-        exports.registerPyodideBridge();
-    }
+  async function setup() {
+    // 1. Initialize WebGPU
+    await window.forge.initWebGPU();
     
-    async function initEnvironment() {
-        const pyodide = await loadPyodide();
-        await pyodide.loadPackage("micropip");
-        const micropip = pyodide.pyimport("micropip");
-        
-        // Install the Python wheel
-        await micropip.install("ameva-forge==0.1.0");
-        
-        // Execute Python
-        await pyodide.runPythonAsync(`
-            import forge as fg
-            print("WebGPU Backend Initialized.")
-        `);
-    }
-    initEnvironment();
+    // 2. Initialize Pyodide & Install Forge Wheel
+    const pyodide = await loadPyodide();
+    await pyodide.loadPackage("micropip");
+    const micropip = pyodide.pyimport("micropip");
+    await micropip.install("https://your-domain.com/pkg/forge-0.1.0-py3-none-any.whl");
+    
+    // 3. Ready to train models!
+    await pyodide.runPythonAsync(`
+      import forge as torch
+      print("Forge initialized on WebGPU:", torch.tensor([1.0, 2.0], device="gpu"))
+    `);
+  }
+  setup();
 &lt;/script&gt;</code></pre>
 
-            <h3>Future Outlook: Version 3.0</h3>
-            <p>We are actively developing <strong>AMEVA-Forge v3.0</strong>, which will introduce Distributed Browser Training, enabling asynchronous multi-client gradient aggregation without centralized GPU servers. Stay tuned for architectural previews.</p>
-        </main>
-    </div>
-    
-    <footer>
-        &copy; 2026 AMEVA AI. All rights reserved. Release 1 (v0.1.0).
-    </footer>
+      <h2>Browser Hardware Requirements</h2>
+      <ul>
+        <li><strong>WebGPU Compatible Browser:</strong> Chrome 113+, Edge 113+, Safari 18+ (macOS Sonoma / iOS 17+), or Firefox Nightly with WebGPU flag enabled.</li>
+        <li><strong>GPU Backend:</strong> Metal (macOS/iOS), DirectX 12 / Vulkan (Windows/Linux).</li>
+      </ul>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    &copy; 2026 AMEVA-Forge Team. Released under Apache-2.0 License.
+  </footer>
 </body>
 </html>

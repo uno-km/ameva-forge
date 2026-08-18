@@ -34,6 +34,11 @@ struct Params {
     pH: u32,
     // 너비 방향의 패딩(padding) 크기입니다.
     pW: u32,
+    // 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수입니다.
+    workgroups_x: u32,
+    pad1: u32,
+    pad2: u32,
+    pad3: u32,
 }
 
 // params: 연산 정보를 제공하는 uniform 버퍼입니다.
@@ -51,8 +56,8 @@ struct Params {
  */
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    // 현재 스레드의 선형 인덱스를 가져옵니다.
-    let idx = global_id.x;
+    // 2D 디스패치 그리드로부터 복원한 현재 스레드의 선형 인덱스를 가져옵니다.
+    let idx = global_id.x + global_id.y * params.workgroups_x * 64u;
     
     // 계산해야 할 전체 출력 요소의 총합을 구합니다 (배치 * 채널 * 출력높이 * 출력너비). (How)
     let total = params.batch * params.channels * params.out_h * params.out_w;

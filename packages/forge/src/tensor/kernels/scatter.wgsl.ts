@@ -18,15 +18,18 @@ struct Params {
   // 변수: rank
   // 역할: 텐서가 갖는 전체 차원 수
   rank: u32,
-  // 변수: _pad
-  // 역할: 메모 정렬을 위한 16바이트 패딩 변수
-  _pad: u32,
+  // 변수: workgroups_x
+  // 역할: 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수
+  workgroups_x: u32,
   // 변수: x_strides
   // 역할: 출력 배열(입력과 동일한 형상을 가지는 베이스)의 각 차원별 메모리 보폭 배열
   x_strides: array<u32, 8>,
   // 변수: idx_strides
   // 역할: 인덱스 텐서의 각 차원별 메모리 보폭 배열
   idx_strides: array<u32, 8>,
+  // 변수: x_shape
+  // 역할: 출력 텐서의 각 차원별 크기 배열 (인덱스 바운드 검사용)
+  x_shape: array<u32, 8>,
 };
 
 // 변수: params
@@ -53,7 +56,7 @@ struct Params {
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   // 변수: idx
   // 역할: 소스 데이터와 인덱스 데이터의 1차원 메모리 인덱스
-  let idx = global_id.x;
+  let idx = global_id.x + global_id.y * params.workgroups_x * 64u;
   
   // 조건문: 데이터 경계 검사
   // 역할: 할당된 스레드의 인덱스가 전체 크기(num_elements)를 초과하는지 검사합니다.
@@ -82,13 +85,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // 조건문: 타겟 차원(dim) 여부 검사
     // 역할: 현재 처리 중인 차원이 인덱스 값으로 대체할 타겟 차원인지 판단합니다.
     if (i == params.dim) {
-      // 변수: idx_val
-      // 역할: 인덱스 텐서(index)에서 해당 위치의 값을 정수로 캐스팅하여 얻은 치환될 좌표값
-      let idx_val = u32(index[idx]);
-      
-      // 변수: out_idx 누적 (치환된 축)
-      // 역할: 원래 좌표 대신 치환된 좌표(idx_val)에 출력 보폭(x_strides)을 곱해 더합니다.
-      out_idx = out_idx + idx_val * params.x_strides[i];
+      let raw_idx = index[idx];
+      let dim_size = i32(params.x_shape[i]);
+      var signed_idx = i32(raw_idx);
+      if (signed_idx < 0) {
+        signed_idx = signed_idx + dim_size;
+      }
+      // OOB or NaN check: skip execution if index is out of bounds or NaN to prevent data corruption
+      if (signed_idx < 0 || signed_idx >= dim_size || raw_idx != raw_idx) {
+        return;
+      }
+      let valid_idx = u32(signed_idx);
+      out_idx = out_idx + valid_idx * params.x_strides[i];
     } else {
       // 변수: out_idx 누적 (일반 축)
       // 역할: 원래 논리적 좌표(coord)에 출력 보폭(x_strides)을 곱해 더합니다.

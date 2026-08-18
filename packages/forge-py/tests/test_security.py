@@ -82,13 +82,26 @@ class TestSecurity(unittest.TestCase):
         self.assertEqual(str(e), "Security violation detected")
 
     def test_no_arbitrary_code_execution_via_tensor_ops(self):
-        """텐서 연산을 통해 임의의 코드 실행(RCE)이 불가능한지 확인합니다."""
+        """Verify that tensor operations cannot be used as RCE vectors."""
+        import forge as fg
         t = fg.tensor([1.0, 2.0, 3.0])
-        # Calling non-existent or dangerous methods raises AttributeError
-        with self.assertRaises(AttributeError):
-            getattr(t, "eval")
-        with self.assertRaises(AttributeError):
-            getattr(t, "system")
+        
+        # Verify no dangerous builtins are accessible through tensor
+        dangerous_attrs = ['__import__', '__subclasses__', '__globals__', 
+                           '__builtins__', 'system', 'exec', 'eval', 'compile']
+        for attr in dangerous_attrs:
+            self.assertFalse(
+                callable(getattr(t, attr, None)),
+                f"Tensor exposes callable dangerous attribute: {attr}"
+            )
+        
+        # Verify graph builder rejects potentially dangerous op names
+        from forge.graph import GraphBuilder
+        gb = GraphBuilder()
+        with self.assertRaises((ValueError, KeyError)):
+            gb.add_op('__import__', [], [1], [])
+        with self.assertRaises((ValueError, KeyError)):
+            gb.add_op('eval', [], [1], [])
 
     def test_tensor_repr_does_not_leak_sensitive_info(self):
         """텐서의 __repr__ 출력이 메모리 주소 등 민감한 정보를 노출하지 않는지 확인합니다."""

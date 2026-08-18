@@ -21,6 +21,7 @@ import {
   writeFloat32Array,
   readBufferToFloat32Array,
   freeBuffer,
+  clearStagingPool,
   mapBufferAsync as _mapBufferAsync,
   readMappedInto as _readMappedInto,
 } from "../webgpu/buffers";
@@ -33,6 +34,8 @@ import { AMEVAForgeShapeError, AMEVAForgeDTypeError } from "../errors";
 import { validateShape } from "./validateShape";
 import { validateDType } from "./validateDType";
 import { assertWasmRange } from "../webgpu/validateWasmRange";
+import { computeBroadcastParams } from "./broadcastParams";
+import { computeDispatch2D } from "./dispatchShape";
 
 import { MATMUL_WGSL } from "./kernels/matmul.wgsl";
 import { RELU_WGSL } from "./kernels/relu.wgsl";
@@ -53,6 +56,8 @@ import { FILL_WGSL } from "./kernels/fill.wgsl";
 import { SUM_WGSL } from "./kernels/sum.wgsl";
 import { MAX_WGSL } from "./kernels/max.wgsl";
 import { SUM_AXIS_WGSL } from "./kernels/sum_axis.wgsl";
+import { MAX_AXIS_WGSL } from "./kernels/max_axis.wgsl";
+import { MAX_AXIS_BACKWARD_WGSL } from "./kernels/max_axis_backward.wgsl";
 import { AXPY_WGSL } from "./kernels/axpy.wgsl";
 import { PAD_WGSL } from "./kernels/pad.wgsl";
 import { GATHER_WGSL } from "./kernels/gather.wgsl";
@@ -66,6 +71,7 @@ import { IM2COL_WGSL } from "./kernels/im2col.wgsl";
 import { COL2IM_WGSL } from "./kernels/col2im.wgsl";
 import { PERMUTE_WGSL } from "./kernels/permute.wgsl";
 import { BATCHED_MATMUL_WGSL } from "./kernels/batched_matmul.wgsl";
+import { MATMUL_BIAS_RELU_WGSL } from "./kernels/matmul_bias_relu.wgsl";
 
 /**
  * WHAT: 모든 WGSL 셰이더 코드를 커널 이름에 매핑하여 저장하는 전역 읽기 전용 레지스트리 맵입니다.
@@ -74,6 +80,7 @@ import { BATCHED_MATMUL_WGSL } from "./kernels/batched_matmul.wgsl";
  */
 export const KERNEL_REGISTRY: ReadonlyMap<string, string> = new Map([
   ['matmul', MATMUL_WGSL],
+  ['matmul_bias_relu', MATMUL_BIAS_RELU_WGSL],
   ['batched_matmul', BATCHED_MATMUL_WGSL],
   ['relu', RELU_WGSL],
   ['add', ADD_WGSL],
@@ -93,6 +100,8 @@ export const KERNEL_REGISTRY: ReadonlyMap<string, string> = new Map([
   ['sum', SUM_WGSL],
   ['max', MAX_WGSL],
   ['sum_axis', SUM_AXIS_WGSL],
+  ['max_axis', MAX_AXIS_WGSL],
+  ['max_axis_backward', MAX_AXIS_BACKWARD_WGSL],
   ['axpy', AXPY_WGSL],
   ['pad', PAD_WGSL],
   ['gather', GATHER_WGSL],
@@ -123,23 +132,49 @@ const _inFlightMapPromises = new Map<TensorHandle, Promise<void>>();
  * WHY: 디바이스 유실(Device Lost) 이벤트가 발생하거나 시스템 강제 리셋 시 남은 자원의 메모리 누수를 방지하기 위해 존재합니다.
  * HOW: 텐서 레지스트리, 쿼터 매니저, 파이프라인 캐시를 지우고, 대기 중인 스테이징 버퍼들도 순회하여 언맵(unmap) 및 파괴(destroy)합니다.
  */
-export function resetRuntimeMemory(): void {
-  _globalRegistry.clear();
-  _globalQuotaManager.reset();
-  _globalPipelineCache.clear();  // L-03 Fix: device lost 시 파이프라인 캐시도 무효화
-  _inFlightMapPromises.clear();
+export function resetRuntimeMemory(reason: string = "manual-reset"): void {
+  _safeLog(`[RuntimeReset] start: ${reason}`);
   
-  /**
-   * WHAT: 스테이징 버퍼 맵에 남아있는 모든 엔트리를 순회하여 파괴하는 루프입니다.
-   * WHY: 사용되지 않고 남겨진 스테이징 버퍼가 VRAM을 계속 차지하는 것을 방지하기 위해 필요합니다.
-   * HOW: _pendingStagingBuffers 맵의 모든 값을 하나씩 꺼내어 언맵 및 소각을 시도하고 토큰을 해제합니다.
-   */
-  for (const [, obj] of _pendingStagingBuffers) {
-    try { obj.stagingBuffer.unmap(); } catch { /* already unmapped */ }
-    try { obj.stagingBuffer.destroy(); } catch { /* already destroyed */ }
-    _globalQuotaManager.releaseToken(obj.token);
+  // 1. Pending staging buffers & staging pool cleanup
+  try {
+    for (const [, obj] of _pendingStagingBuffers) {
+      try { obj.stagingBuffer.unmap(); } catch { /* already unmapped */ }
+      try { obj.stagingBuffer.destroy(); } catch { /* already destroyed */ }
+      _globalQuotaManager.releaseToken(obj.token);
+    }
+    _pendingStagingBuffers.clear();
+  } catch (e) {
+    _safeLog(`[RuntimeReset] staging buffer cleanup error: ${e}`);
   }
-  _pendingStagingBuffers.clear();
+
+  try {
+    clearStagingPool(); // VULN-04: Clear pool buffers & tokens
+  } catch (e) {
+    _safeLog(`[RuntimeReset] clearStagingPool error: ${e}`);
+  }
+
+  // 2. In-flight promises & pipeline cache
+  try {
+    _inFlightMapPromises.clear();
+    _globalPipelineCache.clear();
+  } catch (e) {
+    _safeLog(`[RuntimeReset] pipeline cache error: ${e}`);
+  }
+
+  // 3. Quota & registry reset
+  try {
+    _globalRegistry.clear();
+  } catch (e) {
+    _safeLog(`[RuntimeReset] registry clear error: ${e}`);
+  }
+
+  try {
+    _globalQuotaManager.reset();
+  } catch (e) {
+    _safeLog(`[RuntimeReset] quota reset error: ${e}`);
+  }
+
+  _safeLog(`[RuntimeReset] done: ${reason}`);
 }
 
 /**
@@ -495,7 +530,7 @@ function dispatchKernel(opts: KernelDispatchOptions): void {
 
   // params 버퍼는 GPU 제출 완료 후 중앙 allocator를 통해 해제
   void device.queue.onSubmittedWorkDone().then(() => {
-    try { freeBuffer(paramsBuffer, paramsToken); } catch {}
+    try { freeBuffer(paramsBuffer, paramsToken); } catch (e) { _safeLog(`[gpuCore] Failed to free params buffer: ${e}`); }
   });
 }
 
@@ -681,14 +716,16 @@ export function relu(handle: TensorHandle): TensorHandle {
    */
   const numElements = x.byteLength / 4;
   const { buffer: outBuffer, token } = allocateBuffer(x.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const dispatch = computeDispatch2D(numElements, 64);
 
   dispatchKernel({
     opKey: 'relu',
     wgslCode: RELU_WGSL,
-    paramsData: new Uint32Array([numElements, 0, 0, 0]),
+    paramsData: new Uint32Array([numElements, dispatch.workgroupsX, 0, 0]),
     inputBuffers: [x.buffer],
     outBuffer,
-    dispatchX: Math.ceil(numElements / 64),
+    dispatchX: dispatch.dispatchX,
+    dispatchY: dispatch.dispatchY,
   });
 
   return _globalRegistry.register({ buffer: outBuffer, token, shape: [...x.shape], dtype: "float32", byteLength: x.byteLength });
@@ -700,40 +737,35 @@ export function relu(handle: TensorHandle): TensorHandle {
  * HOW: 형태가 같은 두 텐서 버퍼를 넘겨받아 add 셰이더를 실행시키고 새로운 텐서를 생성해 반환합니다.
  */
 export function add(handleA: TensorHandle, handleB: TensorHandle): TensorHandle {
-  /**
-   * WHAT: 덧셈의 왼쪽 항(A) 텐서 레코드입니다.
-   * WHY: A의 버퍼 데이터를 연산 파이프라인에 주입하고 반환 텐서의 모양을 빌리기 위해 참조됩니다.
-   * HOW: 레지스트리를 통해 핸들로 가져옵니다.
-   */
   const a = _globalRegistry.get(handleA);
-  
-  /**
-   * WHAT: 덧셈의 오른쪽 항(B) 텐서 레코드입니다.
-   * WHY: A와 합쳐질 데이터를 제공하기 위해 조회됩니다.
-   * HOW: 레지스트리를 통해 조회됩니다.
-   */
   const b = _globalRegistry.get(handleB);
-  // F-020 Fix: Direct API (add, mul) exact shape match
   if (a.shape.length !== b.shape.length || !a.shape.every((v, i) => v === b.shape[i]))
     throw new AMEVAForgeShapeError("Add requires tensors of the exact same shape");
   if (a.dtype !== "float32" || b.dtype !== "float32")
     throw new AMEVAForgeDTypeError("Add requires float32");
 
-  /**
-   * WHAT: 두 텐서가 공통으로 가지고 있는 원소의 수입니다.
-   * WHY: 셰이더가 병렬로 처리해야 할 작업의 총 개수(스레드 한계)를 지정하기 위함입니다.
-   * HOW: 바이트 길이를 4로 나누어 구합니다.
-   */
   const numElements = a.byteLength / 4;
   const { buffer: outBuffer, token } = allocateBuffer(a.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+
+  const { dOut, effSA, effSB } = computeBroadcastParams(a.shape, a.shape, b.shape);
+  const dispatch = computeDispatch2D(numElements, 64);
+  const paramsData = new Uint32Array(28);
+  paramsData[0] = numElements;
+  paramsData[1] = dispatch.workgroupsX;
+  paramsData[2] = a.shape.length;
+  paramsData[3] = 0;
+  for (let k = 0; k < 8; k++) paramsData[4 + k] = dOut[k];
+  for (let k = 0; k < 8; k++) paramsData[12 + k] = effSA[k];
+  for (let k = 0; k < 8; k++) paramsData[20 + k] = effSB[k];
 
   dispatchKernel({
     opKey: 'add',
     wgslCode: ADD_WGSL,
-    paramsData: new Uint32Array([numElements, 0, 0, 0]),
+    paramsData,
     inputBuffers: [a.buffer, b.buffer],
     outBuffer,
-    dispatchX: Math.ceil(numElements / 64),
+    dispatchX: dispatch.dispatchX,
+    dispatchY: dispatch.dispatchY,
   });
 
   return _globalRegistry.register({ buffer: outBuffer, token, shape: [...a.shape], dtype: "float32", byteLength: a.byteLength });
@@ -745,40 +777,35 @@ export function add(handleA: TensorHandle, handleB: TensorHandle): TensorHandle 
  * HOW: 형태가 같은 두 텐서를 기반으로 mul 커널을 디스패치합니다.
  */
 export function mul(handleA: TensorHandle, handleB: TensorHandle): TensorHandle {
-  /**
-   * WHAT: 곱셈 대상인 첫 번째 텐서(A)의 레코드입니다.
-   * WHY: 연산의 피연산자 버퍼로 사용하기 위해 레지스트리에서 가져옵니다.
-   * HOW: _globalRegistry.get을 통해 획득합니다.
-   */
   const a = _globalRegistry.get(handleA);
-  
-  /**
-   * WHAT: 곱셈 대상인 두 번째 텐서(B)의 레코드입니다.
-   * WHY: 연산의 피연산자 버퍼로 사용하기 위해 레지스트리에서 가져옵니다.
-   * HOW: _globalRegistry.get을 통해 획득합니다.
-   */
   const b = _globalRegistry.get(handleB);
-  // F-020 Fix: Direct API exact shape match
   if (a.shape.length !== b.shape.length || !a.shape.every((v, i) => v === b.shape[i]))
     throw new AMEVAForgeShapeError("Mul requires tensors of the exact same shape");
   if (a.dtype !== "float32" || b.dtype !== "float32")
     throw new AMEVAForgeDTypeError("Mul requires float32");
 
-  /**
-   * WHAT: 텐서 내 단일 요소들의 총 개수입니다.
-   * WHY: 디스패치할 워크그룹 수를 결정하기 위해 계산됩니다.
-   * HOW: 전체 바이트 수를 원소 타입 크기(4)로 나누어 구합니다.
-   */
   const numElements = a.byteLength / 4;
   const { buffer: outBuffer, token } = allocateBuffer(a.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+
+  const { dOut, effSA, effSB } = computeBroadcastParams(a.shape, a.shape, b.shape);
+  const dispatch = computeDispatch2D(numElements, 64);
+  const paramsData = new Uint32Array(28);
+  paramsData[0] = numElements;
+  paramsData[1] = dispatch.workgroupsX;
+  paramsData[2] = a.shape.length;
+  paramsData[3] = 0;
+  for (let k = 0; k < 8; k++) paramsData[4 + k] = dOut[k];
+  for (let k = 0; k < 8; k++) paramsData[12 + k] = effSA[k];
+  for (let k = 0; k < 8; k++) paramsData[20 + k] = effSB[k];
 
   dispatchKernel({
     opKey: 'mul',
     wgslCode: MUL_WGSL,
-    paramsData: new Uint32Array([numElements, 0, 0, 0]),
+    paramsData,
     inputBuffers: [a.buffer, b.buffer],
     outBuffer,
-    dispatchX: Math.ceil(numElements / 64),
+    dispatchX: dispatch.dispatchX,
+    dispatchY: dispatch.dispatchY,
   });
 
   return _globalRegistry.register({ buffer: outBuffer, token, shape: [...a.shape], dtype: "float32", byteLength: a.byteLength });
@@ -790,33 +817,21 @@ export function mul(handleA: TensorHandle, handleB: TensorHandle): TensorHandle 
  * HOW: 입력 형태(shape)의 [M, N]을 [N, M]으로 뒤집은 결과를 반환할 출력 버퍼에 기록하도록 transpose 셰이더를 실행합니다.
  */
 export function transpose(handle: TensorHandle): TensorHandle {
-  /**
-   * WHAT: 전치 연산을 수행할 원본 2차원 텐서 레코드입니다.
-   * WHY: 모양 검증과 입력 버퍼 주입을 위해 필요합니다.
-   * HOW: 레지스트리에서 핸들로 텐서 데이터를 조회합니다.
-   */
   const x = _globalRegistry.get(handle);
   if (x.shape.length !== 2)
     throw new AMEVAForgeShapeError("Transpose requires 2D tensors");
   if (x.dtype !== "float32")
     throw new AMEVAForgeDTypeError("Transpose requires float32");
 
-  /**
-   * WHAT: 원본 텐서의 행 크기(M)와 열 크기(N)입니다.
-   * WHY: 전치 후의 새로운 모양을 지정하고, 2차원 워크그룹을 디스패치하기 위해 필요합니다.
-   * HOW: x.shape 배열에서 직접 값을 추출합니다.
-   */
   const M = x.shape[0], N = x.shape[1];
   const { buffer: outBuffer, token } = allocateBuffer(x.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
 
   dispatchKernel({
     opKey: 'transpose',
     wgslCode: TRANSPOSE_WGSL,
-    // F-021 Fix: transpose 커널은 B 파라미터를 요구하므로 기본값 1 전달
     paramsData: new Uint32Array([M, N, 1, 0]),
     inputBuffers: [x.buffer],
     outBuffer,
-    // transpose 셰이더: row=global_id.x, col=global_id.y
     dispatchX: Math.ceil(M / 8),
     dispatchY: Math.ceil(N / 8),
   });
@@ -830,39 +845,34 @@ export function transpose(handle: TensorHandle): TensorHandle {
  * HOW: 원본 입력 텐서(x)와 위층에서 전달된 그래디언트 텐서(grad)를 받아, x가 0보다 큰 곳은 grad를, 아니면 0을 출력 버퍼에 씁니다.
  */
 export function relu_backward(handleX: TensorHandle, handleGrad: TensorHandle): TensorHandle {
-  /**
-   * WHAT: 순전파 때 사용되었던 원래의 입력 텐서(x) 레코드입니다.
-   * WHY: 데이터가 양수였는지 음수였는지 판단하는 마스크 역할을 수행하기 위해 조회합니다.
-   * HOW: 레지스트리에서 handleX 키로 가져옵니다.
-   */
   const x = _globalRegistry.get(handleX);
-  
-  /**
-   * WHAT: 네트워크 상위 층에서 전파되어 내려온 손실(Loss)의 기울기 텐서입니다.
-   * WHY: ReLU의 미분값과 곱해져 현재 층의 최종 기울기를 형성하기 위해 사용됩니다.
-   * HOW: 레지스트리에서 handleGrad 키로 가져옵니다.
-   */
   const grad = _globalRegistry.get(handleGrad);
-  // F-020 Fix: Direct API exact shape match
   if (x.shape.length !== grad.shape.length || !x.shape.every((v, i) => v === grad.shape[i]))
     throw new AMEVAForgeShapeError("ReLU backward: shape mismatch");
 
-  /**
-   * WHAT: 그래디언트를 적용할 총 원소의 수입니다.
-   * WHY: 워크그룹 수를 계산하여 GPU 전체 스레드 리소스를 할당하기 위해 필요합니다.
-   * HOW: 바이트 길이를 4로 나눈 값으로 산출합니다.
-   */
   const numElements = x.byteLength / 4;
   const { buffer: outBuffer, token } = allocateBuffer(x.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+  const dispatch = computeDispatch2D(numElements, 64);
 
   dispatchKernel({
     opKey: 'relu_backward',
     wgslCode: RELU_BACKWARD_WGSL,
-    paramsData: new Uint32Array([numElements, 0, 0, 0]),
+    paramsData: new Uint32Array([numElements, dispatch.workgroupsX, 0, 0]),
     inputBuffers: [x.buffer, grad.buffer],
     outBuffer,
-    dispatchX: Math.ceil(numElements / 64),
+    dispatchX: dispatch.dispatchX,
+    dispatchY: dispatch.dispatchY,
   });
 
   return _globalRegistry.register({ buffer: outBuffer, token, shape: [...x.shape], dtype: "float32", byteLength: x.byteLength });
 }
+
+export const gpuCore = {
+  add,
+  mul,
+  matmul,
+  relu,
+  relu_backward,
+  transpose,
+};
+

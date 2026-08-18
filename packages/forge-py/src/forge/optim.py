@@ -12,11 +12,17 @@
 # WHAT: typing 모듈에서 List 타입을 임포트합니다.
 # WHY: 파라미터 리스트의 타입을 명시하여 정적 분석과 코드 가독성을 높이기 위함입니다.
 # HOW: 타입 힌트 어노테이션에 List를 사용합니다.
-from typing import List
+from typing import List, Optional
 import math
 import numpy as np
 from .tensor import Tensor
-from .errors import AMEVAForgeDeviceError, AMEVAForgeShapeError
+from .errors import (
+    AMEVAForgeDeviceError,
+    AMEVAForgeShapeError,
+    AMEVAForgeValidationError,
+    AMEVAForgeUnsupportedOperationError,
+)
+from .ops import _require_cpu_data
 
 # WHAT: 모든 최적화 알고리즘의 베이스 클래스인 Optimizer입니다.
 # WHY: 다양한 옵티마이저(SGD, Adam 등)가 공통으로 가질 속성과 메서드 인터페이스를 정의하기 위함입니다.
@@ -25,7 +31,7 @@ class Optimizer:
     # WHAT: Optimizer 인스턴스를 초기화하는 메서드입니다.
     # WHY: 최적화할 파라미터 목록과 학습률을 객체 내부에 저장하기 위함입니다.
     # HOW: 전달받은 파라미터 리스트를 복사하여 저장하고 학습률을 설정합니다.
-    def __init__(self, params: List[Tensor], lr: float = 0.01):
+    def __init__(self, params: List[Tensor], lr: float = 0.01, strict_training: bool = False):
         # WHAT: 최적화 대상이 되는 텐서 파라미터들의 리스트입니다.
         # WHY: 원본 리스트가 외부에서 변경되는 것을 방지하고 안전하게 관리하기 위함입니다.
         # HOW: list() 함수를 통해 새로운 리스트 객체로 복사하여 저장합니다.
@@ -35,6 +41,10 @@ class Optimizer:
         # WHY: 각 파라미터 업데이트 시 그래디언트를 얼마나 반영할지 스텝 크기를 결정하기 위함입니다.
         # HOW: 속성으로 저장되어 step 연산에 곱해집니다.
         self.lr = lr
+
+        # WHAT: 엄격 학습 모드(Strict Training Mode) 플래그입니다.
+        # WHY: NaN/Inf 그래디언트 발생 시 즉시 Fail-Fast 예외를 발생시켜 학습 발산을 조기 차단하기 위함입니다.
+        self.strict_training = strict_training
     
     # WHAT: 파라미터 업데이트를 수행하는 메서드 인터페이스입니다.
     # WHY: 각 옵티마이저마다 고유의 업데이트 규칙(규칙)을 적용하기 위함입니다.
@@ -68,28 +78,34 @@ class Optimizer:
 
     # WHAT: 등록된 모든 파라미터의 그래디언트를 초기화(None)하는 메서드입니다.
     # WHY: 새로운 미니배치의 학습을 시작할 때 이전 배치의 누적된 그래디언트를 지우기 위함입니다.
-    # HOW: 파라미터 리스트를 순회하며 grad 속성을 None으로 설정합니다.
     def zero_grad(self):
         for p in self.params:
-            p.grad = None
+            if p.grad is not None:
+                if getattr(p.grad, 'device', None) == 'gpu' and getattr(p.grad, '_handle', None) is not None:
+                    try:
+                        p.grad.dispose()
+                    except Exception:
+                        pass
+                p.grad = None
 
 
 # WHAT: 확률적 경사 하강법(Stochastic Gradient Descent, SGD) 옵티마이저 클래스입니다.
 # WHY: 모멘텀(Momentum)이 적용될 수 있는 기본적인 기울기 하강 업데이트를 수행하기 위함입니다.
 # HOW: Optimizer를 상속받아 step 메서드를 구현하고, 속도를 추적하는 velocity 배열을 관리합니다.
 class SGD(Optimizer):
-    def __init__(self, params, lr=0.01, momentum=0.0):
-        super().__init__(params, lr)
+    def __init__(self, params, lr=0.01, momentum=0.0, strict_training: bool = False):
+        super().__init__(params, lr, strict_training=strict_training)
         self.momentum = momentum
         self.velocity = [None] * len(self.params)
     
-    def step(self):
+    def step(self, strict: Optional[bool] = None):
         """
         CPU parameter 전용 동기 SGD step.
 
         GPU parameter는 readback이 비동기이므로 이 메서드에서 처리하지 않는다.
         GPU 학습에서는 반드시 `await optimizer.step_async()`를 사용한다.
         """
+        use_strict = self.strict_training if strict is None else strict
         for i, p in enumerate(self.params):
             if p.grad is None:
                 continue
@@ -103,6 +119,11 @@ class SGD(Optimizer):
                 )
 
             grad_data = p.grad.numpy()
+            if use_strict and not np.isfinite(grad_data).all():
+                raise AMEVAForgeValidationError(
+                    "Non-finite gradient (NaN/Inf) detected in strict training mode."
+                )
+
             param_data = p.numpy()
 
             if self.momentum > 0.0:
@@ -120,13 +141,14 @@ class SGD(Optimizer):
             p._version += 1
             p.grad = None
 
-    async def step_async(self):
+    async def step_async(self, strict: Optional[bool] = None):
         """
         CPU와 GPU parameter를 모두 처리하는 공식 비동기 SGD step.
 
         GPU parameter는 기존 AXPY WGSL을 통해 readback 없이 in-place 갱신한다.
         Release 1에서는 GPU momentum을 지원하지 않으며, 단일 스텝 내 혼합 장치를 허용하지 않는다.
         """
+        use_strict = self.strict_training if strict is None else strict
         if not math.isfinite(self.lr) or self.lr <= 0.0:
             raise ValueError(f"lr must be finite and > 0, got {self.lr}")
 
@@ -148,8 +170,10 @@ class SGD(Optimizer):
         from .graph import GraphBuilder
         from .bridge import js_execute_graph
 
+        builder = GraphBuilder()
         cpu_updates = []
-        gpu_updates = []
+        param_out_map = []
+        param_entries = []
 
         for i, p in enumerate(self.params):
             if p.grad is None:
@@ -159,6 +183,10 @@ class SGD(Optimizer):
 
             if p.device == "cpu":
                 grad_data = p.grad.numpy()
+                if use_strict and not np.isfinite(grad_data).all():
+                    raise AMEVAForgeValidationError(
+                        "Non-finite gradient (NaN/Inf) detected in strict training mode."
+                    )
                 param_data = p.numpy()
 
                 if self.momentum > 0.0:
@@ -183,23 +211,31 @@ class SGD(Optimizer):
                     "GPU SGD requires realized parameter and gradient handles."
                 )
 
+            if use_strict:
+                grad_check = await p.grad.numpy_async()
+                if not np.isfinite(grad_check).all():
+                    raise AMEVAForgeValidationError(
+                        "Non-finite gradient (NaN/Inf) detected in strict training mode on GPU."
+                    )
+
             num_elements = int(np.prod(p.shape, dtype=np.int64))
             if num_elements <= 0:
                 raise AMEVAForgeShapeError(
                     f"GPU SGD does not support empty parameter: shape={p.shape}"
                 )
 
-            builder = GraphBuilder()
             grad_id = builder.add_load(p.grad.shape, p.grad._handle)
             param_id = builder.add_load(p.shape, p._handle)
+            param_entries.append((p, num_elements, grad_id, param_id))
+
+        for p, num_elements, grad_id, param_id in param_entries:
             out_id = builder.add_op(
                 "axpy",
                 p.shape,
                 [grad_id, param_id],
                 [num_elements, float(self.lr)],
             )
-            instructions, inputs = builder.compile()
-            gpu_updates.append((p, out_id, instructions, inputs))
+            param_out_map.append((p, out_id))
 
         # CPU 계산은 검증이 끝난 뒤 원자적으로 반영한다.
         for p, param_data, update in cpu_updates:
@@ -207,19 +243,27 @@ class SGD(Optimizer):
             p._version += 1
             p.grad = None
 
-        # GPU graph는 parameter별로 직렬 실행된다.
-        for p, out_id, instructions, inputs in gpu_updates:
+        # GPU 그래프는 단일 일괄 FFI 호출로 실행하여 브리지 오버헤드를 최소화한다.
+        if param_out_map:
+            instructions, inputs = builder.compile()
             result = await js_execute_graph(instructions, inputs)
-            returned_handle = result.get(str(out_id)) or result.get(out_id)
 
-            # axpy는 in-place 계약이므로 같은 parameter handle을 반환해야 한다.
-            if returned_handle != p._handle:
-                raise AMEVAForgeDeviceError(
-                    "AXPY contract violation: optimizer returned a different handle."
-                )
+            for p, out_id in param_out_map:
+                returned_handle = result.get(str(out_id)) or result.get(out_id)
 
-            p._version += 1
-            p.grad = None
+                # axpy는 in-place 계약이므로 같은 parameter handle을 반환해야 한다.
+                if returned_handle != p._handle:
+                    raise AMEVAForgeDeviceError(
+                        "AXPY contract violation: optimizer returned a different handle."
+                    )
+
+                p._version += 1
+                if p.grad is not None and getattr(p.grad, 'device', None) == 'gpu':
+                    try:
+                        p.grad.dispose()
+                    except Exception:
+                        pass
+                p.grad = None
 
 
 # WHAT: Adam(Adaptive Moment Estimation) 옵티마이저 클래스입니다.
@@ -274,15 +318,12 @@ class Adam(Optimizer):
 
             if p.device == "gpu":
                 raise AMEVAForgeDeviceError(
-                    "Adam.step() is CPU-only in Release 1. "
-                    "Move parameters to CPU or use SGD.step_async() for GPU optimization."
+                    "Adam optimizer does not support synchronous GPU step in Release 1. "
+                    "Use SGD.step_async() for GPU models, or run Adam on CPU tensors."
                 )
-                
-            # WHAT: 그래디언트 및 파라미터 데이터 배열을 확보하는 변수들입니다.
-            # WHY: 수학적 연산(numpy 배열 기반)을 수행하기 위함입니다.
-            # HOW: _data를 직접 참조하거나 numpy() 메서드를 호출하여 가져옵니다.
-            g = p.grad._data if hasattr(p.grad, '_data') and p.grad._data is not None else p.grad.numpy()
-            param_data = p._data if hasattr(p, '_data') and p._data is not None else p.numpy()
+            else:
+                g = _require_cpu_data(p.grad, "p.grad")
+                param_data = _require_cpu_data(p, "p")
             
             if self.m[i] is None:
                 # WHAT: 처음 업데이트 시 모멘트 배열을 0으로 초기화합니다.
@@ -315,6 +356,15 @@ class Adam(Optimizer):
             p._version += 1
             p.grad = None
 
+    async def step_async(self):
+        for p in self.params:
+            if p.device == "gpu":
+                raise AMEVAForgeUnsupportedOperationError(
+                    "Adam async GPU step is not supported in Release 1. "
+                    "Use SGD for GPU training or move parameters to CPU."
+                )
+        self.step()
+
 
 # WHAT: 파라미터들의 그래디언트 글로벌 L2 노름(Norm)을 제한(Clip)하는 함수입니다.
 # WHY: RNN이나 깊은 신경망에서 그래디언트 폭발(Gradient Exploding) 문제를 방지하여 학습을 안정화하기 위함입니다.
@@ -329,13 +379,14 @@ def clip_grad_norm(parameters: List[Tensor], max_norm: float):
     # WHY: 전체 벡터 공간에서의 길이를 파악하기 위함입니다.
     # HOW: 각 파라미터의 grad를 배열로 변환해 요소별 제곱 후 더합니다.
     for p in parameters:
+        if p.device == "gpu" or (p.grad is not None and p.grad.device == "gpu"):
+            raise AMEVAForgeDeviceError(
+                "clip_grad_norm is supported only for CPU parameters in Release 1. "
+                "GPU-native gradient clipping requires asynchronous GPU reduction."
+            )
         if p.grad is not None:
-            # WHAT: 그래디언트 데이터를 추출하는 변수입니다.
-            # WHY: 제곱 연산을 적용하기 위함입니다.
-            # HOW: numpy() 혹은 _data 속성을 가져옵니다.
-            g = p.grad.numpy() if hasattr(p.grad, 'numpy') else getattr(p.grad, '_data', None)
-            if g is not None:
-                total_norm += np.sum(g ** 2)
+            g = _require_cpu_data(p.grad, "p.grad")
+            total_norm += np.sum(g ** 2)
                 
     # WHAT: 전체 분산 합계에 제곱근을 취해 최종 L2 노름을 구합니다.
     # WHY: 스케일링 계수를 계산하기 위한 실수값을 얻기 위함입니다.
@@ -353,9 +404,8 @@ def clip_grad_norm(parameters: List[Tensor], max_norm: float):
         # HOW: 각 파라미터를 다시 순회하며 그래디언트 배열에 clip_coef를 곱해줍니다.
         for p in parameters:
             if p.grad is not None:
-                g = p.grad.numpy() if hasattr(p.grad, 'numpy') else getattr(p.grad, '_data', None)
-                if g is not None:
-                    p.grad._data = (g * clip_coef).astype(np.float32)
+                g = _require_cpu_data(p.grad, "p.grad")
+                p.grad._data = (g * clip_coef).astype(np.float32)
 
 # WHAT: 개별 그래디언트 요소의 최댓값/최솟값을 직접 자르는(Value Clipping) 함수입니다.
 # WHY: 매우 큰 특정 그래디언트 값이 전체 학습을 망치는 것을 방지하기 위함입니다.
@@ -365,16 +415,13 @@ def clip_grad_value(parameters: List[Tensor], clip_value: float):
     # WHY: 각 텐서의 그래디언트에 클리핑을 적용하기 위함입니다.
     # HOW: for문을 통해 파라미터를 하나씩 꺼냅니다.
     for p in parameters:
+        if p.device == "gpu" or (p.grad is not None and p.grad.device == "gpu"):
+            raise AMEVAForgeDeviceError(
+                "clip_grad_value is supported only for CPU parameters in Release 1."
+            )
         if p.grad is not None:
-            # WHAT: 그래디언트 데이터를 추출합니다.
-            # WHY: 넘파이 배열 단위로 값의 범위를 자르기 위함입니다.
-            # HOW: _data 또는 numpy()를 통해 데이터를 가져옵니다.
-            g = p.grad.numpy() if hasattr(p.grad, 'numpy') else getattr(p.grad, '_data', None)
-            if g is not None:
-                # WHAT: 그래디언트 값을 제한 범위 내로 자릅니다.
-                # WHY: 허용된 최대 폭발치를 넘지 못하도록 막기 위함입니다.
-                # HOW: np.clip 함수를 사용하여 범위를 지정하고 다시 _data에 저장합니다.
-                p.grad._data = np.clip(g, -clip_value, clip_value).astype(np.float32)
+            g = _require_cpu_data(p.grad, "p.grad")
+            p.grad._data = np.clip(g, -clip_value, clip_value).astype(np.float32)
 
 # WHAT: 정해진 에포크 주기마다 학습률을 단계적으로 감소시키는 스케줄러입니다.
 # WHY: 학습 후반부에 학습률을 낮춰 더 세밀한 최적화 지점(Global Minimum)에 도달하게 하기 위함입니다.

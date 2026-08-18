@@ -16,6 +16,11 @@ const server = http.createServer((req, res) => {
     fs.readdir(publicDir, (err, files) => {
       if (err) { res.writeHead(500); return res.end(); }
       const wheels = files.filter(f => f.endsWith('.whl'));
+      wheels.sort((a, b) => {
+        const statA = fs.statSync(path.join(publicDir, a));
+        const statB = fs.statSync(path.join(publicDir, b));
+        return statB.mtimeMs - statA.mtimeMs;
+      });
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(wheels));
     });

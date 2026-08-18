@@ -12,12 +12,12 @@ export const DROPOUT_WGSL = `
 struct Params {
   // 드롭아웃을 적용할 전체 데이터 원소의 개수입니다.
   num_elements: u32,
-  // 난수 생성의 기반이 되는 시드(seed) 값입니다. 매번 다른 패턴의 드롭아웃을 적용하기 위해 외부에서 주입됩니다.
-  seed: f32,
+  // 난수 생성의 기반이 되는 32비트 정수 시드(seed) 값입니다.
+  seed: u32,
   // 드롭아웃 확률(p)입니다. (0.0 ~ 1.0) 이 확률보다 낮게 난수가 나오면 해당 값을 0으로 끕니다.
   p: f32,
-  // 데이터 정렬 규칙(16바이트)을 충족시키기 위해 존재하는 의미 없는 패딩 값입니다.
-  padding: f32,
+  // 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수
+  workgroups_x: u32,
 }
 
 // params: 드롭아웃 파라미터를 담고 있는 Uniform 버퍼입니다.
@@ -64,8 +64,7 @@ fn rand_f32(hash: u32) -> f32 {
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // 2차원(Y) 워크그룹 구조를 1차원으로 풀어 현재 스레드의 전역 선형 인덱스를 계산합니다. (How)
-    // 참고로 65535u는 X방향 워크그룹의 최대 한계를 가정하여 하드코딩된 변환 값입니다.
-    let index = global_id.x + global_id.y * 65535u * 64u;
+    let index = global_id.x + global_id.y * params.workgroups_x * 64u;
     
     // 계산된 인덱스가 전체 텐서의 원소 수보다 크거나 같으면 실행을 즉시 중단합니다. (What)
     // 올바르지 않은 메모리 범위를 건드리지 않도록 차단하는 역할입니다. (Why)
@@ -73,8 +72,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // 현재 인덱스와 외부에서 입력받은 시드를 조합(스케일업)하여 해시 생성기의 입력(input)을 구성하고 난수 정수를 만듭니다. (How)
-    let hash = pcg_hash(index + u32(params.seed * 10000.0));
+    // 현재 인덱스와 외부에서 입력받은 32비트 시드를 조합하여 난수를 생성합니다. (How)
+    let hash = pcg_hash(index + params.seed);
     // 정수 형태의 해시를 0.0 ~ 1.0 사이의 실수 난수로 변환합니다. (How)
     let rand = rand_f32(hash);
     

@@ -47,7 +47,12 @@ export interface AmevaTensorGlobalAPI {
     disposeBatch: (handles: TensorHandle[]) => void;
     getQuotaSnapshot: typeof getQuotaSnapshot;
     snapshotHandles: () => string[];
-    flushGC: () => Promise<void> | void;
+    flushGC: (options?: {
+        strict?: boolean;
+    }) => Promise<{
+        ok: boolean;
+        error?: string;
+    }>;
 }
 declare global {
     /**

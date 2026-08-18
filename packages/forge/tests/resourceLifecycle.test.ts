@@ -57,9 +57,8 @@ describe('Resource Lifecycle - Source Contract', () => {
       // Should contain 'await device.popErrorScope()' instead of fire-and-forget
       const awaitPopPattern = /await\s+device\.popErrorScope\s*\(\s*\)/g;
       const matches = graphExecutorSource.match(awaitPopPattern);
-      expect(matches).not.toBeNull();
-      // Should have 3 awaited pops (internal, OOM, validation)
-      expect(matches!.length).toBe(3);
+      // Should have awaited pops for internal, OOM, and validation scopes in commit and rollback paths
+      expect(matches!.length).toBeGreaterThanOrEqual(3);
     });
   });
 

@@ -1,6 +1,7 @@
 /**
  * Created: 2026-08-12 12:14:52 +0900
  * Modified:
+ *   - 2026-08-18 13:45:00 +0900: Fix: Orphaned token state & QuotaSnapshot accounting
  *   - 2026-08-12 12:59:35 +0900: Feat: Introduce v3.0 features (CNN, Pooling, Dropout, Serialization)
  *   - 2026-08-12 12:23:09 +0900: Docs: Build Apache-style docs and unify tests
  *   - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
@@ -20,12 +21,13 @@ import { AMEVAForgeQuotaExceededError } from "../errors";
  * HOW: 문자열 유니온 타입으로 선언되어 'tensor', 'staging', 'uniform', 'temporary' 중 하나의 값을 가집니다.
  */
 export type AllocationKind = 'tensor' | 'staging' | 'uniform' | 'temporary';
+
 /**
  * WHAT: 할당된 메모리 토큰의 현재 생명주기 상태를 나타내는 리터럴 타입입니다.
- * WHY: 메모리가 아직 사용 중인지(active), 해제가 예약되었는지(pending_release), 완전히 해제되었는지(released) 구분하여 안전한 리소스 관리를 보장하기 위함입니다.
+ * WHY: 메모리가 아직 사용 중인지(active), 해제가 예약되었는지(pending_release), 완전히 해제되었는지(released), 파괴 실패로 고아화되었는지(orphaned) 구분하여 안전한 리소스 관리를 보장하기 위함입니다.
  * HOW: 상태 전이를 명확하게 나타내기 위해 문자열 유니온을 사용합니다.
  */
-export type AllocationState = 'active' | 'pending_release' | 'released';
+export type AllocationState = 'active' | 'pending_release' | 'released' | 'orphaned';
 
 /**
  * WHAT: 할당된 GPU 메모리 블록을 추적하는 메타데이터 객체(토큰) 클래스입니다.
@@ -73,6 +75,11 @@ export class QuotaManager {
    * HOW: markPendingRelease 호출 시 증가하고, 완전히 해제될 때 감소합니다.
    */
   public pendingReleaseBytes: number = 0;
+  /**
+   * WHAT: destroy 실패 후 반환되지 못한 고아(Orphaned) 메모리 크기(바이트)입니다.
+   * WHY: 장부 조작 없이 유령 누수 발생 시 명확히 회계에 기록하기 위함입니다.
+   */
+  public orphanedBytes: number = 0;
   /**
    * WHAT: 메모리 할당이 절대로 초과할 수 없는 최대 허용치(바이트)입니다.
    * WHY: 이 값을 초과하는 할당 요청을 즉시 차단하여 치명적인 시스템 충돌(OOM)을 막기 위해 설정됩니다.
@@ -205,13 +212,30 @@ export class QuotaManager {
   }
 
   /**
+   * WHAT: 메모리 토큰을 고아(orphaned) 상태로 마킹합니다.
+   * WHY: GPUBuffer.destroy() 실패 등으로 인해 장부상 회계 불일치(ghost leak)가 발생하지 않도록 명시적 기록을 남깁니다.
+   */
+  markOrphaned(token: AllocationToken, reason?: string): void {
+    if (!token || token.state === 'orphaned' || token.state === 'released') return;
+    if (!this.tokens.has(token.id)) return;
+
+    if (token.state === 'pending_release') {
+      this.pendingReleaseBytes = Math.max(0, this.pendingReleaseBytes - token.size);
+    }
+    this.orphanedBytes += token.size;
+    token.state = 'orphaned';
+    console.warn(`[QuotaManager] Token marked orphaned: ${token.id} (${token.size} bytes). Reason: ${reason || 'unknown'}`);
+  }
+
+  /**
    * WHAT: 현재 메모리 할당량, 대기량, 유효 사용량, 한계치 등의 쿼터 사용 현황을 묶어 반환합니다.
    * WHY: 프로파일러, 디버깅 도구 또는 UI에서 시스템의 메모리 점유 상태를 실시간으로 모니터링하기 위해 제공됩니다.
-   * HOW: 클래스 내부에 유지 중인 통계 값(allocated, pending, limits, token size)들을 객체 형태로 복사하여 리턴합니다.
+   * HOW: 클래스 내부에 유지 중인 통계 값들을 객체 형태로 복사하여 리턴합니다.
    */
   getUsage(): {
     allocatedBytes: number;
     pendingReleaseBytes: number;
+    orphanedBytes: number;
     effectiveBytes: number;
     hardLimitBytes: number;
     softLimitBytes: number;
@@ -220,6 +244,7 @@ export class QuotaManager {
     return {
       allocatedBytes: this.allocatedBytes,
       pendingReleaseBytes: this.pendingReleaseBytes,
+      orphanedBytes: this.orphanedBytes,
       effectiveBytes: this.allocatedBytes - this.pendingReleaseBytes,
       hardLimitBytes: this.hardLimitBytes,
       softLimitBytes: this.softLimitBytes,
@@ -253,6 +278,7 @@ export class QuotaManager {
   reset(): void {
     this.allocatedBytes = 0;
     this.pendingReleaseBytes = 0;
+    this.orphanedBytes = 0;
     this.tokens.clear();
   }
 
@@ -288,6 +314,8 @@ export const _globalQuotaManager = new QuotaManager();
 
 export interface QuotaSnapshot {
   usedBytes: number;
+  pendingBytes: number;
+  orphanedBytes: number;
   maxBytes: number;
   activeTokens: number;
 }
@@ -296,8 +324,9 @@ export function getQuotaSnapshot(): QuotaSnapshot {
   const usage = _globalQuotaManager.getUsage();
   return Object.freeze({
     usedBytes: usage.allocatedBytes,
+    pendingBytes: usage.pendingReleaseBytes,
+    orphanedBytes: usage.orphanedBytes,
     maxBytes: usage.hardLimitBytes,
     activeTokens: usage.activeTokens,
   });
 }
-

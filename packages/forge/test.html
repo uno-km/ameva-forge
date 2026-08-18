@@ -2,13 +2,52 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <link rel="icon" href="data:,">
   <title>AMEVA-Forge E2E Test</title>
 </head>
 <body>
-  <script src="./dist/index.iife.js"></script>
   <script>
-    window.forge = ameva;
+    window.__AMEVA_TEST_MODE__ = true;
+  </script>
+  <script src="./dist/index.js"></script>
+  <script>
+    if (typeof ameva !== 'undefined') {
+      window.ameva = ameva;
+      let bridgeApi = ameva;
+      if (typeof ameva.registerPyodideBridge === 'function') {
+        bridgeApi = ameva.registerPyodideBridge();
+      }
+      window.forge = Object.assign({}, ameva, bridgeApi);
+      window.amevaForge = window.forge;
+    }
     window.testReady = true;
+  </script>
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
+  <script>
+    window.__AMEVA_PYODIDE_READY__ = (async () => {
+      try {
+        if (window.forge && typeof window.forge.initWebGPU === 'function') {
+          try { await window.forge.initWebGPU(); } catch (e) {}
+        }
+        const pyodide = await loadPyodide({
+          indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/"
+        });
+        await pyodide.loadPackage("micropip");
+        const micropip = pyodide.pyimport("micropip");
+        try {
+          await micropip.install("/test-artifacts/forge-0.1.0-py3-none-any.whl");
+        } catch (e) {
+          console.warn("Local wheel install warning:", e);
+        } finally {
+          try { micropip.destroy(); } catch {}
+        }
+        window.pyodide = pyodide;
+        return pyodide;
+      } catch (err) {
+        console.error("Pyodide loading error:", err);
+        return null;
+      }
+    })();
   </script>
 </body>
 </html>

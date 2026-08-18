@@ -162,6 +162,10 @@ export function getDevice(): GPUDevice {
   return device;
 }
 
+export function _setDeviceForTesting(d: any): void {
+  device = d;
+}
+
 /**
  * WHAT: 전역에 캐시된 WebGPU 어댑터(Adapter) 인스턴스를 반환합니다.
  * WHY: GPU의 하드웨어 스펙(limits, features 등)을 조회하거나 디바이스 기능 제약 조건을 파악하기 위해 외부 모듈에서 어댑터에 접근할 수 있게 합니다.

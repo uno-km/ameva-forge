@@ -19,6 +19,8 @@ struct Params {
   padding: u32, // 입력 이미지 가장자리에 추가할 제로 패딩의 크기입니다.
   H_out: u32, // 연산 후 생성될 출력 특성 맵의 높이입니다.
   W_out: u32, // 연산 후 생성될 출력 특성 맵의 너비입니다.
+  workgroups_x: u32, // 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수입니다.
+  pad1: u32, // 16바이트 메모리 정렬을 위한 패딩입니다.
 };
 
 @group(0) @binding(0) var<uniform> params: Params; // GPU에 컨볼루션 설정값을 전달하는 유니폼 버퍼입니다.
@@ -32,7 +34,7 @@ struct Params {
  */
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  let idx = global_id.x; // 출력 im2col 버퍼에서의 현재 스레드의 1D 인덱스입니다.
+  let idx = global_id.x + global_id.y * params.workgroups_x * 64u; // 2D 디스패치 선형 인덱스 복원
   // 변환될 출력 배열의 총 요소 개수를 계산합니다 (N * H_out * W_out * C * K_h * K_w).
   let num_elements = params.N * params.H_out * params.W_out * params.C * params.K_h * params.K_w;
   

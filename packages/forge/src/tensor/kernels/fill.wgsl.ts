@@ -11,7 +11,7 @@ export const FILL_WGSL = `
 struct Params {
   numElements: u32, // 값을 채울 배열의 전체 요소 개수입니다.
   value: f32, // 배열을 채울 특정 단일 부동 소수점 값입니다.
-  pad1: u32, // 메모리 정렬을 위해 추가된 패딩용 변수입니다.
+  workgroups_x: u32, // 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 개수입니다.
   pad2: u32, // 메모리 정렬을 위해 추가된 두 번째 패딩용 변수입니다.
 };
 
@@ -25,7 +25,7 @@ struct Params {
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let num_elements = params.numElements; // 전체 요소 개수를 유니폼 변수에서 가져옵니다.
-  let idx = global_id.x; // 현재 스레드가 담당할 1D 배열 내의 인덱스입니다.
+  let idx = global_id.x + global_id.y * params.workgroups_x * 64u; // 2D 디스패치 선형 인덱스 복원
   
   // 계산된 인덱스가 전체 배열 크기보다 크거나 같다면 작업을 수행하지 않고 종료합니다.
   if (idx >= num_elements) {

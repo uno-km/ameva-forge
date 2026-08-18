@@ -49,9 +49,12 @@ def build_lazy_topo(root: 'Tensor') -> List['Tensor']:
         node, idx = stack[-1]
         
         # WHAT: 현재 텐서의 부모 노드 튜플입니다.
-        # WHY: 이 노드를 계산하기 위해 필요한 이전 계산 결과들을 확인하기 위함입니다.
-        # HOW: getattr를 사용해 '_parents' 속성을 안전하게 가져옵니다.
-        parents = getattr(node, '_parents', ())
+        # WHY: 이미 GPU 버퍼가 실체화(realize)된 텐서는 리프(load) 노드로 취급하여 부모를 재탐색하지 않음으로써 그래프 낭비와 고아 텐서 참조를 방지합니다.
+        # HOW: _handle이 None이 아닐 경우 빈 튜플로 처리합니다.
+        if getattr(node, '_handle', None) is not None:
+            parents = ()
+        else:
+            parents = getattr(node, '_parents', ())
 
         # WHAT: 아직 방문하지 않은 부모 노드가 남아있는지 검사하는 조건문입니다.
         # WHY: 모든 부모 노드를 먼저 처리한 뒤에야 현재 노드를 처리(위상 정렬 리스트 추가)할 수 있기 때문입니다.
@@ -107,60 +110,42 @@ def build_lazy_topo(root: 'Tensor') -> List['Tensor']:
 _gc_queue: set = set()
 
 
-# WHAT: 가비지 컬렉션(GC) 시도가 연속적으로 실패한 횟수를 추적하는 변수입니다.
-# WHY: 브릿지 통신 오류나 치명적 버그로 인해 무한히 실패할 경우 큐를 비워 악순환을 끊기 위함입니다.
-# HOW: 정수 0으로 초기화하고, 예외 발생 시마다 1씩 증가시킵니다.
-_gc_fail_count: int = 0
+_gc_failures: int = 0
+_gc_next_retry_at: float = 0.0
 
-def flush_gc() -> None:
+def flush_gc(force: bool = False) -> None:
     """
     WHAT: 보류 중인(큐에 쌓인) 리소스 해제 요청들을 모아 JS/WebGPU 브릿지로 일괄 전달하여 처리하는 함수입니다.
-    WHY: 성능 최적화를 위해 개별 해제 대신 Batch Dispose를 수행하여 C-FFI/JS 호출 오버헤드를 줄이기 위함입니다.
-    HOW: 큐에 항목이 있으면 리스트로 변환한 뒤 JS 브릿지 함수(js_dispose_batch)를 호출합니다.
+    WHY: 성능 최적화를 위해 개별 해제 대신 Batch Dispose를 수행하며, 브릿지 일시 지연 시에도 핸들을 유실(drop)하지 않고 지수 백오프로 재시도하기 위함입니다.
+    HOW: 큐에 항목이 있으면 백오프 타임을 체크한 후 js_dispose_batch를 호출하고, 배치 성공 시에만 큐에서 제거합니다.
     """
-    # WHAT: 전역으로 관리되는 GC 실패 카운터를 함수 내부에서 수정할 수 있도록 선언합니다.
-    # WHY: 실패 시 카운터를 증가시키고 성공 시 0으로 리셋하기 위해서입니다.
-    # HOW: global 키워드를 사용합니다.
-    global _gc_fail_count
+    global _gc_failures, _gc_next_retry_at
+    import time
+    import warnings
     
-    # WHAT: 큐가 비어있는지 확인하는 조건문입니다.
-    # WHY: 처리할 객체가 없으면 불필요한 브릿지 호출을 방지하고 빠르게 반환(return)하기 위함입니다.
-    # HOW: 파이썬에서 빈 set 객체는 False로 평가되는 특성을 이용합니다.
     if not _gc_queue:
         return
         
-    # WHAT: 큐(집합) 안의 핸들 문자열들을 리스트로 변환하여 복사합니다.
-    # WHY: 순회가 가능한 안정적인 형태의 컬렉션으로 만들어 C/JS 인터페이스에 전달하기 위함입니다.
-    # HOW: list() 생성자를 사용해 집합을 감쌉니다.
+    now = time.monotonic()
+    if not force and now < _gc_next_retry_at:
+        return
+        
     handles = list(_gc_queue)
     try:
         from .bridge import js_dispose_batch
-        # WHAT: 모아둔 핸들 목록을 브릿지 함수로 넘겨 실제 해제 연산을 수행합니다.
-        # WHY: 백엔드(WebGPU/JS) 단에 메모리를 해제하라고 지시하기 위함입니다.
-        # HOW: C/WASM 인터페이스 함수를 동기적으로 호출합니다.
         js_dispose_batch(handles)
-        
-        # WHAT: 성공적으로 해제된 핸들들을 전역 큐에서 제거합니다.
-        # WHY: 다음 flush 호출 시에 이미 해제된 자원을 다시 해제하려 시도하는 것을 막기 위함입니다.
-        # HOW: set.difference_update() 메서드를 사용하여 일괄 삭제합니다.
         _gc_queue.difference_update(handles)
-        
-        # WHAT: 해제 성공 시 실패 카운터를 초기화합니다.
-        # WHY: 일시적인 오류가 아니라면 정상 궤도에 올랐음을 표시하기 위해서입니다.
-        # HOW: 변수에 0을 대입합니다.
-        _gc_fail_count = 0
-    except Exception:
-        # WHAT: 자원 해제 중 예외가 발생할 경우 실패 카운터를 1 증가시킵니다.
-        # WHY: JS 호출 환경이나 브릿지 상태가 불안정해 오류가 발생했음을 추적하기 위해서입니다.
-        # HOW: += 연산자로 변수 값을 증가시킵니다.
-        _gc_fail_count += 1
-        if _gc_fail_count >= 3:
-            # 영구 실패: 핸들을 버려서 무한 재시도 방지
-            # WHAT: 실패 횟수가 3번을 넘어설 경우 큐를 강제로 모두 비워버립니다.
-            # WHY: 브릿지나 환경이 복구 불가능하게 손상되었을 때 계속되는 에러 루프에 빠지는 것을 막기 위함입니다.
-            # HOW: set.clear() 메서드를 호출해 초기화하고 카운터도 다시 0으로 돌립니다.
-            _gc_queue.clear()
-            _gc_fail_count = 0
+        _gc_failures = 0
+        _gc_next_retry_at = 0.0
+    except Exception as e:
+        _gc_failures += 1
+        delay = min(2.0 ** _gc_failures, 30.0)
+        _gc_next_retry_at = now + delay
+        warnings.warn(
+            f"[AMEVA GC] disposeBatch failed; keeping {len(_gc_queue)} handles queued for retry in {delay:.1f}s: {e}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
 
 class _HandleCell:
@@ -310,9 +295,11 @@ class Tensor:
         # WHAT: GPU 장치인 경우 텐서 파괴 시 가비지 컬렉션을 수행하는 코드 블록입니다.
         # WHY: 파이썬 객체 소멸 시 메모리 누수를 방지하고 GPU 리소스도 해제하기 위함입니다.
         # HOW: weakref.finalize를 사용해 콜백을 등록합니다.
+        self._finalizer_registered = False
         if self.device == "gpu":
             import weakref
             weakref.finalize(self, Tensor._finalize_buffer, self._handle_cell)
+            self._finalizer_registered = True
 
     @property
     def _handle(self) -> Optional[str]:
@@ -524,6 +511,55 @@ class Tensor:
             op_params=[],
         )
 
+    def move_to_(self, device: str) -> 'Tensor':
+        """
+        WHAT: Tensor의 내부 저장소(Storage/Device)를 in-place로 대상 장치로 마이그레이션합니다.
+        WHY: Module.to(device) 호출 시 Parameter 객체 참조(Identity)를 보존하여,
+             Optimizer 생성 후 model.to('gpu')를 호출해도 가중치 업데이트 참조가 단절되지 않도록 하기 위함입니다.
+        HOW: self.to(device)로 상태를 생성한 후, self의 내부 속성들을 in-place 덮어쓰고 moved의 소유권을 박탈합니다.
+        """
+        self._check_disposed()
+        if device == self.device:
+            return self
+
+        moved = self.to(device)
+
+        # 기존 GPU 핸들 정리
+        if self.device == "gpu" and self._handle is not None and self._handle != moved._handle:
+            try:
+                self.dispose()
+                self._disposed = False
+            except Exception:
+                pass
+
+        # moved의 내부 상태를 self로 in-place 이전
+        self._data = moved._data
+        self._handle = moved._handle
+        if hasattr(self, "_handle_cell"):
+            self._handle_cell.handle = moved._handle
+
+        self._lazy_op = getattr(moved, "_lazy_op", None)
+        self._op = getattr(moved, "_op", None)
+        self._parents = getattr(moved, "_parents", ())
+        self._op_params = getattr(moved, "_op_params", None)
+        self.shape = moved.shape
+        self.dtype = moved.dtype
+        self.device = moved.device
+        self._version += 1
+
+        if self.device == "gpu" and not getattr(self, "_finalizer_registered", False):
+            import weakref
+            weakref.finalize(self, Tensor._finalize_buffer, self._handle_cell)
+            self._finalizer_registered = True
+
+        # moved가 동일 핸들을 중복 해제하지 않도록 소유권 박탈
+        moved._handle = None
+        if hasattr(moved, "_handle_cell"):
+            moved._handle_cell.handle = None
+        moved._data = None
+
+        return self
+
     def dispose(self) -> None:
         """
         WHAT: 텐서와 연결된 리소스(GPU 버퍼 및 내부 데이터)를 즉시 해제하는 함수입니다.
@@ -658,12 +694,12 @@ class Tensor:
         """
         WHAT: 두 텐서 간의 덧셈 연산(`+`)을 수행합니다.
         WHY: 텐서들 간의 요소별 덧셈을 직관적으로 지원하기 위함입니다.
-        HOW: 스칼라 값일 경우 동일 크기의 텐서로 변환(full)한 뒤 ops.add를 호출합니다.
+        HOW: 스칼라 값일 경우 () 크기의 스칼라 텐서로 변환하여 0-stride 브로드캐스팅으로 ops.add를 호출합니다.
         """
         self._check_disposed()
-        from .ops import add, full
+        from .ops import add, tensor
         if isinstance(other, (int, float)):
-            other = full(self.shape, float(other), device=self.device, dtype=self.dtype)
+            other = tensor(float(other), device=self.device, dtype=self.dtype)
         return add(self, other)
 
     def __radd__(self, other):
@@ -678,36 +714,36 @@ class Tensor:
         """
         WHAT: 두 텐서 간의 뺄셈 연산(`-`)을 수행합니다.
         WHY: 텐서 요소들 간의 차이를 계산하기 위함입니다.
-        HOW: 스칼라를 텐서로 변환한 뒤 ops.sub를 호출합니다.
+        HOW: 스칼라를 () 스칼라 텐서로 변환한 뒤 0-stride 브로드캐스팅으로 ops.sub를 호출합니다.
         """
         self._check_disposed()
-        from .ops import sub, full
+        from .ops import sub, tensor
         if isinstance(other, (int, float)):
-            other = full(self.shape, float(other), device=self.device, dtype=self.dtype)
+            other = tensor(float(other), device=self.device, dtype=self.dtype)
         return sub(self, other)
 
     def __rsub__(self, other):
         """
         WHAT: 우측 피연산자 기준의 뺄셈 연산(`스칼라 - 텐서`)을 수행합니다.
         WHY: 스칼라가 왼쪽에 올 경우 순서에 맞게 뺄셈을 적용하기 위함입니다.
-        HOW: other를 텐서로 변환한 뒤 other에서 self를 빼는 ops.sub를 호출합니다.
+        HOW: other를 () 스칼라 텐서로 변환한 뒤 other에서 self를 빼는 ops.sub를 호출합니다.
         """
         self._check_disposed()
-        from .ops import sub, full
+        from .ops import sub, tensor
         if isinstance(other, (int, float)):
-            other = full(self.shape, float(other), device=self.device, dtype=self.dtype)
+            other = tensor(float(other), device=self.device, dtype=self.dtype)
         return sub(other, self)
 
     def __mul__(self, other):
         """
         WHAT: 두 텐서 간의 요소별 곱셈 연산(`*`)을 수행합니다.
         WHY: 아다마르 곱(Hadamard Product)이나 스칼라 배율을 적용하기 위함입니다.
-        HOW: 스칼라를 텐서로 변환 후 ops.mul을 호출합니다.
+        HOW: 스칼라를 () 스칼라 텐서로 변환 후 0-stride 브로드캐스팅으로 ops.mul을 호출합니다.
         """
         self._check_disposed()
-        from .ops import mul, full
+        from .ops import mul, tensor
         if isinstance(other, (int, float)):
-            other = full(self.shape, float(other), device=self.device, dtype=self.dtype)
+            other = tensor(float(other), device=self.device, dtype=self.dtype)
         return mul(self, other)
 
     def __rmul__(self, other):
@@ -722,24 +758,24 @@ class Tensor:
         """
         WHAT: 두 텐서 간의 나눗셈 연산(`/`)을 수행합니다.
         WHY: 텐서 요소별 나눗셈을 수식으로 간편하게 표현하기 위함입니다.
-        HOW: 스칼라를 텐서로 변환 후 ops.div를 호출합니다.
+        HOW: 스칼라를 () 스칼라 텐서로 변환 후 0-stride 브로드캐스팅으로 ops.div를 호출합니다.
         """
         self._check_disposed()
-        from .ops import div, full
+        from .ops import div, tensor
         if isinstance(other, (int, float)):
-            other = full(self.shape, float(other), device=self.device, dtype=self.dtype)
+            other = tensor(float(other), device=self.device, dtype=self.dtype)
         return div(self, other)
 
     def __rtruediv__(self, other):
         """
         WHAT: 우측 피연산자 기준의 나눗셈 연산(`스칼라 / 텐서`)을 수행합니다.
         WHY: 스칼라를 텐서의 각 요소로 나누는 연산을 지원하기 위함입니다.
-        HOW: 스칼라를 텐서로 바꾼 후 other를 self로 나누는 ops.div를 호출합니다.
+        HOW: 스칼라를 () 스칼라 텐서로 바꾼 후 other를 self로 나누는 ops.div를 호출합니다.
         """
         self._check_disposed()
-        from .ops import div, full
+        from .ops import div, tensor
         if isinstance(other, (int, float)):
-            other = full(self.shape, float(other), device=self.device, dtype=self.dtype)
+            other = tensor(float(other), device=self.device, dtype=self.dtype)
         return div(other, self)
 
     def __neg__(self):

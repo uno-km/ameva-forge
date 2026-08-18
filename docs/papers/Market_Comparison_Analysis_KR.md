@@ -12,7 +12,7 @@
 ### 🔴 1. wgpu-py (Python Native WebGPU)
 가장 대표적인 파이썬 WebGPU 라이브러리입니다. Rust로 작성된 `wgpu-native` 바이너리를 래핑(Wrapping)하여 데스크탑 환경에서 작동합니다.
 * **장점 (Pros):**
-  - 파이썬 데스크탑 환경(Windows, Mac, Linux)에서 가장 완벽하게 WebGPU API를 지원합니다.
+  - 파이썬 데스크탑 환경(Windows, Mac, Linux)에서 WebGPU API를 지원합니다.
   - 3D 렌더링 라이브러리(pygfx 등)와의 호환성이 뛰어납니다.
 * **단점 (Cons):**
   - **웹 브라우저(Pyodide/WASM) 환경에서 네이티브하게 작동하지 않습니다.** (브라우저는 C/Rust `.dll` 바이너리를 실행할 수 없기 때문입니다.)
@@ -31,28 +31,30 @@
 ### 🔵 3. Apache TVM (WebGPU Target)
 딥러닝 컴파일러 프레임워크로, 모델 코드를 분석해 WebAssembly 및 WebGPU로 변환(Compile)해 주는 툴입니다.
 * **장점 (Pros):**
-  - 모델 구조 자체를 분석해 WebGPU 쉐이더로 하드웨어 종속적인 극강의 최적화를 이뤄냅니다.
+  - 모델 구조를 분석해 WebGPU 쉐이더로 하드웨어 종속적인 최적화를 수행합니다.
 * **단점 (Cons):**
-  - **개발자 경험(DX)이 지옥에 가깝습니다.** 파이썬 모델을 브라우저에 올리려면 무거운 사전 컴파일(AOT) 파이프라인을 거쳐야 합니다. 동적으로 스크립트를 짜면서 바로바로 테스트하는 것은 구조적으로 매우 어렵습니다.
+  - **복잡한 사전 작업이 요구됩니다.** 파이썬 모델을 브라우저에 올리려면 사전 컴파일(AOT) 파이프라인을 거쳐야 합니다. 동적으로 스크립트를 작성하며 바로 테스트하는 것은 구조적으로 제한됩니다.
 
 ---
 
 ## 2. AMEVA WebGPU-Python Bridge (우리 프로젝트) 집중 해부
 
-**핵심 철학:** *"데이터 사이언티스트들이 가장 사랑하는 파이썬(Numpy 스타일) 코드를, 브라우저 샌드박스 안에서 100% 라이브로 타이핑하고, 그 즉시 브라우저의 WebGPU를 끌어와 초거대 AI 연산을 수행한다."*
+- **핵심 철학:** *"데이터 사이언티스트들이 사용하던 파이썬 코드를 브라우저 샌드박스 안에서 작성하고, 브라우저의 WebGPU를 끌어와 연산을 수행한다 (UNVERIFIED TARGET)."*
 
-### ✅ 완벽한 장점 (Pros)
-1. **Zero-Copy Architecture (OOM 원천 차단):** 기존 Pyodide에서 자바스크립트로 거대 배열을 넘기면 무조건 복사(Copy)가 발생해 브라우저가 터졌습니다. AMEVA 브릿지는 메모리 복사 없이 WASM 힙 메모리의 포인터만 WebGPU 렌더러와 공유하여 OOM의 근본 원인을 없앴습니다.
-2. **True Interactive Python in Browser:** 컴파일(AOT)이나 모델 변환(ONNX) 없이, 미니콘다나 주피터 노트북처럼 브라우저에서 `import ameva_tensor` 한 줄만 치고 실시간 연산이 가능합니다.
-3. **Custom LLM WGSL Kernels:** 단순 그래픽스가 아니라 행렬 곱 타일링, Fused Softmax 등 초거대 AI를 웹에서 구동하기 위한 '텐서 연산 최적화 커널'을 내장했습니다.
+# 시장 비교 및 경쟁 우위 분석 (UNVERIFIED)
 
-### ⚠️ 엄격한 단점 및 한계 (Cons)
-1. **극소형 데이터에서의 성능 역전 (통신 오버헤드):** 아까 실증 3(1024차원 행렬)에서 보았듯, 메모리 포인터를 교환하는 브릿지 호출 자체의 지연(Shipping Cost)이 존재합니다. 작고 자잘한 연산에서는 오히려 CPU가 훨씬 빠릅니다.
-2. **PyTorch 생태계 미지원 (Autograd의 부재):** 현재 AMEVA 브릿지는 전방향(Forward Pass) 텐서 수학 연산은 기가 막히게 빠르지만, PyTorch처럼 역전파(Backpropagation)를 위한 자동 미분(Autograd) 트리를 지원하지 않습니다. 즉, 브라우저에서 '추론(Inference)'은 가능해도 '복잡한 모델 학습(Training)'은 직접 수식을 짜야 합니다.
-3. **JS 브릿지 의존성:** Pyodide 런타임과 Main Thread(JS) 사이의 메시지 패싱이나 프록시 의존도가 높아, 브라우저의 Web Worker 환경이 불안정할 경우 통신 병목이 생길 수 있습니다.
+## 1. 경쟁 매트릭스
 
----
+| 기능 | TensorFlow.js | ONNX Runtime Web | WebDNN | wgpu-py | **AMEVA Bridge (목표)** |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **주 언어** | JS / TS | JS / TS | JS | Python | **Python (Pyodide)** |
+| **GPU 가속** | WebGL / WebGPU | WebGL / WebGPU | WebGPU | WebGPU (Desktop) | **WebGPU (Browser)** |
+| **PyTorch 호환성** | 낮음 (자체 API) | 중간 (ONNX Ops) | 낮음 | 높음 (Python) | **높음 (PyTorch 유사)** |
+| **브라우저 실행** | 네이티브 | 네이티브 | 네이티브 | 불가능 | **네이티브 (WASM + FFI)** |
 
-## 3. 결론 (Conclusion)
-AMEVA 브릿지는 기존 TensorFlow.js(자바스크립트 강제)나 wgpu-py(데스크탑 한정)가 해결하지 못한 **"브라우저 기반 파이썬 사용자들을 위한 실시간 초거대 GPU 가속기"**라는 독보적이고 틈새적인 포지션을 완벽히 개척했습니다. 
+## 2. 경쟁 포지셔닝
+AMEVA 브릿지는 **"브라우저 기반 파이썬 사용자들을 위한 GPU 가속기 (UNVERIFIED TARGET)"**라는 독보적 포지션을 목표로 하고 있다.
+
+## 3. Autograd 및 학습 범위 안내
+Release 1은 지원 대상인 MLP 경로에 한해 기본 Autograd 구현을 포함한다. 일반적인 CNN, 어텐션 또는 프로덕션 규모 학습에서의 안정성은 검증 대상 외다. 
 우리의 목표는 TensorFlow.js를 이기는 것이 아닙니다. **웹 브라우저를 주피터 노트북(Jupyter)처럼 쓰는 전 세계의 수많은 AI 리서처들에게, 멈추지 않고 5,500억 번의 행렬을 곱할 수 있는 로컬 웹 OS 텐서 엔진을 제공하는 것**입니다.

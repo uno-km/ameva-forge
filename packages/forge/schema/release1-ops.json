@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schemaVersion": 1,
+  "description": "Single Source of Truth for AMEVA-Forge Release 1 WebGPU Operations Contract",
+  "operations": {
+    "add": {
+      "inputs": 2,
+      "params": [],
+      "output": "same-shape",
+      "dtypes": ["float32"]
+    },
+    "sub": {
+      "inputs": 2,
+      "params": [],
+      "output": "same-shape",
+      "dtypes": ["float32"]
+    },
+    "mul": {
+      "inputs": 2,
+      "params": [],
+      "output": "same-shape",
+      "dtypes": ["float32"]
+    },
+    "div": {
+      "inputs": 2,
+      "params": [],
+      "output": "same-shape",
+      "dtypes": ["float32"]
+    },
+    "neg": {
+      "inputs": 1,
+      "params": [],
+      "output": "same-shape",
+      "dtypes": ["float32"]
+    },
+    "matmul": {
+      "inputs": 2,
+      "params": [
+        {"name": "M", "type": "positive-int"},
+        {"name": "N", "type": "positive-int"},
+        {"name": "K", "type": "positive-int"}
+      ],
+      "output": "matmul-2d",
+      "dtypes": ["float32"]
+    },
+    "transpose": {
+      "inputs": 1,
+      "params": [
+        {"name": "M", "type": "positive-int"},
+        {"name": "N", "type": "positive-int"}
+      ],
+      "output": "transpose-2d",
+      "dtypes": ["float32"]
+    },
+    "reshape": {
+      "inputs": 1,
+      "params": [
+        {"name": "targetShape", "type": "shape-tuple"}
+      ],
+      "output": "reshape",
+      "dtypes": ["float32"]
+    },
+    "sum": {
+      "inputs": 1,
+      "params": [],
+      "output": "scalar",
+      "dtypes": ["float32"]
+    },
+    "relu": {
+      "inputs": 1,
+      "params": [],
+      "output": "same-shape",
+      "dtypes": ["float32"]
+    },
+    "relu_backward": {
+      "inputs": 2,
+      "params": [
+        {"name": "numElements", "type": "positive-int"}
+      ],
+      "output": "same-shape",
+      "dtypes": ["float32"]
+    },
+    "mse_loss": {
+      "inputs": 2,
+      "params": [],
+      "output": "scalar",
+      "dtypes": ["float32"]
+    },
+    "mse_loss_backward": {
+      "inputs": 2,
+      "params": [
+        {"name": "numElements", "type": "positive-int"}
+      ],
+      "output": "same-shape",
+      "dtypes": ["float32"]
+    },
+    "axpy": {
+      "inputs": 2,
+      "params": [
+        {"name": "numElements", "type": "positive-int"},
+        {"name": "alpha", "type": "float32"}
+      ],
+      "output": "alias-input-0",
+      "dtypes": ["float32"]
+    }
+  }
+}

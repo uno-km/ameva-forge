@@ -51,6 +51,74 @@ export function writeFloat32Array(buffer: GPUBuffer, data: Float32Array): void {
   getQueue().writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength);
 }
 
+import { _globalUniformPool } from "./uniformPool";
+
+interface StagingPoolEntry {
+  buffer: GPUBuffer;
+  token: AllocationToken;
+}
+
+export const _stagingPool: Map<number, StagingPoolEntry[]> = new Map();
+const STAGING_POOL_MAX_PER_SIZE = 4;
+
+export function clearStagingPool(): void {
+  for (const entries of _stagingPool.values()) {
+    for (const { buffer, token } of entries) {
+      try { freeBuffer(buffer, token); } catch {}
+    }
+  }
+  _stagingPool.clear();
+  try { _globalUniformPool.clear(); } catch {}
+}
+
+export async function flushGC(): Promise<void> {
+  try {
+    const device = getDevice();
+    await device.queue.onSubmittedWorkDone();
+    await _globalUniformPool.retireSubmitted(device);
+  } catch {}
+  clearStagingPool();
+  try { _globalUniformPool.clear(); } catch {}
+}
+
+export function acquireStagingBuffer(byteLength: number): { buffer: GPUBuffer, token: AllocationToken } {
+  const pool = _stagingPool.get(byteLength);
+  if (pool && pool.length > 0) {
+    return pool.pop()!;
+  }
+  const usage = typeof GPUBufferUsage !== 'undefined' ? (GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST) : (0x0001 | 0x0008);
+  const { buffer, token } = allocateBuffer(
+    byteLength,
+    usage,
+    'staging',
+    'StagingPool'
+  );
+  return { buffer, token };
+}
+
+export function releaseStagingBuffer(
+  buffer: GPUBuffer,
+  token: AllocationToken,
+  byteLength: number,
+  isCorrupted: boolean = false
+): void {
+  if (isCorrupted) {
+    try { buffer.destroy(); } catch {}
+    if (token) {
+      try { _globalQuotaManager.releaseToken(token); } catch {}
+    }
+    return;
+  }
+
+  const pool = _stagingPool.get(byteLength) ?? [];
+  if (pool.length < STAGING_POOL_MAX_PER_SIZE) {
+    pool.push({ buffer, token });
+    _stagingPool.set(byteLength, pool);
+  } else {
+    try { freeBuffer(buffer, token); } catch {}
+  }
+}
+
 /**
  * WHAT: GPU 버퍼의 데이터를 읽어서 CPU 메모리 상의 Float32Array로 반환합니다.
  * WHY: GPU에서 처리된 결과 데이터를 CPU로 가져와서 애플리케이션 수준에서 활용(예: 출력, 저장)하기 위해 존재합니다.
@@ -65,11 +133,8 @@ export async function readBufferToFloat32Array(
   byteLength: number
 ): Promise<Float32Array> {
   const device = getDevice();
-  const { buffer: stagingBuffer, token } = allocateBuffer(
-    byteLength,
-    GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-    'staging'
-  );
+  const { buffer: stagingBuffer, token } = acquireStagingBuffer(byteLength);
+  let isCorrupted = false;
 
   try {
     const commandEncoder = device.createCommandEncoder();
@@ -83,9 +148,11 @@ export async function readBufferToFloat32Array(
     } finally {
       stagingBuffer.unmap();
     }
+  } catch (err) {
+    isCorrupted = true;
+    throw err;
   } finally {
-    stagingBuffer.destroy();
-    _globalQuotaManager.releaseToken(token);
+    releaseStagingBuffer(stagingBuffer, token, byteLength, isCorrupted);
   }
 }
 
@@ -97,13 +164,9 @@ export async function readBufferToFloat32Array(
 export async function mapBufferAsync(
   buffer: GPUBuffer,
   byteLength: number
-): Promise<{ stagingBuffer: GPUBuffer, token: AllocationToken }> {
+): Promise<{ stagingBuffer: GPUBuffer, token: AllocationToken, byteLength: number }> {
   const device = getDevice();
-  const { buffer: stagingBuffer, token } = allocateBuffer(
-    byteLength,
-    GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
-    'staging'
-  );
+  const { buffer: stagingBuffer, token } = acquireStagingBuffer(byteLength);
 
   try {
     const commandEncoder = device.createCommandEncoder();
@@ -111,10 +174,9 @@ export async function mapBufferAsync(
     device.queue.submit([commandEncoder.finish()]);
 
     await stagingBuffer.mapAsync(GPUMapMode.READ);
-    return { stagingBuffer, token };
+    return { stagingBuffer, token, byteLength };
   } catch (e) {
-    stagingBuffer.destroy();
-    _globalQuotaManager.releaseToken(token);
+    releaseStagingBuffer(stagingBuffer, token, byteLength, true);
     throw e;
   }
 }
@@ -122,13 +184,15 @@ export async function mapBufferAsync(
 /**
  * WHAT: 맵핑이 완료된 Staging 버퍼의 데이터를 외부에서 제공된 Float32Array 배열에 직접 복사합니다.
  * WHY: 새로운 배열 객체를 생성하지 않고 기존 메모리(Pre-allocated buffer)를 재사용하여 메모리 할당 및 가비지 컬렉션(GC) 부하를 줄이기 위해 사용됩니다.
- * HOW: Staging 버퍼의 맵핑 범위를 가져와서 전달된 `outArray`에 `set` 메서드로 데이터를 덮어쓴 후, 맵핑을 해제(unmap), 버퍼 파괴(destroy) 및 메모리 토큰을 해제합니다.
+ * HOW: Staging 버퍼의 맵핑 범위를 가져와서 전달된 `outArray`에 `set` 메서드로 데이터를 덮어쓴 후, unmap 후 Staging Pool로 반환합니다.
  */
 export function readMappedInto(
   stagingBuffer: GPUBuffer,
   token: AllocationToken,
   outArray: Float32Array
 ): void {
+  const byteLength = outArray.byteLength;
+  let isCorrupted = false;
   try {
     const arrayBuffer = stagingBuffer.getMappedRange();
     const mapped = new Float32Array(arrayBuffer);
@@ -136,10 +200,12 @@ export function readMappedInto(
       throw new RangeError(`readMappedInto destination length mismatch: expected ${mapped.length}, got ${outArray.length}`);
     }
     outArray.set(mapped);
+  } catch (err) {
+    isCorrupted = true;
+    throw err;
   } finally {
-    stagingBuffer.unmap();
-    stagingBuffer.destroy();
-    _globalQuotaManager.releaseToken(token);
+    try { stagingBuffer.unmap(); } catch {}
+    releaseStagingBuffer(stagingBuffer, token, byteLength, isCorrupted);
   }
 }
 

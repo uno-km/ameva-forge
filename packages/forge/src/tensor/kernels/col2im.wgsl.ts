@@ -30,6 +30,9 @@ struct Params {
   H_out: u32,
   // 합성곱 연산 결과 출력 텐서의 너비
   W_out: u32,
+  // 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수입니다.
+  workgroups_x: u32,
+  pad1: u32,
 };
 
 // params: col2im 역산 및 복원 계산을 위한 각종 텐서 차원들을 포함한 uniform 버퍼입니다.
@@ -48,8 +51,8 @@ struct Params {
  */
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  // 현재 스레드가 처리할 원본 텐서 상의 1차원 인덱스입니다. (How)
-  let idx = global_id.x;
+  // 2D 디스패치 그리드로부터 복원한 현재 스레드가 처리할 원본 텐서 상의 1차원 인덱스입니다. (How)
+  let idx = global_id.x + global_id.y * params.workgroups_x * 64u;
   // 전체 요소 개수 = 배치 * 채널 * 높이 * 너비 를 계산합니다.
   let num_elements = params.N * params.C * params.H * params.W;
   

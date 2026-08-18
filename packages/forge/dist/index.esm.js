@@ -112,6 +112,7 @@ class AMEVAForgeStaleHandleError extends AMEVAForgeError {
 /**
  * Created: 2026-08-12 12:14:52 +0900
  * Modified:
+ *   - 2026-08-18 13:45:00 +0900: Fix: Orphaned token state & QuotaSnapshot accounting
  *   - 2026-08-12 12:59:35 +0900: Feat: Introduce v3.0 features (CNN, Pooling, Dropout, Serialization)
  *   - 2026-08-12 12:23:09 +0900: Docs: Build Apache-style docs and unify tests
  *   - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
@@ -166,6 +167,11 @@ class QuotaManager {
      * HOW: markPendingRelease 호출 시 증가하고, 완전히 해제될 때 감소합니다.
      */
     pendingReleaseBytes = 0;
+    /**
+     * WHAT: destroy 실패 후 반환되지 못한 고아(Orphaned) 메모리 크기(바이트)입니다.
+     * WHY: 장부 조작 없이 유령 누수 발생 시 명확히 회계에 기록하기 위함입니다.
+     */
+    orphanedBytes = 0;
     /**
      * WHAT: 메모리 할당이 절대로 초과할 수 없는 최대 허용치(바이트)입니다.
      * WHY: 이 값을 초과하는 할당 요청을 즉시 차단하여 치명적인 시스템 충돌(OOM)을 막기 위해 설정됩니다.
@@ -281,14 +287,31 @@ class QuotaManager {
         this.tokens.delete(token.id);
     }
     /**
+     * WHAT: 메모리 토큰을 고아(orphaned) 상태로 마킹합니다.
+     * WHY: GPUBuffer.destroy() 실패 등으로 인해 장부상 회계 불일치(ghost leak)가 발생하지 않도록 명시적 기록을 남깁니다.
+     */
+    markOrphaned(token, reason) {
+        if (!token || token.state === 'orphaned' || token.state === 'released')
+            return;
+        if (!this.tokens.has(token.id))
+            return;
+        if (token.state === 'pending_release') {
+            this.pendingReleaseBytes = Math.max(0, this.pendingReleaseBytes - token.size);
+        }
+        this.orphanedBytes += token.size;
+        token.state = 'orphaned';
+        console.warn(`[QuotaManager] Token marked orphaned: ${token.id} (${token.size} bytes). Reason: ${reason || 'unknown'}`);
+    }
+    /**
      * WHAT: 현재 메모리 할당량, 대기량, 유효 사용량, 한계치 등의 쿼터 사용 현황을 묶어 반환합니다.
      * WHY: 프로파일러, 디버깅 도구 또는 UI에서 시스템의 메모리 점유 상태를 실시간으로 모니터링하기 위해 제공됩니다.
-     * HOW: 클래스 내부에 유지 중인 통계 값(allocated, pending, limits, token size)들을 객체 형태로 복사하여 리턴합니다.
+     * HOW: 클래스 내부에 유지 중인 통계 값들을 객체 형태로 복사하여 리턴합니다.
      */
     getUsage() {
         return {
             allocatedBytes: this.allocatedBytes,
             pendingReleaseBytes: this.pendingReleaseBytes,
+            orphanedBytes: this.orphanedBytes,
             effectiveBytes: this.allocatedBytes - this.pendingReleaseBytes,
             hardLimitBytes: this.hardLimitBytes,
             softLimitBytes: this.softLimitBytes,
@@ -319,6 +342,7 @@ class QuotaManager {
     reset() {
         this.allocatedBytes = 0;
         this.pendingReleaseBytes = 0;
+        this.orphanedBytes = 0;
         this.tokens.clear();
     }
     /**
@@ -354,6 +378,8 @@ function getQuotaSnapshot() {
     const usage = _globalQuotaManager.getUsage();
     return Object.freeze({
         usedBytes: usage.allocatedBytes,
+        pendingBytes: usage.pendingReleaseBytes,
+        orphanedBytes: usage.orphanedBytes,
         maxBytes: usage.hardLimitBytes,
         activeTokens: usage.activeTokens,
     });
@@ -567,6 +593,298 @@ function assertWasmRange(offset, byteLength, wasmByteLength) {
     }
 }
 
+const UNIFORM_BUCKETS = [16, 32, 64, 112, 144, 256, 512, 1024];
+class UniformBufferPool {
+    pools = new Map();
+    inFlight = [];
+    fenceCounter = 0;
+    acquire(byteLength) {
+        const bucket = this.bucket(byteLength);
+        const pool = this.pools.get(bucket) ?? [];
+        const reusable = pool.pop();
+        if (reusable) {
+            reusable.inFlight = true;
+            reusable.fenceId = this.fenceCounter;
+            return reusable;
+        }
+        const usage = typeof GPUBufferUsage !== 'undefined'
+            ? (GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST)
+            : (0x0040 | 0x0008);
+        const { buffer, token } = allocateBuffer(bucket, usage, 'uniform', 'UniformBufferPool');
+        return {
+            buffer,
+            token,
+            byteLength: bucket,
+            inFlight: true,
+            fenceId: this.fenceCounter,
+        };
+    }
+    releaseAfterSubmit(entry) {
+        this.inFlight.push(entry);
+    }
+    releaseSync(entry) {
+        entry.inFlight = false;
+        try {
+            freeBuffer(entry.buffer, entry.token);
+        }
+        catch { }
+    }
+    inFlightBytes() {
+        return this.inFlight.reduce((acc, e) => acc + e.byteLength, 0);
+    }
+    async retireSubmitted(device) {
+        const currentFence = ++this.fenceCounter;
+        try {
+            await device.queue.onSubmittedWorkDone();
+        }
+        catch { }
+        const stillInFlight = [];
+        for (const entry of this.inFlight) {
+            if (entry.fenceId < currentFence) {
+                entry.inFlight = false;
+                const pool = this.pools.get(entry.byteLength) ?? [];
+                if (pool.length < 256) {
+                    pool.push(entry);
+                    this.pools.set(entry.byteLength, pool);
+                }
+                else {
+                    try {
+                        freeBuffer(entry.buffer, entry.token);
+                    }
+                    catch { }
+                }
+            }
+            else {
+                stillInFlight.push(entry);
+            }
+        }
+        this.inFlight = stillInFlight;
+    }
+    clear() {
+        for (const entries of this.pools.values()) {
+            for (const entry of entries) {
+                try {
+                    freeBuffer(entry.buffer, entry.token);
+                }
+                catch { }
+            }
+        }
+        this.pools.clear();
+        for (const entry of this.inFlight) {
+            try {
+                freeBuffer(entry.buffer, entry.token);
+            }
+            catch { }
+        }
+        this.inFlight = [];
+    }
+    bucket(n) {
+        for (const b of UNIFORM_BUCKETS) {
+            if (n <= b)
+                return b;
+        }
+        return Math.ceil(n / 256) * 256;
+    }
+}
+const _globalUniformPool = new UniformBufferPool();
+
+/**
+ * Created: 2026-08-12 12:14:52 +0900
+ * Modified:
+ *   - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
+ *
+ * buffers.ts — GPU 버퍼 할당, 읽기 인터페이스
+ *
+ * C-05 Fix: _stagingBuffers 전역 Map 제거 → mapBufferAsync가 staging buffer 직접 반환.
+ * H-05 / NH-05 Fix: "Zero-Copy" 주석 수정 — GPU→CPU 전송은 1번 copy가 불가피.
+ *   WebGPU 스펙상 GPU 메모리를 WASM 힙과 직접 공유할 수 없다 (CUDA pinned memory와 달리).
+ *   최소 1번의 copy는 WebGPU의 구조적 한계이며 Dawn, wgpu, TensorFlow.js도 동일.
+ * ARC-01 Fix: createBuffer() OOM은 device.pushErrorScope()로만 감지 가능 — 문서화.
+ */
+/**
+ * WHAT: 지정된 크기와 용도에 맞게 GPU 버퍼를 할당합니다.
+ * WHY: WebGPU의 버퍼 생성을 추상화하고 전역 할당량(Quota) 관리 시스템과 통합하여 메모리 부족(OOM)을 방지하기 위해 존재합니다.
+ * HOW: QuotaManager를 통해 `byteLength`만큼의 메모리를 예약한 후, `device.createBuffer`를 호출하여 버퍼를 생성합니다. 실패 시 예약된 메모리 토큰을 반환(release)하고 에러를 던집니다.
+ */
+function allocateBuffer(byteLength, usage, kind = 'tensor', ownerGraph = null) {
+    const token = _globalQuotaManager.reserveToken(byteLength, kind, ownerGraph);
+    try {
+        const buffer = getDevice().createBuffer({ size: byteLength, usage });
+        return { buffer, token };
+    }
+    catch (e) {
+        _globalQuotaManager.releaseToken(token);
+        throw e;
+    }
+}
+/**
+ * WHAT: 주어진 GPU 버퍼에 Float32Array 데이터를 씁니다.
+ * WHY: CPU 측의 데이터를 GPU 버퍼로 복사하여 GPU 연산에 사용할 수 있도록 하기 위해 필요합니다.
+ * HOW: WebGPU 큐(`device.queue.writeBuffer`)를 사용하여 주어진 데이터의 전체 크기만큼 지정된 버퍼의 오프셋 0부터 복사합니다.
+ */
+function writeFloat32Array(buffer, data) {
+    if (data.byteLength > buffer.size) {
+        throw new AMEVAForgeValidationError(`writeFloat32Array overflow: data size (${data.byteLength}B) exceeds buffer capacity (${buffer.size}B)`);
+    }
+    getQueue().writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength);
+}
+const _stagingPool = new Map();
+const STAGING_POOL_MAX_PER_SIZE = 4;
+function clearStagingPool() {
+    for (const entries of _stagingPool.values()) {
+        for (const { buffer, token } of entries) {
+            try {
+                freeBuffer(buffer, token);
+            }
+            catch { }
+        }
+    }
+    _stagingPool.clear();
+    try {
+        _globalUniformPool.clear();
+    }
+    catch { }
+}
+async function flushGC() {
+    try {
+        const device = getDevice();
+        await device.queue.onSubmittedWorkDone();
+        await _globalUniformPool.retireSubmitted(device);
+    }
+    catch { }
+    clearStagingPool();
+    try {
+        _globalUniformPool.clear();
+    }
+    catch { }
+}
+function acquireStagingBuffer(byteLength) {
+    const pool = _stagingPool.get(byteLength);
+    if (pool && pool.length > 0) {
+        return pool.pop();
+    }
+    const usage = typeof GPUBufferUsage !== 'undefined' ? (GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST) : (0x0001 | 0x0008);
+    const { buffer, token } = allocateBuffer(byteLength, usage, 'staging', 'StagingPool');
+    return { buffer, token };
+}
+function releaseStagingBuffer(buffer, token, byteLength, isCorrupted = false) {
+    if (isCorrupted) {
+        try {
+            buffer.destroy();
+        }
+        catch { }
+        if (token) {
+            try {
+                _globalQuotaManager.releaseToken(token);
+            }
+            catch { }
+        }
+        return;
+    }
+    const pool = _stagingPool.get(byteLength) ?? [];
+    if (pool.length < STAGING_POOL_MAX_PER_SIZE) {
+        pool.push({ buffer, token });
+        _stagingPool.set(byteLength, pool);
+    }
+    else {
+        try {
+            freeBuffer(buffer, token);
+        }
+        catch { }
+    }
+}
+/**
+ * WHAT: GPU 버퍼의 데이터를 읽어서 CPU 메모리 상의 Float32Array로 반환합니다.
+ * WHY: GPU에서 처리된 결과 데이터를 CPU로 가져와서 애플리케이션 수준에서 활용(예: 출력, 저장)하기 위해 존재합니다.
+ * HOW:
+ *   1. 복사를 위한 중간 버퍼(Staging Buffer)를 MAP_READ와 COPY_DST 용도로 할당합니다.
+ *   2. CommandEncoder를 사용해 원본 버퍼의 데이터를 Staging Buffer로 복사하고 큐에 제출합니다.
+ *   3. Staging Buffer를 비동기적으로 맵핑(mapAsync)하여 CPU에서 읽을 수 있게 합니다.
+ *   4. 데이터를 읽어 Float32Array로 복사한 후 버퍼를 해제(unmap, destroy)하고 토큰을 반환합니다.
+ */
+async function readBufferToFloat32Array(buffer, byteLength) {
+    const device = getDevice();
+    const { buffer: stagingBuffer, token } = acquireStagingBuffer(byteLength);
+    let isCorrupted = false;
+    try {
+        const commandEncoder = device.createCommandEncoder();
+        commandEncoder.copyBufferToBuffer(buffer, 0, stagingBuffer, 0, byteLength);
+        device.queue.submit([commandEncoder.finish()]);
+        await stagingBuffer.mapAsync(GPUMapMode.READ);
+        try {
+            const arrayBuffer = stagingBuffer.getMappedRange();
+            return new Float32Array(arrayBuffer.slice(0));
+        }
+        finally {
+            stagingBuffer.unmap();
+        }
+    }
+    catch (err) {
+        isCorrupted = true;
+        throw err;
+    }
+    finally {
+        releaseStagingBuffer(stagingBuffer, token, byteLength, isCorrupted);
+    }
+}
+/**
+ * WHAT: GPU 버퍼의 내용을 읽기 위해 Staging Buffer를 생성하고 비동기적으로 맵핑합니다.
+ * WHY: 대용량 데이터 전송 시 메모리 맵핑을 직접 제어하거나 제로 카피(Zero-Copy) 메커니즘과 유사한 최적화를 구현하기 위해 필요합니다.
+ * HOW: `MAP_READ | COPY_DST` 속성의 Staging 버퍼를 새로 할당하고, 원본 버퍼의 내용을 복사하기 위한 커맨드를 큐에 제출한 뒤, `mapAsync`를 호출하여 맵핑된 버퍼와 할당 토큰을 반환합니다.
+ */
+async function mapBufferAsync$1(buffer, byteLength) {
+    const device = getDevice();
+    const { buffer: stagingBuffer, token } = acquireStagingBuffer(byteLength);
+    try {
+        const commandEncoder = device.createCommandEncoder();
+        commandEncoder.copyBufferToBuffer(buffer, 0, stagingBuffer, 0, byteLength);
+        device.queue.submit([commandEncoder.finish()]);
+        await stagingBuffer.mapAsync(GPUMapMode.READ);
+        return { stagingBuffer, token, byteLength };
+    }
+    catch (e) {
+        releaseStagingBuffer(stagingBuffer, token, byteLength, true);
+        throw e;
+    }
+}
+/**
+ * WHAT: 맵핑이 완료된 Staging 버퍼의 데이터를 외부에서 제공된 Float32Array 배열에 직접 복사합니다.
+ * WHY: 새로운 배열 객체를 생성하지 않고 기존 메모리(Pre-allocated buffer)를 재사용하여 메모리 할당 및 가비지 컬렉션(GC) 부하를 줄이기 위해 사용됩니다.
+ * HOW: Staging 버퍼의 맵핑 범위를 가져와서 전달된 `outArray`에 `set` 메서드로 데이터를 덮어쓴 후, unmap 후 Staging Pool로 반환합니다.
+ */
+function readMappedInto$1(stagingBuffer, token, outArray) {
+    const byteLength = outArray.byteLength;
+    let isCorrupted = false;
+    try {
+        const arrayBuffer = stagingBuffer.getMappedRange();
+        const mapped = new Float32Array(arrayBuffer);
+        if (outArray.length !== mapped.length) {
+            throw new RangeError(`readMappedInto destination length mismatch: expected ${mapped.length}, got ${outArray.length}`);
+        }
+        outArray.set(mapped);
+    }
+    catch (err) {
+        isCorrupted = true;
+        throw err;
+    }
+    finally {
+        try {
+            stagingBuffer.unmap();
+        }
+        catch { }
+        releaseStagingBuffer(stagingBuffer, token, byteLength, isCorrupted);
+    }
+}
+/**
+ * WHAT: 할당된 GPU 버퍼를 메모리에서 해제하고, 관련된 할당량 토큰(AllocationToken)을 반환합니다.
+ * WHY: WebGPU 리소스 누수를 방지하고, 전역 쿼타 매니저(Quota Manager)에 반환하여 다른 작업에서 가용 메모리를 사용할 수 있도록 하기 위해 존재합니다.
+ * HOW: `buffer.destroy()`를 호출하여 실제 GPU 리소스를 해제한 다음, `_globalQuotaManager.releaseToken(token)`을 통해 예약된 메모리 용량을 반환합니다.
+ */
+function freeBuffer(buffer, token) {
+    buffer.destroy();
+    _globalQuotaManager.releaseToken(token);
+}
+
 /**
  * Created: 2026-08-12 12:14:52 +0900
  * Modified:
@@ -619,6 +937,7 @@ function assertStaticShaderSourceOnly(source) {
  */
 let ALLOWED_KERNEL_NAMES = new Set([
     "matmul",
+    "batched_matmul",
     "relu",
     "relu_backward",
     "add",
@@ -638,10 +957,14 @@ let ALLOWED_KERNEL_NAMES = new Set([
     "sum",
     "max",
     "sum_axis",
+    "max_axis",
+    "max_axis_backward",
     "axpy",
     "pad",
     "gather",
     "scatter",
+    "cat",
+    "where",
     "dropout",
     "maxpool2d",
     "avgpool2d",
@@ -656,7 +979,10 @@ let ALLOWED_KERNEL_NAMES = new Set([
  * HOW: 제공된 Iterable 인터페이스(예: 배열)를 받아 새로운 Set 객체를 생성하고 `ALLOWED_KERNEL_NAMES` 변수를 갱신합니다.
  */
 function registerKernelNames(names) {
-    ALLOWED_KERNEL_NAMES = new Set(names);
+    for (const name of names) {
+        assertSafeShaderIdentifier(name);
+        ALLOWED_KERNEL_NAMES.add(name);
+    }
 }
 /**
  * WHAT: 요청된 커널 이름이 허용된 화이트리스트(ALLOWED_KERNEL_NAMES)에 존재하는지 검사합니다.
@@ -697,7 +1023,7 @@ const BYTES_PER_ELEMENT = {
  * WHY: 메모리 초과(OOM) 오류를 방지하고 시스템의 안정성을 유지하기 위해 하드 리미트를 설정합니다.
  * HOW: 256MB 크기의 float32 버퍼에 맞추어 256 * 1024 * 1024로 값을 할당합니다.
  */
-const MAX_ELEMENTS$1 = 256 * 1024 * 1024;
+const MAX_ELEMENTS = 256 * 1024 * 1024;
 /**
  * WHAT: 텐서 shape의 최대 랭크(차원 수)를 정의하는 상수입니다.
  * WHY: WebGPU에서 처리할 수 있는 차원의 한계를 설정하고, 과도하게 복잡한 다차원 텐서의 생성을 방지합니다.
@@ -747,8 +1073,8 @@ function validateShape(shape, dtype, expectedByteLength) {
         }
         elements *= dim;
     }
-    if (elements > MAX_ELEMENTS$1) {
-        throw new AMEVAForgeShapeError(`Tensor size exceeds max elements limit: ${elements} > ${MAX_ELEMENTS$1}`);
+    if (elements > MAX_ELEMENTS) {
+        throw new AMEVAForgeShapeError(`Tensor size exceeds max elements limit: ${elements} > ${MAX_ELEMENTS}`);
     }
     if (expectedByteLength !== undefined) {
         /**
@@ -795,148 +1121,65 @@ function validateDType(dtype) {
 }
 
 /**
- * Created: 2026-08-12 12:14:52 +0900
- * Modified:
- *   - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
+ * dispatchShape.ts - 2D WebGPU Workgroup Dispatch Calculator
  *
- * buffers.ts — GPU 버퍼 할당, 읽기 인터페이스
- *
- * C-05 Fix: _stagingBuffers 전역 Map 제거 → mapBufferAsync가 staging buffer 직접 반환.
- * H-05 / NH-05 Fix: "Zero-Copy" 주석 수정 — GPU→CPU 전송은 1번 copy가 불가피.
- *   WebGPU 스펙상 GPU 메모리를 WASM 힙과 직접 공유할 수 없다 (CUDA pinned memory와 달리).
- *   최소 1번의 copy는 WebGPU의 구조적 한계이며 Dawn, wgpu, TensorFlow.js도 동일.
- * ARC-01 Fix: createBuffer() OOM은 device.pushErrorScope()로만 감지 가능 — 문서화.
+ * WHAT: 1D 요소 수(numElements)를 WebGPU의 2D 디스패치 그리드(dispatchX, dispatchY)로 안전하게 분할하는 공용 유틸리티입니다.
+ * WHY: WebGPU 디스패치 차원당 한도(65,535)를 초과하는 대용량 텐서(> 4.19M 원소)에서 연산이 절단되는 Silent Truncation 버그를 원천 차단합니다.
+ * HOW: dispatchX = min(totalWorkgroups, maxPerDim), dispatchY = ceil(totalWorkgroups / maxPerDim)로 2D 그리드를 계산합니다.
+ */
+function computeDispatch2D(numElements, workgroupSize = 64, maxPerDim = 65535) {
+    if (!Number.isSafeInteger(numElements) || numElements <= 0) {
+        throw new AMEVAForgeValidationError(`Invalid numElements: ${numElements}`);
+    }
+    const totalWorkgroups = Math.ceil(numElements / workgroupSize);
+    const dispatchX = Math.min(totalWorkgroups, maxPerDim);
+    const dispatchY = Math.ceil(totalWorkgroups / maxPerDim);
+    if (dispatchY > maxPerDim) {
+        throw new AMEVAForgeValidationError(`Dispatch too large: ${totalWorkgroups} workgroups exceeds 2D WebGPU limit (${maxPerDim}x${maxPerDim})`);
+    }
+    return {
+        dispatchX,
+        dispatchY,
+        workgroupsX: dispatchX,
+        totalWorkgroups,
+    };
+}
+
+/**
+ * 파일 생성일: 2026-08-18T14:42:00+09:00
+ * 역할: 8D 다차원 스트라이드 브로드캐스팅 파라미터 계산 유틸리티
+ * 목적: Direct TS API(gpuCore.ts)와 Graph Executor(graphExecutor.ts) 간의 112-Byte WGSL 유니폼 버퍼 계약 일치
  */
 /**
- * WHAT: 지정된 크기와 용도에 맞게 GPU 버퍼를 할당합니다.
- * WHY: WebGPU의 버퍼 생성을 추상화하고 전역 할당량(Quota) 관리 시스템과 통합하여 메모리 부족(OOM)을 방지하기 위해 존재합니다.
- * HOW: QuotaManager를 통해 `byteLength`만큼의 메모리를 예약한 후, `device.createBuffer`를 호출하여 버퍼를 생성합니다. 실패 시 예약된 메모리 토큰을 반환(release)하고 에러를 던집니다.
+ * WHAT: 두 텐서의 형태(shapeA, shapeB)를 8차원으로 좌측 패딩(pad8)하고 유효 스트라이드를 계산합니다.
+ * WHY: WGSL 셰이더(ADD, SUB, MUL, DIV)가 8차원 좌표 디코딩을 수행할 때 정확한 메모리 오프셋을 역산할 수 있도록 하기 위함입니다.
+ * HOW: 8차원으로 정규화 후 역순 스트라이드를 계산하고, 크기가 1인 차원은 스트라이드를 0으로 매핑(브로드캐스팅)합니다.
  */
-function allocateBuffer(byteLength, usage, kind = 'tensor', ownerGraph = null) {
-    const token = _globalQuotaManager.reserveToken(byteLength, kind, ownerGraph);
-    try {
-        const buffer = getDevice().createBuffer({ size: byteLength, usage });
-        return { buffer, token };
-    }
-    catch (e) {
-        _globalQuotaManager.releaseToken(token);
-        throw e;
-    }
-}
-/**
- * WHAT: 주어진 GPU 버퍼에 Float32Array 데이터를 씁니다.
- * WHY: CPU 측의 데이터를 GPU 버퍼로 복사하여 GPU 연산에 사용할 수 있도록 하기 위해 필요합니다.
- * HOW: WebGPU 큐(`device.queue.writeBuffer`)를 사용하여 주어진 데이터의 전체 크기만큼 지정된 버퍼의 오프셋 0부터 복사합니다.
- */
-function writeFloat32Array(buffer, data) {
-    if (data.byteLength > buffer.size) {
-        throw new AMEVAForgeValidationError(`writeFloat32Array overflow: data size (${data.byteLength}B) exceeds buffer capacity (${buffer.size}B)`);
-    }
-    getQueue().writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength);
-}
-// ── Staging Buffer Pool ──
-const _stagingPool = new Map();
-const STAGING_POOL_MAX_PER_SIZE = 4;
-function acquireStagingBuffer(byteLength) {
-    const pool = _stagingPool.get(byteLength);
-    if (pool && pool.length > 0) {
-        const buffer = pool.pop();
-        // Pool buffers already have tokens tracked
-        return { buffer, token: null, fromPool: true };
-    }
-    const { buffer, token } = allocateBuffer(byteLength, GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST, 'staging', 'StagingPool');
-    return { buffer, token, fromPool: false };
-}
-function releaseStagingBuffer(buffer, token, byteLength, fromPool) {
-    const pool = _stagingPool.get(byteLength) ?? [];
-    if (pool.length < STAGING_POOL_MAX_PER_SIZE) {
-        pool.push(buffer);
-        _stagingPool.set(byteLength, pool);
-    }
-    else {
-        buffer.destroy();
-        if (!fromPool && token)
-            freeBuffer(buffer, token);
-    }
-}
-/**
- * WHAT: GPU 버퍼의 데이터를 읽어서 CPU 메모리 상의 Float32Array로 반환합니다.
- * WHY: GPU에서 처리된 결과 데이터를 CPU로 가져와서 애플리케이션 수준에서 활용(예: 출력, 저장)하기 위해 존재합니다.
- * HOW:
- *   1. 복사를 위한 중간 버퍼(Staging Buffer)를 MAP_READ와 COPY_DST 용도로 할당합니다.
- *   2. CommandEncoder를 사용해 원본 버퍼의 데이터를 Staging Buffer로 복사하고 큐에 제출합니다.
- *   3. Staging Buffer를 비동기적으로 맵핑(mapAsync)하여 CPU에서 읽을 수 있게 합니다.
- *   4. 데이터를 읽어 Float32Array로 복사한 후 버퍼를 해제(unmap, destroy)하고 토큰을 반환합니다.
- */
-async function readBufferToFloat32Array(buffer, byteLength) {
-    const device = getDevice();
-    const { buffer: stagingBuffer, token, fromPool } = acquireStagingBuffer(byteLength);
-    try {
-        const commandEncoder = device.createCommandEncoder();
-        commandEncoder.copyBufferToBuffer(buffer, 0, stagingBuffer, 0, byteLength);
-        device.queue.submit([commandEncoder.finish()]);
-        await stagingBuffer.mapAsync(GPUMapMode.READ);
-        try {
-            const arrayBuffer = stagingBuffer.getMappedRange();
-            return new Float32Array(arrayBuffer.slice(0));
+function computeBroadcastParams(outShape, shapeA, shapeB) {
+    const pad8 = (s) => {
+        const res = [1, 1, 1, 1, 1, 1, 1, 1];
+        const diff = 8 - s.length;
+        for (let i = 0; i < s.length; i++) {
+            res[diff + i] = s[i];
         }
-        finally {
-            stagingBuffer.unmap();
+        return res;
+    };
+    const dOut = pad8(outShape);
+    const dA = pad8(shapeA);
+    const dB = pad8(shapeB);
+    const calcStrides = (dims) => {
+        const st = [1, 1, 1, 1, 1, 1, 1, 1];
+        st[7] = 1;
+        for (let i = 6; i >= 0; i--) {
+            st[i] = st[i + 1] * dims[i + 1];
         }
-    }
-    finally {
-        releaseStagingBuffer(stagingBuffer, token, byteLength, fromPool);
-    }
-}
-/**
- * WHAT: GPU 버퍼의 내용을 읽기 위해 Staging Buffer를 생성하고 비동기적으로 맵핑합니다.
- * WHY: 대용량 데이터 전송 시 메모리 맵핑을 직접 제어하거나 제로 카피(Zero-Copy) 메커니즘과 유사한 최적화를 구현하기 위해 필요합니다.
- * HOW: `MAP_READ | COPY_DST` 속성의 Staging 버퍼를 새로 할당하고, 원본 버퍼의 내용을 복사하기 위한 커맨드를 큐에 제출한 뒤, `mapAsync`를 호출하여 맵핑된 버퍼와 할당 토큰을 반환합니다.
- */
-async function mapBufferAsync$1(buffer, byteLength) {
-    const device = getDevice();
-    const { buffer: stagingBuffer, token } = allocateBuffer(byteLength, GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST, 'staging');
-    try {
-        const commandEncoder = device.createCommandEncoder();
-        commandEncoder.copyBufferToBuffer(buffer, 0, stagingBuffer, 0, byteLength);
-        device.queue.submit([commandEncoder.finish()]);
-        await stagingBuffer.mapAsync(GPUMapMode.READ);
-        return { stagingBuffer, token };
-    }
-    catch (e) {
-        stagingBuffer.destroy();
-        _globalQuotaManager.releaseToken(token);
-        throw e;
-    }
-}
-/**
- * WHAT: 맵핑이 완료된 Staging 버퍼의 데이터를 외부에서 제공된 Float32Array 배열에 직접 복사합니다.
- * WHY: 새로운 배열 객체를 생성하지 않고 기존 메모리(Pre-allocated buffer)를 재사용하여 메모리 할당 및 가비지 컬렉션(GC) 부하를 줄이기 위해 사용됩니다.
- * HOW: Staging 버퍼의 맵핑 범위를 가져와서 전달된 `outArray`에 `set` 메서드로 데이터를 덮어쓴 후, 맵핑을 해제(unmap), 버퍼 파괴(destroy) 및 메모리 토큰을 해제합니다.
- */
-function readMappedInto$1(stagingBuffer, token, outArray) {
-    try {
-        const arrayBuffer = stagingBuffer.getMappedRange();
-        const mapped = new Float32Array(arrayBuffer);
-        if (outArray.length !== mapped.length) {
-            throw new RangeError(`readMappedInto destination length mismatch: expected ${mapped.length}, got ${outArray.length}`);
-        }
-        outArray.set(mapped);
-    }
-    finally {
-        stagingBuffer.unmap();
-        stagingBuffer.destroy();
-        _globalQuotaManager.releaseToken(token);
-    }
-}
-/**
- * WHAT: 할당된 GPU 버퍼를 메모리에서 해제하고, 관련된 할당량 토큰(AllocationToken)을 반환합니다.
- * WHY: WebGPU 리소스 누수를 방지하고, 전역 쿼타 매니저(Quota Manager)에 반환하여 다른 작업에서 가용 메모리를 사용할 수 있도록 하기 위해 존재합니다.
- * HOW: `buffer.destroy()`를 호출하여 실제 GPU 리소스를 해제한 다음, `_globalQuotaManager.releaseToken(token)`을 통해 예약된 메모리 용량을 반환합니다.
- */
-function freeBuffer(buffer, token) {
-    buffer.destroy();
-    _globalQuotaManager.releaseToken(token);
+        return st;
+    };
+    const baseSA = calcStrides(dA);
+    const baseSB = calcStrides(dB);
+    const effSA = dA.map((d, i) => d === 1 ? 0 : baseSA[i]);
+    const effSB = dB.map((d, i) => d === 1 ? 0 : baseSB[i]);
+    return { dOut, effSA, effSB };
 }
 
 /**
@@ -1409,29 +1652,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
  * 생성일 (Created): 2026-08-12 12:14:52 +0900
  * 수정 내역 (Modified):
  *   - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
+ *   - 2026-08-18 14:10:00 +0900: Feat: Full 8D Multi-Dimensional Stride Broadcasting Decoder
  */
 const ADD_WGSL = `
-/**
- * @struct Params
- * @brief 두 텐서의 덧셈 연산을 수행할 때 필요한 파라미터들을 담고 있는 구조체입니다.
- * GPU 내에서 uniform 버퍼를 통해 전달받아 연산의 크기나 차원을 제어하는 목적(Why)으로 사용됩니다.
- */
 struct Params {
-  // 전체 요소(element)의 개수입니다. 배열 범위를 초과하지 않도록 경계 검사를 수행하는 데(How) 사용됩니다.
   size: u32,
-  // X 차원의 워크그룹 개수입니다. 2D 이상의 그리드에서 1차원 인덱스를 계산하기 위해(What) 필요합니다.
   workgroups_x: u32,
-  size_a: u32,
-  size_b: u32,
+  rank: u32,
+  pad0: u32,
+  dim0: u32, dim1: u32, dim2: u32, dim3: u32,
+  dim4: u32, dim5: u32, dim6: u32, dim7: u32,
+  stride_a0: u32, stride_a1: u32, stride_a2: u32, stride_a3: u32,
+  stride_a4: u32, stride_a5: u32, stride_a6: u32, stride_a7: u32,
+  stride_b0: u32, stride_b1: u32, stride_b2: u32, stride_b3: u32,
+  stride_b4: u32, stride_b5: u32, stride_b6: u32, stride_b7: u32,
 };
 
-// params: GPU와 CPU 간의 데이터를 동기화하기 위한 Uniform 버퍼입니다. 연산에 필요한 메타데이터가 담겨 있습니다.
 @group(0) @binding(0) var<uniform> params: Params;
-// a: 첫 번째 입력 텐서의 데이터가 저장된 배열입니다. 읽기 전용(storage, read)으로 선언되었습니다.
 @group(0) @binding(1) var<storage, read> a: array<f32>;
-// b: 두 번째 입력 텐서의 데이터가 저장된 배열입니다. 읽기 전용(storage, read)으로 선언되었습니다.
 @group(0) @binding(2) var<storage, read> b: array<f32>;
-// out: 연산 결과(덧셈)가 저장되는 출력 배열입니다. 읽고 쓰기가 가능한(storage, read_write) 형태로 선언되었습니다.
 @group(0) @binding(3) var<storage, read_write> out: array<f32>;
 
 @compute @workgroup_size(64)
@@ -1440,8 +1679,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let workgroups_x = params.workgroups_x;
   let idx = global_id.x + global_id.y * workgroups_x * 64u;
   if (idx < num_elements) {
-    let idx_a = select(idx % params.size_a, 0u, params.size_a == 1u);
-    let idx_b = select(idx % params.size_b, 0u, params.size_b == 1u);
+    var temp = idx;
+    let c7 = temp % params.dim7; temp = temp / params.dim7;
+    let c6 = temp % params.dim6; temp = temp / params.dim6;
+    let c5 = temp % params.dim5; temp = temp / params.dim5;
+    let c4 = temp % params.dim4; temp = temp / params.dim4;
+    let c3 = temp % params.dim3; temp = temp / params.dim3;
+    let c2 = temp % params.dim2; temp = temp / params.dim2;
+    let c1 = temp % params.dim1; temp = temp / params.dim1;
+    let c0 = temp;
+
+    let idx_a = c0 * params.stride_a0 + c1 * params.stride_a1 + c2 * params.stride_a2 + c3 * params.stride_a3 +
+                c4 * params.stride_a4 + c5 * params.stride_a5 + c6 * params.stride_a6 + c7 * params.stride_a7;
+    let idx_b = c0 * params.stride_b0 + c1 * params.stride_b1 + c2 * params.stride_b2 + c3 * params.stride_b3 +
+                c4 * params.stride_b4 + c5 * params.stride_b5 + c6 * params.stride_b6 + c7 * params.stride_b7;
+
     out[idx] = a[idx_a] + b[idx_b];
   }
 }
@@ -1530,36 +1782,52 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 `;
 
 /**
- * 생성일: 2026-08-12T12:14:52+09:00
- * 수정 이력:
- * - 2026-08-12T12:14:52+09:00: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
+ * 생성일 (Created): 2026-08-12 12:14:52 +0900
+ * 수정 내역 (Modified):
+ *   - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
+ *   - 2026-08-18 14:10:00 +0900: Feat: Full 8D Multi-Dimensional Stride Broadcasting Decoder
  */
 const MUL_WGSL = `
-// 구조체: Params
-// 역할 (WHAT): 곱셈 연산에 필요한 메타데이터를 저장하는 구조체입니다.
-// 목적 (WHY): WebGPU 컴퓨트 셰이더로 유니폼(uniform) 데이터를 효율적으로 전달하기 위해 존재합니다.
-// 동작 방식 (HOW): 각 스레드가 처리해야 할 전체 크기 및 작업 그룹 설정 값을 메모리에서 읽어옵니다.
 struct Params {
   size: u32,
   workgroups_x: u32,
-  size_a: u32,
-  size_b: u32,
+  rank: u32,
+  pad0: u32,
+  dim0: u32, dim1: u32, dim2: u32, dim3: u32,
+  dim4: u32, dim5: u32, dim6: u32, dim7: u32,
+  stride_a0: u32, stride_a1: u32, stride_a2: u32, stride_a3: u32,
+  stride_a4: u32, stride_a5: u32, stride_a6: u32, stride_a7: u32,
+  stride_b0: u32, stride_b1: u32, stride_b2: u32, stride_b3: u32,
+  stride_b4: u32, stride_b5: u32, stride_b6: u32, stride_b7: u32,
 };
 
-@group(0) @binding(0) var<uniform> params : Params;
-@group(0) @binding(1) var<storage, read> A : array<f32>;
-@group(0) @binding(2) var<storage, read> B : array<f32>;
-@group(0) @binding(3) var<storage, read_write> C : array<f32>;
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> a: array<f32>;
+@group(0) @binding(2) var<storage, read> b: array<f32>;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
 
 @compute @workgroup_size(64)
-fn main(@builtin(global_invocation_id) global_id : vec3<u32>) {
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let num_elements = params.size;
   let workgroups_x = params.workgroups_x;
-  let index = global_id.x + global_id.y * workgroups_x * 64u;
-  if (index < num_elements) {
-    let idx_a = select(index % params.size_a, 0u, params.size_a == 1u);
-    let idx_b = select(index % params.size_b, 0u, params.size_b == 1u);
-    C[index] = A[idx_a] * B[idx_b];
+  let idx = global_id.x + global_id.y * workgroups_x * 64u;
+  if (idx < num_elements) {
+    var temp = idx;
+    let c7 = temp % params.dim7; temp = temp / params.dim7;
+    let c6 = temp % params.dim6; temp = temp / params.dim6;
+    let c5 = temp % params.dim5; temp = temp / params.dim5;
+    let c4 = temp % params.dim4; temp = temp / params.dim4;
+    let c3 = temp % params.dim3; temp = temp / params.dim3;
+    let c2 = temp % params.dim2; temp = temp / params.dim2;
+    let c1 = temp % params.dim1; temp = temp / params.dim1;
+    let c0 = temp;
+
+    let idx_a = c0 * params.stride_a0 + c1 * params.stride_a1 + c2 * params.stride_a2 + c3 * params.stride_a3 +
+                c4 * params.stride_a4 + c5 * params.stride_a5 + c6 * params.stride_a6 + c7 * params.stride_a7;
+    let idx_b = c0 * params.stride_b0 + c1 * params.stride_b1 + c2 * params.stride_b2 + c3 * params.stride_b3 +
+                c4 * params.stride_b4 + c5 * params.stride_b5 + c6 * params.stride_b6 + c7 * params.stride_b7;
+
+    out[idx] = a[idx_a] * b[idx_b];
   }
 }
 `;
@@ -1640,19 +1908,23 @@ fn main(@builtin(global_invocation_id) global_id : vec3<u32>) {
 `;
 
 /**
- * 파일 생성: 2026-08-12 12:14:52
- * 수정 내역:
- * - 2026-08-12 12:14:52: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories (c2ee1bbf60255f375f779eba2ff8b1270c48b6e6)
+ * 생성일 (Created): 2026-08-12 12:14:52 +0900
+ * 수정 내역 (Modified):
+ *   - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
+ *   - 2026-08-18 14:10:00 +0900: Feat: Full 8D Multi-Dimensional Stride Broadcasting Decoder
  */
 const SUB_WGSL = `
-// 구조체: Params
-// 목적: WGSL 커널에서 사용할 유니폼 파라미터(Uniform parameters)들을 정의합니다.
-// 작동 방식: 배열의 크기(size)와 2차원 워크그룹 배열의 X축 크기(workgroups_x)를 제공합니다.
 struct Params {
   size: u32,
   workgroups_x: u32,
-  size_a: u32,
-  size_b: u32,
+  rank: u32,
+  pad0: u32,
+  dim0: u32, dim1: u32, dim2: u32, dim3: u32,
+  dim4: u32, dim5: u32, dim6: u32, dim7: u32,
+  stride_a0: u32, stride_a1: u32, stride_a2: u32, stride_a3: u32,
+  stride_a4: u32, stride_a5: u32, stride_a6: u32, stride_a7: u32,
+  stride_b0: u32, stride_b1: u32, stride_b2: u32, stride_b3: u32,
+  stride_b4: u32, stride_b5: u32, stride_b6: u32, stride_b7: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -1666,8 +1938,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let workgroups_x = params.workgroups_x;
   let idx = global_id.x + global_id.y * workgroups_x * 64u;
   if (idx < num_elements) {
-    let idx_a = select(idx % params.size_a, 0u, params.size_a == 1u);
-    let idx_b = select(idx % params.size_b, 0u, params.size_b == 1u);
+    var temp = idx;
+    let c7 = temp % params.dim7; temp = temp / params.dim7;
+    let c6 = temp % params.dim6; temp = temp / params.dim6;
+    let c5 = temp % params.dim5; temp = temp / params.dim5;
+    let c4 = temp % params.dim4; temp = temp / params.dim4;
+    let c3 = temp % params.dim3; temp = temp / params.dim3;
+    let c2 = temp % params.dim2; temp = temp / params.dim2;
+    let c1 = temp % params.dim1; temp = temp / params.dim1;
+    let c0 = temp;
+
+    let idx_a = c0 * params.stride_a0 + c1 * params.stride_a1 + c2 * params.stride_a2 + c3 * params.stride_a3 +
+                c4 * params.stride_a4 + c5 * params.stride_a5 + c6 * params.stride_a6 + c7 * params.stride_a7;
+    let idx_b = c0 * params.stride_b0 + c1 * params.stride_b1 + c2 * params.stride_b2 + c3 * params.stride_b3 +
+                c4 * params.stride_b4 + c5 * params.stride_b5 + c6 * params.stride_b6 + c7 * params.stride_b7;
+
     out[idx] = a[idx_a] - b[idx_b];
   }
 }
@@ -1742,18 +2027,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
  * 생성일 (Created): 2026-08-12 12:14:52 +0900
  * 수정 내역 (Modified):
  *   - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
+ *   - 2026-08-18 14:10:00 +0900: Feat: Full 8D Multi-Dimensional Stride Broadcasting Decoder
  */
 const DIV_WGSL = `
-/**
- * @struct Params
- * @brief 두 텐서 간의 요소별 나눗셈(division) 연산을 수행할 때 필요한 파라미터입니다. (What)
- * 셰이더 내에서 배열 크기 경계를 확인하고 3D 스레드 인덱스를 1차원으로 풀기 위해 사용됩니다. (Why)
- */
 struct Params {
   size: u32,
   workgroups_x: u32,
-  size_a: u32,
-  size_b: u32,
+  rank: u32,
+  pad0: u32,
+  dim0: u32, dim1: u32, dim2: u32, dim3: u32,
+  dim4: u32, dim5: u32, dim6: u32, dim7: u32,
+  stride_a0: u32, stride_a1: u32, stride_a2: u32, stride_a3: u32,
+  stride_a4: u32, stride_a5: u32, stride_a6: u32, stride_a7: u32,
+  stride_b0: u32, stride_b1: u32, stride_b2: u32, stride_b3: u32,
+  stride_b4: u32, stride_b5: u32, stride_b6: u32, stride_b7: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -1767,11 +2054,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let workgroups_x = params.workgroups_x;
   let idx = global_id.x + global_id.y * workgroups_x * 64u;
   if (idx < num_elements) {
-    let idx_a = select(idx % params.size_a, 0u, params.size_a == 1u);
-    let idx_b = select(idx % params.size_b, 0u, params.size_b == 1u);
-    let divisor = b[idx_b];
-    let safe_divisor = select(divisor, select(1e-7, -1e-7, divisor < 0.0), abs(divisor) < 1e-7);
-    out[idx] = a[idx_a] / safe_divisor;
+    var temp = idx;
+    let c7 = temp % params.dim7; temp = temp / params.dim7;
+    let c6 = temp % params.dim6; temp = temp / params.dim6;
+    let c5 = temp % params.dim5; temp = temp / params.dim5;
+    let c4 = temp % params.dim4; temp = temp / params.dim4;
+    let c3 = temp % params.dim3; temp = temp / params.dim3;
+    let c2 = temp % params.dim2; temp = temp / params.dim2;
+    let c1 = temp % params.dim1; temp = temp / params.dim1;
+    let c0 = temp;
+
+    let idx_a = c0 * params.stride_a0 + c1 * params.stride_a1 + c2 * params.stride_a2 + c3 * params.stride_a3 +
+                c4 * params.stride_a4 + c5 * params.stride_a5 + c6 * params.stride_a6 + c7 * params.stride_a7;
+    let idx_b = c0 * params.stride_b0 + c1 * params.stride_b1 + c2 * params.stride_b2 + c3 * params.stride_b3 +
+                c4 * params.stride_b4 + c5 * params.stride_b5 + c6 * params.stride_b6 + c7 * params.stride_b7;
+
+    out[idx] = a[idx_a] / b[idx_b];
   }
 }
 `;
@@ -2179,7 +2477,7 @@ const FILL_WGSL = `
 struct Params {
   numElements: u32, // 값을 채울 배열의 전체 요소 개수입니다.
   value: f32, // 배열을 채울 특정 단일 부동 소수점 값입니다.
-  pad1: u32, // 메모리 정렬을 위해 추가된 패딩용 변수입니다.
+  workgroups_x: u32, // 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 개수입니다.
   pad2: u32, // 메모리 정렬을 위해 추가된 두 번째 패딩용 변수입니다.
 };
 
@@ -2193,7 +2491,7 @@ struct Params {
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let num_elements = params.numElements; // 전체 요소 개수를 유니폼 변수에서 가져옵니다.
-  let idx = global_id.x; // 현재 스레드가 담당할 1D 배열 내의 인덱스입니다.
+  let idx = global_id.x + global_id.y * params.workgroups_x * 64u; // 2D 디스패치 선형 인덱스 복원
   
   // 계산된 인덱스가 전체 배열 크기보다 크거나 같다면 작업을 수행하지 않고 종료합니다.
   if (idx >= num_elements) {
@@ -2209,33 +2507,32 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
  * 파일 생성: 2026-08-12 12:14:52
  * 수정 내역:
  * - 2026-08-12 12:14:52: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories (c2ee1bbf60255f375f779eba2ff8b1270c48b6e6)
+ * - 2026-08-18 00:30:00: Fix(SCRUM-157/VULN-05): 2D workgroup linear index reconstruction for >65535 reductions
  */
 const SUM_WGSL = `
 // 구조체: Params
 // 목적: 합계(Sum) 연산에 필요한 메타데이터와 패딩을 정의합니다.
-// 작동 방식: 배열의 전체 크기를 제공하며, 16바이트 정렬을 준수합니다.
+// 작동 방식: 전체 원소 개수와 2D 디스패치 분할을 위한 X축 워크그룹 수를 제공하며 16바이트 정렬을 준수합니다.
 struct Params {
   // 변수: numElements
   // 목적: 더해야 할 입력 배열의 전체 원소 개수를 나타냅니다.
   // 작동 방식: 전역 인덱스가 유효 범위를 벗어나는지 검사하는 용도로 사용됩니다.
   numElements: u32,
+  // 변수: workgroups_x
+  // 목적: 65,535 초과 시 2D 그리드로 분할된 X축 워크그룹 개수입니다.
+  // 작동 방식: workgroup_id.y * workgroups_x + workgroup_id.x 수식을 통해 1D 선형 워크그룹 인덱스를 복원합니다.
+  workgroups_x: u32,
   // 변수: pad1
   // 목적: 16바이트 메모리 정렬(Alignment)을 맞추기 위한 패딩입니다.
-  // 작동 방식: 구조체 크기를 16바이트 배수로 맞춰 메모리 접근 성능을 높입니다.
   pad1: u32,
   // 변수: pad2
   // 목적: 16바이트 메모리 정렬(Alignment)을 맞추기 위한 패딩입니다.
-  // 작동 방식: 구조체 크기를 16바이트 배수로 맞춰 메모리 접근 성능을 높입니다.
   pad2: u32,
-  // 변수: pad3
-  // 목적: 16바이트 메모리 정렬(Alignment)을 맞추기 위한 패딩입니다.
-  // 작동 방식: 구조체 크기를 16바이트 배수로 맞춰 메모리 접근 성능을 높입니다.
-  pad3: u32,
 };
 
 // 변수: params
 // 목적: 유니폼 버퍼를 통해 워크그룹 외부에서 메타데이터를 주입받습니다.
-// 작동 방식: 바인딩 0에 할당되어 전체 요소 개수를 모든 스레드에 제공합니다.
+// 작동 방식: 바인딩 0에 할당되어 전체 요소 개수와 그리드 크기를 모든 스레드에 제공합니다.
 @group(0) @binding(0) var<uniform> params: Params;
 
 // 변수: input
@@ -2255,13 +2552,18 @@ var<workgroup> s_data: array<f32, 256>;
 
 // 함수: main
 // 목적: 배열 요소들의 총합을 구하기 위한 병렬 Reduction(축소) 알고리즘을 수행합니다.
-// 작동 방식: 워크그룹 내에서 공유 메모리를 사용하여 트리(Tree) 구조로 단계별 덧셈을 수행합니다.
+// 작동 방식: 2D 워크그룹 좌표에서 선형 인덱스를 복원하고 공유 메모리를 사용하여 트리(Tree) 구조로 단계별 덧셈을 수행합니다.
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>, @builtin(workgroup_id) workgroup_id: vec3<u32>) {
+  // 변수: wg_linear
+  // 목적: 2D 그리드로 분할된 워크그룹의 고유 1차원 선형 인덱스를 복원합니다.
+  // 작동 방식: workgroup_id.y * params.workgroups_x + workgroup_id.x
+  let wg_linear = workgroup_id.y * params.workgroups_x + workgroup_id.x;
+
   // 변수: gid
   // 목적: 전체 스레드 중 현재 스레드의 고유 1차원 전역 인덱스입니다.
-  // 작동 방식: global_id.x 값을 가져와 입력 데이터 접근에 사용합니다.
-  let gid = global_id.x;
+  // 작동 방식: 선형 워크그룹 번호와 로컬 ID를 조합하여 계산합니다.
+  let gid = wg_linear * 256u + local_id.x;
 
   // 변수: lid
   // 목적: 현재 워크그룹 내에서의 로컬 인덱스(0~255)입니다.
@@ -2269,9 +2571,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invo
   let lid = local_id.x;
 
   // 변수: wid
-  // 목적: 현재 속해 있는 워크그룹의 고유 ID입니다.
-  // 작동 방식: workgroup_id.x 값을 가져와 부분 합 결과를 저장할 위치를 결정합니다.
-  let wid = workgroup_id.x;
+  // 목적: 부분 합 결과를 저장할 출력 버퍼 위치 인덱스입니다.
+  let wid = wg_linear;
   
   // 제어문: if-else
   // 목적: 입력 데이터를 로컬 공유 메모리에 복사하면서, 범위를 벗어난 공간을 0으로 초기화합니다.
@@ -2316,17 +2617,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invo
  * 파일 생성일: 2026-08-12 12:14:52 +0900 (commit c2ee1bbf60255f375f779eba2ff8b1270c48b6e6)
  * 수정 이력:
  * - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
+ * - 2026-08-18 00:30:00 +0900: Fix(SCRUM-157/VULN-05): 2D workgroup linear index reconstruction for >65535 reductions
  */
 const MAX_WGSL = `
 /**
  * 이 구조체(Params)는 텐서의 최댓값을 구하는 Reduction(리덕션) 연산에 필요한 정보를 담고 있습니다.
- * 요소의 전체 개수를 전달하여 버퍼 경계를 넘는 접근을 방지하기 위해 존재합니다.
+ * 요소의 전체 개수와 2D 분할 그리드 정보를 전달하여 버퍼 경계를 넘는 접근을 방지하고 선형 인덱스를 복원합니다.
  */
 struct Params {
   numElements: u32, // 최댓값을 찾을 전체 배열 원소의 개수입니다.
-  pad1: u32, // WebGPU의 16바이트 정렬을 맞추기 위한 빈 패딩 변수입니다.
+  workgroups_x: u32, // 65,535 초과 시 분할된 2D 그리드의 X축 워크그룹 수입니다.
+  pad1: u32, // 16바이트 정렬을 위한 첫 번째 패딩 변수입니다.
   pad2: u32, // 16바이트 정렬을 위한 두 번째 패딩 변수입니다.
-  pad3: u32, // 16바이트 정렬을 위한 세 번째 패딩 변수입니다.
 };
 
 @group(0) @binding(0) var<uniform> params: Params; // GPU에 전달되는 메타데이터 유니폼 버퍼입니다.
@@ -2342,9 +2644,10 @@ var<workgroup> s_data: array<f32, 256>;
  */
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invocation_id) local_id: vec3<u32>, @builtin(workgroup_id) workgroup_id: vec3<u32>) {
-  let gid = global_id.x; // 글로벌 단위에서 현재 스레드의 1차원 인덱스입니다.
+  let wg_linear = workgroup_id.y * params.workgroups_x + workgroup_id.x; // 2D 워크그룹 좌표에서 선형 인덱스를 복원합니다.
+  let gid = wg_linear * 256u + local_id.x; // 글로벌 단위에서 현재 스레드의 1차원 인덱스입니다.
   let lid = local_id.x; // 워크그룹 내부에서 현재 스레드의 1차원 인덱스(0~255)입니다.
-  let wid = workgroup_id.x; // 현재 스레드가 속한 워크그룹의 ID(인덱스)입니다.
+  let wid = wg_linear; // 현재 스레드가 속한 워크그룹의 선형 ID(인덱스)입니다.
   
   // 글로벌 인덱스가 데이터 크기 이내라면 입력 데이터를, 벗어난다면 부동소수점의 최소값(-FLT_MAX)을 공유 메모리에 로드합니다.
   if (gid < params.numElements) {
@@ -2376,81 +2679,161 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>, @builtin(local_invo
 `;
 
 /**
- * 파일 생성: 2026-08-12 12:14:52
- * 수정 내역:
- * - 2026-08-12 12:14:52: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories (c2ee1bbf60255f375f779eba2ff8b1270c48b6e6)
+ * 파일 생성일: 2026-08-12 12:14:52 +0900 (commit c2ee1bbf60255f375f779eba2ff8b1270c48b6e6)
+ * 수정 이력:
+ * - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
+ * - 2026-08-18 00:30:00 +0900: Fix(SCRUM-154/VULN-02): Generic 3-parameter reduction for 3D/4D tensors
  */
 const SUM_AXIS_WGSL = `
-// 구조체: Params
-// 목적: 특정 축(Axis)을 기준으로 합계를 구할 때 필요한 차원 정보를 제공합니다.
-// 작동 방식: 행(M)과 열(N)의 크기를 정의하고, 16바이트 메모리 정렬을 맞춥니다.
+/**
+ * 이 구조체(Params)는 임의 축에 대한 텐서 축소(Sum Along Axis) 연산에 필요한 메타데이터를 담고 있습니다.
+ * 3차원 이상의 고차원 텐서에서도 일반화된 (outer_size, reduction_size, inner_stride) 3-파라미터 체계를 지원합니다.
+ */
 struct Params {
-  // 변수: M
-  // 목적: 누적(sum) 연산이 수행될 행(Row)의 크기(축의 길이)를 지정합니다.
-  // 작동 방식: 반복문에서 행의 인덱스가 M에 도달할 때까지 합계를 구합니다.
-  M: u32,
-  // 변수: N
-  // 목적: 스레드들이 병렬로 처리할 열(Column)의 개수입니다.
-  // 작동 방식: 각 스레드가 N개의 열 중 하나를 담당하여 각 열의 합계를 독립적으로 계산합니다.
-  N: u32,
-  // 변수: pad1
-  // 목적: 16바이트 메모리 정렬(Alignment)을 맞추기 위한 패딩입니다.
-  // 작동 방식: GPU 메모리 읽기 성능 저하를 방지하기 위해 빈 공간을 둡니다.
+  outer_size: u32,     // 축소 축 이전의 외부 배치/차원들의 곱
+  reduction_size: u32, // 축소할 대상 축의 원소 개수 (Reduction Dimension Size)
+  inner_stride: u32,   // 축소 축 이후의 내부 차원들의 스트라이드 곱
+  output_numel: u32,   // 결과 텐서의 총 원소 개수 (outer_size * inner_stride)
+  workgroups_x: u32,   // 2D 디스패치 분할을 위한 X축 워크그룹 수
+  pad0: u32,
   pad1: u32,
-  // 변수: pad2
-  // 목적: 16바이트 메모리 정렬(Alignment)을 맞추기 위한 패딩입니다.
-  // 작동 방식: GPU 메모리 읽기 성능 저하를 방지하기 위해 빈 공간을 둡니다.
   pad2: u32,
 };
 
-// 변수: params
-// 목적: 커널 실행 시 M, N 등의 차원 정보를 담아 전달하는 유니폼 버퍼입니다.
-// 작동 방식: 바인딩 0에 매핑되어 워크그룹 내에서 공유됩니다.
-@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(0) var<uniform> params: Params; // GPU에 전달되는 축소 메타데이터 버퍼입니다.
+@group(0) @binding(1) var<storage, read> input: array<f32>; // 축소 연산을 수행할 원본 입력 텐서입니다.
+@group(0) @binding(2) var<storage, read_write> output: array<f32>; // 축소된 결과가 저장될 출력 텐서입니다.
 
-// 변수: input
-// 목적: 합계를 구할 2차원(혹은 1차원으로 평면화된) 배열 데이터를 저장하는 버퍼입니다.
-// 작동 방식: 바인딩 1에 할당되며 읽기 전용으로 접근합니다.
-@group(0) @binding(1) var<storage, read> input: array<f32>;
-
-// 변수: output
-// 목적: 특정 축을 기준으로 축소(Reduce)된 결과를 저장할 버퍼입니다.
-// 작동 방식: 바인딩 2에 할당되며, N 크기의 배열로 결과가 쓰여집니다.
-@group(0) @binding(2) var<storage, read_write> output: array<f32>;
-
-// 함수: main
-// 목적: 주어진 데이터의 첫 번째 축(Row)을 기준으로 열 단위 합계를 병렬 연산합니다.
-// 작동 방식: 각 스레드가 하나의 열(col)을 담당하고 모든 행(row)을 순회하며 합산합니다.
+/**
+ * main 함수는 출력 텐서의 각 원소에 대해 입력 텐서의 reduction_size개 원소들을 순회하며 합산합니다.
+ */
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  // 변수: col
-  // 목적: 현재 스레드가 담당할 열(Column)의 인덱스입니다.
-  // 작동 방식: global_id.x 값을 이용하여 계산할 열 위치를 특정합니다.
-  let col = global_id.x;
-  
-  // 제어문: if
-  // 목적: 할당된 스레드의 인덱스가 실제 열 개수(N)를 초과하는지 검사합니다.
-  // 작동 방식: col이 N 이상이면 유효하지 않은 스레드이므로 즉시 종료(return)합니다.
-  if (col >= params.N) {
+  let workgroups_x = params.workgroups_x;
+  let out_idx = global_id.x + global_id.y * workgroups_x * 64u;
+
+  if (out_idx >= params.output_numel) {
     return;
   }
-  
-  // 변수: sum
-  // 목적: 특정 열에 대한 총합을 누적할 로컬 변수입니다.
-  // 작동 방식: 0.0으로 초기화된 후 루프를 돌면서 요소의 값을 계속 더해나갑니다.
+
+  let inner_stride = params.inner_stride;
+  let reduction_size = params.reduction_size;
+  let outer_idx = out_idx / inner_stride;
+  let inner_idx = out_idx % inner_stride;
+  let slice_stride = reduction_size * inner_stride;
+  let base_offset = outer_idx * slice_stride + inner_idx;
+
   var sum = 0.0;
-  
-  // 반복문: for
-  // 목적: 행(Row) 방향으로 데이터를 탐색하며 각 요소를 더합니다.
-  // 작동 방식: row를 0부터 M-1까지 1씩 증가시키며 \`sum += input[row * N + col]\` 연산을 수행합니다.
-  for (var row = 0u; row < params.M; row = row + 1u) {
-    sum += input[row * params.N + col];
+  for (var r = 0u; r < reduction_size; r = r + 1u) {
+    sum += input[base_offset + r * inner_stride];
   }
-  
-  // 연산: output 배열 기록
-  // 목적: 반복문이 끝난 후 계산된 최종 열 합계를 결과 버퍼에 저장합니다.
-  // 작동 방식: 해당 스레드가 담당한 열 인덱스(col) 위치에 누적된 sum을 기록합니다.
-  output[col] = sum;
+  output[out_idx] = sum;
+}
+`;
+
+/**
+ * 파일 생성일: 2026-08-18T12:05:00+09:00
+ * 역할: 축 방향 최댓값 리덕션 (Max Reduction Along Axis) WGSL 커널
+ * 목적: Softmax의 수치적 안정성(x - max(x)) 및 축별 Max 연산을 GPU에서 고속 병렬 처리하기 위함
+ */
+const MAX_AXIS_WGSL = `
+struct Params {
+  outer_size: u32,     // 축소 축 이전의 외부 배치/차원들의 곱
+  reduction_size: u32, // 축소할 대상 축의 원소 개수 (Reduction Dimension Size)
+  inner_stride: u32,   // 축소 축 이후의 내부 차원들의 스트라이드 곱
+  output_numel: u32,   // 결과 텐서의 총 원소 개수 (outer_size * inner_stride)
+  workgroups_x: u32,   // 2D 디스패치 분할을 위한 X축 워크그룹 수
+  pad0: u32,
+  pad1: u32,
+  pad2: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> input: array<f32>;
+@group(0) @binding(2) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let workgroups_x = params.workgroups_x;
+  let out_idx = global_id.x + global_id.y * workgroups_x * 64u;
+
+  if (out_idx >= params.output_numel) {
+    return;
+  }
+
+  let inner_stride = params.inner_stride;
+  let reduction_size = params.reduction_size;
+  let outer_idx = out_idx / inner_stride;
+  let inner_idx = out_idx % inner_stride;
+  let slice_stride = reduction_size * inner_stride;
+  let base_offset = outer_idx * slice_stride + inner_idx;
+
+  var max_val = -3.402823e+38;
+  for (var r = 0u; r < reduction_size; r = r + 1u) {
+    let val = input[base_offset + r * inner_stride];
+    if (val > max_val) {
+      max_val = val;
+    }
+  }
+  output[out_idx] = max_val;
+}
+`;
+
+/**
+ * 파일 생성일: 2026-08-18T13:20:00+09:00
+ * 역할: 축 방향 최댓값 역전파 (Max Reduction Backward Along Axis) WGSL 커널
+ * 목적: GPU 상에서 x.max(axis).backward() 호출 시 기울기 전파 및 중복 최댓값 분산 처리
+ */
+const MAX_AXIS_BACKWARD_WGSL = `
+struct Params {
+  outer_size: u32,
+  reduction_size: u32,
+  inner_stride: u32,
+  input_numel: u32,
+  workgroups_x: u32,
+  _pad0: u32,
+  _pad1: u32,
+  _pad2: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> x: array<f32>;
+@group(0) @binding(2) var<storage, read> grad_out: array<f32>;
+@group(0) @binding(3) var<storage, read_write> grad_x: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let linear = gid.x + gid.y * params.workgroups_x * 64u;
+  if (linear >= params.input_numel) {
+    return;
+  }
+
+  let inner = linear % params.inner_stride;
+  let tmp = linear / params.inner_stride;
+  let r = tmp % params.reduction_size;
+  let outer = tmp / params.reduction_size;
+
+  let reduced_idx = outer * params.inner_stride + inner;
+
+  var max_val = -3.402823e+38;
+  for (var j: u32 = 0u; j < params.reduction_size; j = j + 1u) {
+    let idx = outer * params.reduction_size * params.inner_stride + j * params.inner_stride + inner;
+    max_val = max(max_val, x[idx]);
+  }
+
+  var count: f32 = 0.0;
+  for (var j: u32 = 0u; j < params.reduction_size; j = j + 1u) {
+    let idx = outer * params.reduction_size * params.inner_stride + j * params.inner_stride + inner;
+    if (x[idx] == max_val) {
+      count = count + 1.0;
+    }
+  }
+
+  if (x[linear] == max_val && count > 0.0) {
+    grad_x[linear] = grad_out[reduced_idx] / count;
+  } else {
+    grad_x[linear] = 0.0;
+  }
 }
 `;
 
@@ -2458,52 +2841,34 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
  * 생성일 (Created): 2026-08-12 12:14:52 +0900
  * 수정 내역 (Modified):
  *   - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
+ *   - 2026-08-18 14:10:00 +0900: Pure Standard IEEE-754 SGD Update without silent NaN/Inf zeroing
  */
 const AXPY_WGSL = `
 /**
  * @struct Params
- * @brief AXPY (Y = Y - alpha * X 형태, 여기서는 Parameter Update) 연산의 파라미터를 담고 있습니다. (What)
- * 머신러닝의 경사하강법(Gradient Descent) 시 가중치를 학습률(learning rate)에 비례하여 업데이트하기 위해 존재합니다. (Why)
+ * @brief AXPY (param = param - lr * grad) 연산 파라미터 구조체
  */
 struct Params {
-  // 업데이트를 수행할 전체 요소(가중치/파라미터)의 개수입니다.
   numElements: u32,
-  // 학습률(learning rate, lr)입니다. 그레이디언트(grad)가 파라미터에 미치는 영향을 조절합니다.
   lr: f32,
-  // 16바이트(float4) 정렬을 맞추기 위해 사용되는 패딩입니다.
+  workgroups_x: u32,
   pad1: u32,
-  // 16바이트(float4) 정렬을 맞추기 위해 사용되는 패딩입니다.
-  pad2: u32,
 };
 
-// params: 균일한 크기를 가지는 파라미터 버퍼입니다. 업데이트에 필요한 총 요소 수와 학습률 등을 포함합니다.
 @group(0) @binding(0) var<uniform> params: Params;
-// grad: 파라미터에 대한 기울기(Gradient) 값을 담고 있는 배열입니다. (읽기 전용)
 @group(0) @binding(1) var<storage, read> grad: array<f32>;
-// param: 현재 모델의 가중치(파라미터) 배열입니다. 읽고 쓰기가 가능하며 이 배열 자체에 결과를 덮어씌웁니다(In-place update).
 @group(0) @binding(2) var<storage, read_write> param: array<f32>;
 
-/**
- * @function main
- * @brief 그레이디언트 값에 학습률을 곱한 뒤 기존 파라미터에서 빼는 방식(param = param - lr * grad)으로 값을 갱신합니다. (What)
- * GPU 코어들을 병렬로 사용하여 수많은 모델 파라미터를 한 번에 업데이트하기 위해(Why) 실행되는 메인 셰이더입니다.
- * @param global_id 워크그룹 내 스레드의 3차원 전역 인덱스 변수입니다.
- */
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  // 1차원 전역 인덱스를 가져옵니다. 각 스레드가 하나의 파라미터를 담당합니다. (How)
-  let idx = global_id.x;
-  
-  // 현재 인덱스가 처리해야 할 요소 개수(numElements)를 넘어갔는지 검사합니다. (What)
-  // 배열 크기 이상의 메모리 접근을 방지하기 위함입니다. (Why)
+  let idx = global_id.x + global_id.y * params.workgroups_x * 64u;
   if (idx >= params.numElements) {
     return;
   }
   
   let g = grad[idx];
-  // Numerical Safety: Guard against NaN/Inf gradient poisoning (IEEE 754 in WGSL)
-  let safe_g = select(clamp(g, -1e6, 1e6), 0.0, g != g);
-  param[idx] = param[idx] - params.lr * safe_g;
+  // Standard SGD in-place update (IEEE 754 float32)
+  param[idx] = param[idx] - params.lr * g;
 }
 `;
 
@@ -2527,9 +2892,9 @@ struct Params {
   // 변수: pad_val
   // 역할: 빈 공간에 채워 넣을 상수 값(패딩 값)
   pad_val: f32,
-  // 변수: _pad
-  // 역할: WebGPU 메모리 정렬(16바이트)을 맞추기 위한 여분(padding) 변수
-  _pad: u32,
+  // 변수: workgroups_x
+  // 역할: 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수
+  workgroups_x: u32,
   // 변수: in_strides
   // 역할: 최대 8차원까지 지원하는 원본 입력 텐서의 차원별 메모리 보폭(Stride) 배열
   in_strides: array<u32, 8>,
@@ -2563,8 +2928,8 @@ struct Params {
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   // 변수: idx
-  // 역할: 현재 스레드가 담당하는 출력 텐서의 1차원 전역 인덱스
-  let idx = global_id.x;
+  // 역할: 2D 디스패치 그리드로부터 복원한 현재 스레드의 1차원 전역 인덱스
+  let idx = global_id.x + global_id.y * params.workgroups_x * 64u;
   
   // 조건문: 인덱스 범위 확인
   // 역할: idx가 결과 텐서의 전체 크기를 넘어서면 실행을 중지하여 유효하지 않은 메모리 접근을 방지합니다.
@@ -2639,7 +3004,7 @@ struct Params {
   num_elements: u32, // 출력 텐서의 총 원소 개수입니다.
   dim: u32, // 요소를 수집할(gather) 대상 차원(axis)의 인덱스입니다.
   rank: u32, // 텐서의 차원 수 (랭크)입니다.
-  _pad: u32, // 16바이트 메모리 정렬을 위한 패딩입니다.
+  workgroups_x: u32, // 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수
   x_strides: array<u32, 8>, // 원본 입력 텐서의 각 차원별 스트라이드(보폭)입니다.
   out_strides: array<u32, 8>, // 출력 텐서의 각 차원별 스트라이드(보폭)입니다.
   x_shape: array<u32, 8>, // 원본 입력 텐서의 모양(각 차원의 크기)입니다.
@@ -2656,7 +3021,7 @@ struct Params {
  */
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  let idx = global_id.x; // 출력 텐서에서 현재 스레드가 처리할 1D 위치(인덱스)입니다.
+  let idx = global_id.x + global_id.y * params.workgroups_x * 64u; // 2D 디스패치 선형 인덱스 복원
   
   // 현재 처리할 인덱스가 전체 요소 수를 초과하면 실행을 중단합니다.
   if (idx >= params.num_elements) { return; }
@@ -2672,8 +3037,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // 현재 차원이 수집 대상 차원(dim)인 경우, 계산된 좌표 대신 index 배열에서 값을 읽어옵니다.
     if (i == params.dim) {
-      let idx_val = u32(index[idx]); // index 배열에서 대상 인덱스를 가져와 정수로 변환합니다.
-      in_idx = in_idx + idx_val * params.x_strides[i]; // 가져온 인덱스에 원본 텐서의 해당 차원 스트라이드를 곱해 누적합니다.
+      let raw_idx = index[idx];
+      let dim_size = i32(params.x_shape[i]);
+      var signed_idx = i32(raw_idx);
+      if (signed_idx < 0) {
+        signed_idx = signed_idx + dim_size;
+      }
+      let clamped_idx = u32(clamp(signed_idx, 0, max(0, dim_size - 1)));
+      in_idx = in_idx + clamped_idx * params.x_strides[i];
     } else {
       // 수집 대상 차원이 아닌 경우, 출력 텐서와 동일한 좌표를 유지합니다.
       in_idx = in_idx + coord * params.x_strides[i]; // 동일한 좌표에 원본 텐서의 해당 차원 스트라이드를 곱해 누적합니다.
@@ -2705,15 +3076,18 @@ struct Params {
   // 변수: rank
   // 역할: 텐서가 갖는 전체 차원 수
   rank: u32,
-  // 변수: _pad
-  // 역할: 메모 정렬을 위한 16바이트 패딩 변수
-  _pad: u32,
+  // 변수: workgroups_x
+  // 역할: 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수
+  workgroups_x: u32,
   // 변수: x_strides
   // 역할: 출력 배열(입력과 동일한 형상을 가지는 베이스)의 각 차원별 메모리 보폭 배열
   x_strides: array<u32, 8>,
   // 변수: idx_strides
   // 역할: 인덱스 텐서의 각 차원별 메모리 보폭 배열
   idx_strides: array<u32, 8>,
+  // 변수: x_shape
+  // 역할: 출력 텐서의 각 차원별 크기 배열 (인덱스 바운드 검사용)
+  x_shape: array<u32, 8>,
 };
 
 // 변수: params
@@ -2740,7 +3114,7 @@ struct Params {
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   // 변수: idx
   // 역할: 소스 데이터와 인덱스 데이터의 1차원 메모리 인덱스
-  let idx = global_id.x;
+  let idx = global_id.x + global_id.y * params.workgroups_x * 64u;
   
   // 조건문: 데이터 경계 검사
   // 역할: 할당된 스레드의 인덱스가 전체 크기(num_elements)를 초과하는지 검사합니다.
@@ -2769,13 +3143,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // 조건문: 타겟 차원(dim) 여부 검사
     // 역할: 현재 처리 중인 차원이 인덱스 값으로 대체할 타겟 차원인지 판단합니다.
     if (i == params.dim) {
-      // 변수: idx_val
-      // 역할: 인덱스 텐서(index)에서 해당 위치의 값을 정수로 캐스팅하여 얻은 치환될 좌표값
-      let idx_val = u32(index[idx]);
-      
-      // 변수: out_idx 누적 (치환된 축)
-      // 역할: 원래 좌표 대신 치환된 좌표(idx_val)에 출력 보폭(x_strides)을 곱해 더합니다.
-      out_idx = out_idx + idx_val * params.x_strides[i];
+      let raw_idx = index[idx];
+      let dim_size = i32(params.x_shape[i]);
+      var signed_idx = i32(raw_idx);
+      if (signed_idx < 0) {
+        signed_idx = signed_idx + dim_size;
+      }
+      // OOB or NaN check: skip execution if index is out of bounds or NaN to prevent data corruption
+      if (signed_idx < 0 || signed_idx >= dim_size || raw_idx != raw_idx) {
+        return;
+      }
+      let valid_idx = u32(signed_idx);
+      out_idx = out_idx + valid_idx * params.x_strides[i];
     } else {
       // 변수: out_idx 누적 (일반 축)
       // 역할: 원래 논리적 좌표(coord)에 출력 보폭(x_strides)을 곱해 더합니다.
@@ -2999,12 +3378,12 @@ const DROPOUT_WGSL = `
 struct Params {
   // 드롭아웃을 적용할 전체 데이터 원소의 개수입니다.
   num_elements: u32,
-  // 난수 생성의 기반이 되는 시드(seed) 값입니다. 매번 다른 패턴의 드롭아웃을 적용하기 위해 외부에서 주입됩니다.
-  seed: f32,
+  // 난수 생성의 기반이 되는 32비트 정수 시드(seed) 값입니다.
+  seed: u32,
   // 드롭아웃 확률(p)입니다. (0.0 ~ 1.0) 이 확률보다 낮게 난수가 나오면 해당 값을 0으로 끕니다.
   p: f32,
-  // 데이터 정렬 규칙(16바이트)을 충족시키기 위해 존재하는 의미 없는 패딩 값입니다.
-  padding: f32,
+  // 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수
+  workgroups_x: u32,
 }
 
 // params: 드롭아웃 파라미터를 담고 있는 Uniform 버퍼입니다.
@@ -3051,8 +3430,7 @@ fn rand_f32(hash: u32) -> f32 {
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // 2차원(Y) 워크그룹 구조를 1차원으로 풀어 현재 스레드의 전역 선형 인덱스를 계산합니다. (How)
-    // 참고로 65535u는 X방향 워크그룹의 최대 한계를 가정하여 하드코딩된 변환 값입니다.
-    let index = global_id.x + global_id.y * 65535u * 64u;
+    let index = global_id.x + global_id.y * params.workgroups_x * 64u;
     
     // 계산된 인덱스가 전체 텐서의 원소 수보다 크거나 같으면 실행을 즉시 중단합니다. (What)
     // 올바르지 않은 메모리 범위를 건드리지 않도록 차단하는 역할입니다. (Why)
@@ -3060,8 +3438,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
     
-    // 현재 인덱스와 외부에서 입력받은 시드를 조합(스케일업)하여 해시 생성기의 입력(input)을 구성하고 난수 정수를 만듭니다. (How)
-    let hash = pcg_hash(index + u32(params.seed * 10000.0));
+    // 현재 인덱스와 외부에서 입력받은 32비트 시드를 조합하여 난수를 생성합니다. (How)
+    let hash = pcg_hash(index + params.seed);
     // 정수 형태의 해시를 0.0 ~ 1.0 사이의 실수 난수로 변환합니다. (How)
     let rand = rand_f32(hash);
     
@@ -3100,6 +3478,10 @@ struct Params {
     sW: u32, // 너비 방향의 스트라이드(보폭)입니다.
     pH: u32, // 높이 방향에 추가된 제로 패딩 크기입니다.
     pW: u32, // 너비 방향에 추가된 제로 패딩 크기입니다.
+    workgroups_x: u32, // 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수입니다.
+    pad1: u32,
+    pad2: u32,
+    pad3: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params; // GPU에 메타데이터를 공급하는 유니폼 버퍼입니다.
@@ -3112,7 +3494,7 @@ struct Params {
  */
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let idx = global_id.x; // 출력 텐서에서 현재 스레드가 담당할 1D 위치(인덱스)입니다.
+    let idx = global_id.x + global_id.y * params.workgroups_x * 64u; // 2D 디스패치 선형 인덱스 복원
     // 연산이 필요한 전체 출력 데이터의 개수를 계산합니다.
     let total = params.batch * params.channels * params.out_h * params.out_w;
     
@@ -3196,6 +3578,11 @@ struct Params {
     pH: u32,
     // 너비 방향의 패딩(padding) 크기입니다.
     pW: u32,
+    // 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수입니다.
+    workgroups_x: u32,
+    pad1: u32,
+    pad2: u32,
+    pad3: u32,
 }
 
 // params: 연산 정보를 제공하는 uniform 버퍼입니다.
@@ -3213,8 +3600,8 @@ struct Params {
  */
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    // 현재 스레드의 선형 인덱스를 가져옵니다.
-    let idx = global_id.x;
+    // 2D 디스패치 그리드로부터 복원한 현재 스레드의 선형 인덱스를 가져옵니다.
+    let idx = global_id.x + global_id.y * params.workgroups_x * 64u;
     
     // 계산해야 할 전체 출력 요소의 총합을 구합니다 (배치 * 채널 * 출력높이 * 출력너비). (How)
     let total = params.batch * params.channels * params.out_h * params.out_w;
@@ -3300,6 +3687,8 @@ struct Params {
   padding: u32, // 입력 이미지 가장자리에 추가할 제로 패딩의 크기입니다.
   H_out: u32, // 연산 후 생성될 출력 특성 맵의 높이입니다.
   W_out: u32, // 연산 후 생성될 출력 특성 맵의 너비입니다.
+  workgroups_x: u32, // 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수입니다.
+  pad1: u32, // 16바이트 메모리 정렬을 위한 패딩입니다.
 };
 
 @group(0) @binding(0) var<uniform> params: Params; // GPU에 컨볼루션 설정값을 전달하는 유니폼 버퍼입니다.
@@ -3313,7 +3702,7 @@ struct Params {
  */
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  let idx = global_id.x; // 출력 im2col 버퍼에서의 현재 스레드의 1D 인덱스입니다.
+  let idx = global_id.x + global_id.y * params.workgroups_x * 64u; // 2D 디스패치 선형 인덱스 복원
   // 변환될 출력 배열의 총 요소 개수를 계산합니다 (N * H_out * W_out * C * K_h * K_w).
   let num_elements = params.N * params.H_out * params.W_out * params.C * params.K_h * params.K_w;
   
@@ -3390,6 +3779,9 @@ struct Params {
   H_out: u32,
   // 합성곱 연산 결과 출력 텐서의 너비
   W_out: u32,
+  // 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수입니다.
+  workgroups_x: u32,
+  pad1: u32,
 };
 
 // params: col2im 역산 및 복원 계산을 위한 각종 텐서 차원들을 포함한 uniform 버퍼입니다.
@@ -3408,8 +3800,8 @@ struct Params {
  */
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  // 현재 스레드가 처리할 원본 텐서 상의 1차원 인덱스입니다. (How)
-  let idx = global_id.x;
+  // 2D 디스패치 그리드로부터 복원한 현재 스레드가 처리할 원본 텐서 상의 1차원 인덱스입니다. (How)
+  let idx = global_id.x + global_id.y * params.workgroups_x * 64u;
   // 전체 요소 개수 = 배치 * 채널 * 높이 * 너비 를 계산합니다.
   let num_elements = params.N * params.C * params.H * params.W;
   
@@ -3506,9 +3898,11 @@ struct Params {
   // 변수: numElements
   // 역할: 텐서 내 존재하는 전체 데이터 요소의 개수
   numElements: u32,
-  // 변수: pad1, pad2
+  // 변수: workgroups_x
+  // 역할: X축 방향으로 할당된 워크그룹(workgroup)의 총 개수
+  workgroups_x: u32,
+  // 변수: pad2
   // 역할: 16바이트 메모리 정렬을 위한 패딩 변수
-  pad1: u32,
   pad2: u32,
   // 변수: in_strides
   // 역할: 입력 텐서의 첫 4차원(0~3)에 대한 메모리 보폭
@@ -3516,8 +3910,6 @@ struct Params {
   // 변수: in_strides_ext
   // 역할: 입력 텐서의 확장 4차원(4~7)에 대한 메모리 보폭
   in_strides_ext: vec4<u32>,
-  // 변수: out_shape
-  // 역할: 출력 텐서의 첫 4차원(0~3)에 대한 크기(Shape)
   out_shape: vec4<u32>,
   // 변수: out_shape_ext
   // 역할: 출력 텐서의 확장 4차원(4~7)에 대한 크기(Shape)
@@ -3551,7 +3943,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   // 변수: out_idx
   // 역할: 2D 그리드 디스패치(dispatch)를 지원하기 위해 글로벌 ID x, y를 결합하여 만든 1차원 출력 인덱스
   // 주석: Compute global index supporting 2D grid dispatch
-  let out_idx = global_id.x + global_id.y * 65535u * 64u;
+  let out_idx = global_id.x + global_id.y * params.workgroups_x * 64u;
   
   // 조건문: 데이터 범위 초과 검사
   // 역할: 스레드의 계산된 인덱스가 전체 요소 크기를 넘어서는지 판단하여 초과 시 연산을 중지합니다.
@@ -3691,6 +4083,54 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 `;
 
 /**
+ * AMEVA-Forge Fused Linear Kernel: MatMul + BiasAdd + ReLU
+ * Computes C = ReLU(A @ B + Bias) in a single GPU compute pass.
+ */
+const MATMUL_BIAS_RELU_WGSL = `
+struct Params {
+  M: u32,
+  N: u32,
+  K: u32,
+  offsetY: u32,
+  has_bias: u32,
+  has_relu: u32,
+  pad1: u32,
+  pad2: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> a: array<f32>;
+@group(0) @binding(2) var<storage, read> b: array<f32>;
+@group(0) @binding(3) var<storage, read> bias: array<f32>;
+@group(0) @binding(4) var<storage, read_write> c: array<f32>;
+
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let col = global_id.x + global_id.z * 65535u * 8u;
+  let row = global_id.y + params.offsetY;
+
+  if (row >= params.M || col >= params.N) {
+    return;
+  }
+
+  var sum: f32 = 0.0;
+  for (var k: u32 = 0u; k < params.K; k = k + 1u) {
+    sum = sum + a[row * params.K + k] * b[k * params.N + col];
+  }
+
+  if (params.has_bias == 1u) {
+    sum = sum + bias[col];
+  }
+
+  if (params.has_relu == 1u) {
+    sum = max(sum, 0.0);
+  }
+
+  c[row * params.N + col] = sum;
+}
+`;
+
+/**
  * Created: 2026-08-12T12:14:52+09:00
  * Modified:
  *   - 2026-08-12T12:59:35+09:00: Feat: Introduce v3.0 features (CNN, Pooling, Dropout, Serialization)
@@ -3713,6 +4153,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
  */
 const KERNEL_REGISTRY = new Map([
     ['matmul', MATMUL_WGSL],
+    ['matmul_bias_relu', MATMUL_BIAS_RELU_WGSL],
     ['batched_matmul', BATCHED_MATMUL_WGSL],
     ['relu', RELU_WGSL],
     ['add', ADD_WGSL],
@@ -3732,6 +4173,8 @@ const KERNEL_REGISTRY = new Map([
     ['sum', SUM_WGSL],
     ['max', MAX_WGSL],
     ['sum_axis', SUM_AXIS_WGSL],
+    ['max_axis', MAX_AXIS_WGSL],
+    ['max_axis_backward', MAX_AXIS_BACKWARD_WGSL],
     ['axpy', AXPY_WGSL],
     ['pad', PAD_WGSL],
     ['gather', GATHER_WGSL],
@@ -3759,28 +4202,54 @@ const _inFlightMapPromises = new Map();
  * WHY: 디바이스 유실(Device Lost) 이벤트가 발생하거나 시스템 강제 리셋 시 남은 자원의 메모리 누수를 방지하기 위해 존재합니다.
  * HOW: 텐서 레지스트리, 쿼터 매니저, 파이프라인 캐시를 지우고, 대기 중인 스테이징 버퍼들도 순회하여 언맵(unmap) 및 파괴(destroy)합니다.
  */
-function resetRuntimeMemory() {
-    _globalRegistry.clear();
-    _globalQuotaManager.reset();
-    _globalPipelineCache.clear(); // L-03 Fix: device lost 시 파이프라인 캐시도 무효화
-    _inFlightMapPromises.clear();
-    /**
-     * WHAT: 스테이징 버퍼 맵에 남아있는 모든 엔트리를 순회하여 파괴하는 루프입니다.
-     * WHY: 사용되지 않고 남겨진 스테이징 버퍼가 VRAM을 계속 차지하는 것을 방지하기 위해 필요합니다.
-     * HOW: _pendingStagingBuffers 맵의 모든 값을 하나씩 꺼내어 언맵 및 소각을 시도하고 토큰을 해제합니다.
-     */
-    for (const [, obj] of _pendingStagingBuffers) {
-        try {
-            obj.stagingBuffer.unmap();
+function resetRuntimeMemory(reason = "manual-reset") {
+    _safeLog$1(`[RuntimeReset] start: ${reason}`);
+    // 1. Pending staging buffers & staging pool cleanup
+    try {
+        for (const [, obj] of _pendingStagingBuffers) {
+            try {
+                obj.stagingBuffer.unmap();
+            }
+            catch { /* already unmapped */ }
+            try {
+                obj.stagingBuffer.destroy();
+            }
+            catch { /* already destroyed */ }
+            _globalQuotaManager.releaseToken(obj.token);
         }
-        catch { /* already unmapped */ }
-        try {
-            obj.stagingBuffer.destroy();
-        }
-        catch { /* already destroyed */ }
-        _globalQuotaManager.releaseToken(obj.token);
+        _pendingStagingBuffers.clear();
     }
-    _pendingStagingBuffers.clear();
+    catch (e) {
+        _safeLog$1(`[RuntimeReset] staging buffer cleanup error: ${e}`);
+    }
+    try {
+        clearStagingPool(); // VULN-04: Clear pool buffers & tokens
+    }
+    catch (e) {
+        _safeLog$1(`[RuntimeReset] clearStagingPool error: ${e}`);
+    }
+    // 2. In-flight promises & pipeline cache
+    try {
+        _inFlightMapPromises.clear();
+        _globalPipelineCache.clear();
+    }
+    catch (e) {
+        _safeLog$1(`[RuntimeReset] pipeline cache error: ${e}`);
+    }
+    // 3. Quota & registry reset
+    try {
+        _globalRegistry.clear();
+    }
+    catch (e) {
+        _safeLog$1(`[RuntimeReset] registry clear error: ${e}`);
+    }
+    try {
+        _globalQuotaManager.reset();
+    }
+    catch (e) {
+        _safeLog$1(`[RuntimeReset] quota reset error: ${e}`);
+    }
+    _safeLog$1(`[RuntimeReset] done: ${reason}`);
 }
 /**
  * WHAT: 시스템 로거가 존재할 경우 로그 메시지를 남기는 래퍼 함수입니다.
@@ -4247,13 +4716,15 @@ function relu(handle) {
      */
     const numElements = x.byteLength / 4;
     const { buffer: outBuffer, token } = allocateBuffer(x.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+    const dispatch = computeDispatch2D(numElements, 64);
     dispatchKernel({
         opKey: 'relu',
         wgslCode: RELU_WGSL,
-        paramsData: new Uint32Array([numElements, 0, 0, 0]),
+        paramsData: new Uint32Array([numElements, dispatch.workgroupsX, 0, 0]),
         inputBuffers: [x.buffer],
         outBuffer,
-        dispatchX: Math.ceil(numElements / 64),
+        dispatchX: dispatch.dispatchX,
+        dispatchY: dispatch.dispatchY,
     });
     return _globalRegistry.register({ buffer: outBuffer, token, shape: [...x.shape], dtype: "float32", byteLength: x.byteLength });
 }
@@ -4263,37 +4734,35 @@ function relu(handle) {
  * HOW: 형태가 같은 두 텐서 버퍼를 넘겨받아 add 셰이더를 실행시키고 새로운 텐서를 생성해 반환합니다.
  */
 function add(handleA, handleB) {
-    /**
-     * WHAT: 덧셈의 왼쪽 항(A) 텐서 레코드입니다.
-     * WHY: A의 버퍼 데이터를 연산 파이프라인에 주입하고 반환 텐서의 모양을 빌리기 위해 참조됩니다.
-     * HOW: 레지스트리를 통해 핸들로 가져옵니다.
-     */
     const a = _globalRegistry.get(handleA);
-    /**
-     * WHAT: 덧셈의 오른쪽 항(B) 텐서 레코드입니다.
-     * WHY: A와 합쳐질 데이터를 제공하기 위해 조회됩니다.
-     * HOW: 레지스트리를 통해 조회됩니다.
-     */
     const b = _globalRegistry.get(handleB);
-    // F-020 Fix: Direct API (add, mul) exact shape match
     if (a.shape.length !== b.shape.length || !a.shape.every((v, i) => v === b.shape[i]))
         throw new AMEVAForgeShapeError("Add requires tensors of the exact same shape");
     if (a.dtype !== "float32" || b.dtype !== "float32")
         throw new AMEVAForgeDTypeError("Add requires float32");
-    /**
-     * WHAT: 두 텐서가 공통으로 가지고 있는 원소의 수입니다.
-     * WHY: 셰이더가 병렬로 처리해야 할 작업의 총 개수(스레드 한계)를 지정하기 위함입니다.
-     * HOW: 바이트 길이를 4로 나누어 구합니다.
-     */
     const numElements = a.byteLength / 4;
     const { buffer: outBuffer, token } = allocateBuffer(a.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+    const { dOut, effSA, effSB } = computeBroadcastParams(a.shape, a.shape, b.shape);
+    const dispatch = computeDispatch2D(numElements, 64);
+    const paramsData = new Uint32Array(28);
+    paramsData[0] = numElements;
+    paramsData[1] = dispatch.workgroupsX;
+    paramsData[2] = a.shape.length;
+    paramsData[3] = 0;
+    for (let k = 0; k < 8; k++)
+        paramsData[4 + k] = dOut[k];
+    for (let k = 0; k < 8; k++)
+        paramsData[12 + k] = effSA[k];
+    for (let k = 0; k < 8; k++)
+        paramsData[20 + k] = effSB[k];
     dispatchKernel({
         opKey: 'add',
         wgslCode: ADD_WGSL,
-        paramsData: new Uint32Array([numElements, 0, 0, 0]),
+        paramsData,
         inputBuffers: [a.buffer, b.buffer],
         outBuffer,
-        dispatchX: Math.ceil(numElements / 64),
+        dispatchX: dispatch.dispatchX,
+        dispatchY: dispatch.dispatchY,
     });
     return _globalRegistry.register({ buffer: outBuffer, token, shape: [...a.shape], dtype: "float32", byteLength: a.byteLength });
 }
@@ -4303,37 +4772,35 @@ function add(handleA, handleB) {
  * HOW: 형태가 같은 두 텐서를 기반으로 mul 커널을 디스패치합니다.
  */
 function mul(handleA, handleB) {
-    /**
-     * WHAT: 곱셈 대상인 첫 번째 텐서(A)의 레코드입니다.
-     * WHY: 연산의 피연산자 버퍼로 사용하기 위해 레지스트리에서 가져옵니다.
-     * HOW: _globalRegistry.get을 통해 획득합니다.
-     */
     const a = _globalRegistry.get(handleA);
-    /**
-     * WHAT: 곱셈 대상인 두 번째 텐서(B)의 레코드입니다.
-     * WHY: 연산의 피연산자 버퍼로 사용하기 위해 레지스트리에서 가져옵니다.
-     * HOW: _globalRegistry.get을 통해 획득합니다.
-     */
     const b = _globalRegistry.get(handleB);
-    // F-020 Fix: Direct API exact shape match
     if (a.shape.length !== b.shape.length || !a.shape.every((v, i) => v === b.shape[i]))
         throw new AMEVAForgeShapeError("Mul requires tensors of the exact same shape");
     if (a.dtype !== "float32" || b.dtype !== "float32")
         throw new AMEVAForgeDTypeError("Mul requires float32");
-    /**
-     * WHAT: 텐서 내 단일 요소들의 총 개수입니다.
-     * WHY: 디스패치할 워크그룹 수를 결정하기 위해 계산됩니다.
-     * HOW: 전체 바이트 수를 원소 타입 크기(4)로 나누어 구합니다.
-     */
     const numElements = a.byteLength / 4;
     const { buffer: outBuffer, token } = allocateBuffer(a.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+    const { dOut, effSA, effSB } = computeBroadcastParams(a.shape, a.shape, b.shape);
+    const dispatch = computeDispatch2D(numElements, 64);
+    const paramsData = new Uint32Array(28);
+    paramsData[0] = numElements;
+    paramsData[1] = dispatch.workgroupsX;
+    paramsData[2] = a.shape.length;
+    paramsData[3] = 0;
+    for (let k = 0; k < 8; k++)
+        paramsData[4 + k] = dOut[k];
+    for (let k = 0; k < 8; k++)
+        paramsData[12 + k] = effSA[k];
+    for (let k = 0; k < 8; k++)
+        paramsData[20 + k] = effSB[k];
     dispatchKernel({
         opKey: 'mul',
         wgslCode: MUL_WGSL,
-        paramsData: new Uint32Array([numElements, 0, 0, 0]),
+        paramsData,
         inputBuffers: [a.buffer, b.buffer],
         outBuffer,
-        dispatchX: Math.ceil(numElements / 64),
+        dispatchX: dispatch.dispatchX,
+        dispatchY: dispatch.dispatchY,
     });
     return _globalRegistry.register({ buffer: outBuffer, token, shape: [...a.shape], dtype: "float32", byteLength: a.byteLength });
 }
@@ -4343,31 +4810,19 @@ function mul(handleA, handleB) {
  * HOW: 입력 형태(shape)의 [M, N]을 [N, M]으로 뒤집은 결과를 반환할 출력 버퍼에 기록하도록 transpose 셰이더를 실행합니다.
  */
 function transpose(handle) {
-    /**
-     * WHAT: 전치 연산을 수행할 원본 2차원 텐서 레코드입니다.
-     * WHY: 모양 검증과 입력 버퍼 주입을 위해 필요합니다.
-     * HOW: 레지스트리에서 핸들로 텐서 데이터를 조회합니다.
-     */
     const x = _globalRegistry.get(handle);
     if (x.shape.length !== 2)
         throw new AMEVAForgeShapeError("Transpose requires 2D tensors");
     if (x.dtype !== "float32")
         throw new AMEVAForgeDTypeError("Transpose requires float32");
-    /**
-     * WHAT: 원본 텐서의 행 크기(M)와 열 크기(N)입니다.
-     * WHY: 전치 후의 새로운 모양을 지정하고, 2차원 워크그룹을 디스패치하기 위해 필요합니다.
-     * HOW: x.shape 배열에서 직접 값을 추출합니다.
-     */
     const M = x.shape[0], N = x.shape[1];
     const { buffer: outBuffer, token } = allocateBuffer(x.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     dispatchKernel({
         opKey: 'transpose',
         wgslCode: TRANSPOSE_WGSL,
-        // F-021 Fix: transpose 커널은 B 파라미터를 요구하므로 기본값 1 전달
         paramsData: new Uint32Array([M, N, 1, 0]),
         inputBuffers: [x.buffer],
         outBuffer,
-        // transpose 셰이더: row=global_id.x, col=global_id.y
         dispatchX: Math.ceil(M / 8),
         dispatchY: Math.ceil(N / 8),
     });
@@ -4379,86 +4834,32 @@ function transpose(handle) {
  * HOW: 원본 입력 텐서(x)와 위층에서 전달된 그래디언트 텐서(grad)를 받아, x가 0보다 큰 곳은 grad를, 아니면 0을 출력 버퍼에 씁니다.
  */
 function relu_backward(handleX, handleGrad) {
-    /**
-     * WHAT: 순전파 때 사용되었던 원래의 입력 텐서(x) 레코드입니다.
-     * WHY: 데이터가 양수였는지 음수였는지 판단하는 마스크 역할을 수행하기 위해 조회합니다.
-     * HOW: 레지스트리에서 handleX 키로 가져옵니다.
-     */
     const x = _globalRegistry.get(handleX);
-    /**
-     * WHAT: 네트워크 상위 층에서 전파되어 내려온 손실(Loss)의 기울기 텐서입니다.
-     * WHY: ReLU의 미분값과 곱해져 현재 층의 최종 기울기를 형성하기 위해 사용됩니다.
-     * HOW: 레지스트리에서 handleGrad 키로 가져옵니다.
-     */
     const grad = _globalRegistry.get(handleGrad);
-    // F-020 Fix: Direct API exact shape match
     if (x.shape.length !== grad.shape.length || !x.shape.every((v, i) => v === grad.shape[i]))
         throw new AMEVAForgeShapeError("ReLU backward: shape mismatch");
-    /**
-     * WHAT: 그래디언트를 적용할 총 원소의 수입니다.
-     * WHY: 워크그룹 수를 계산하여 GPU 전체 스레드 리소스를 할당하기 위해 필요합니다.
-     * HOW: 바이트 길이를 4로 나눈 값으로 산출합니다.
-     */
     const numElements = x.byteLength / 4;
     const { buffer: outBuffer, token } = allocateBuffer(x.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+    const dispatch = computeDispatch2D(numElements, 64);
     dispatchKernel({
         opKey: 'relu_backward',
         wgslCode: RELU_BACKWARD_WGSL,
-        paramsData: new Uint32Array([numElements, 0, 0, 0]),
+        paramsData: new Uint32Array([numElements, dispatch.workgroupsX, 0, 0]),
         inputBuffers: [x.buffer, grad.buffer],
         outBuffer,
-        dispatchX: Math.ceil(numElements / 64),
+        dispatchX: dispatch.dispatchX,
+        dispatchY: dispatch.dispatchY,
     });
     return _globalRegistry.register({ buffer: outBuffer, token, shape: [...x.shape], dtype: "float32", byteLength: x.byteLength });
 }
-
-/**
- * AMEVA-Forge Fused Linear Kernel: MatMul + BiasAdd + ReLU
- * Computes C = ReLU(A @ B + Bias) in a single GPU compute pass.
- */
-const MATMUL_BIAS_RELU_WGSL = `
-struct Params {
-  M: u32,
-  N: u32,
-  K: u32,
-  offsetY: u32,
-  has_bias: u32,
-  has_relu: u32,
-  pad1: u32,
-  pad2: u32,
+const gpuCore = {
+    add,
+    mul,
+    matmul,
+    relu,
+    relu_backward,
+    transpose,
 };
-
-@group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var<storage, read> a: array<f32>;
-@group(0) @binding(2) var<storage, read> b: array<f32>;
-@group(0) @binding(3) var<storage, read> bias: array<f32>;
-@group(0) @binding(4) var<storage, read_write> c: array<f32>;
-
-@compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  let col = global_id.x + global_id.z * 65535u * 8u;
-  let row = global_id.y + params.offsetY;
-
-  if (row >= params.M || col >= params.N) {
-    return;
-  }
-
-  var sum: f32 = 0.0;
-  for (var k: u32 = 0u; k < params.K; k = k + 1u) {
-    sum = sum + a[row * params.K + k] * b[k * params.N + col];
-  }
-
-  if (params.has_bias == 1u) {
-    sum = sum + bias[col];
-  }
-
-  if (params.has_relu == 1u) {
-    sum = max(sum, 0.0);
-  }
-
-  c[row * params.N + col] = sum;
-}
-`;
 
 /**
  * Created: 2026-08-12T12:14:52+09:00
@@ -4484,40 +4885,36 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 const ALLOWED_OPS = new Set([
     'upload', 'load', 'matmul', 'batched_matmul', 'relu', 'add', 'mul', 'transpose', 'relu_backward',
     'sub', 'neg', 'div', 'exp', 'log', 'sigmoid', 'tanh', 'sigmoid_backward', 'tanh_backward',
-    'fill', 'sum', 'max', 'sum_axis', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
-    'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu'
+    'fill', 'sum', 'max', 'sum_axis', 'max_axis', 'max_axis_backward', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
+    'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape'
 ]);
-/**
- * WHAT: 단일 텐서가 가질 수 있는 최대 랭크(차원 수)입니다.
- * WHY: 다차원 반복이나 과도하게 큰 셰이더 파라미터가 유발하는 오버플로우와 성능 저하를 방지하기 위해 제한합니다.
- * HOW: 상수 8로 설정되어, 0(스칼라)부터 8차원까지만 검증을 통과하도록 합니다.
- */
-const MAX_SHAPE_DIM = 8; // NM-06: rank 0~8 허용
-/**
- * WHAT: 단일 텐서가 가질 수 있는 최대 원소의 개수입니다 (float32 기준 1GB).
- * WHY: 악의적인 대용량 텐서 생성 명령으로 인해 브라우저나 디바이스의 VRAM이 고갈(OOM)되는 것을 막기 위함입니다.
- * HOW: 256 * 1024 * 1024 (약 2억 6천만 개)로 정의되어 상한선으로 동작합니다.
- */
-const MAX_ELEMENTS = 256 * 1024 * 1024; // 1GB (float32)
-/**
- * WHAT: 하나의 그래프 실행 요청에 포함될 수 있는 최대 명령어(instruction)의 수입니다.
- * WHY: 너무 거대한 그래프 루프를 실행하다가 메인 스레드가 블로킹되거나 TDR이 발생하는 것을 막습니다.
- * HOW: 상수 10,000으로 설정되어 JSON 배열 길이를 제한합니다.
- */
-const MAX_INSTRUCTIONS = 10_000;
-/**
- * TDR 방지를 위한 워크로드 기반 적응형 분할.
- * WHAT: 단일 커맨드 제출(Submit) 당 누적 허용되는 총 GPU 작업량(원소 수) 예산입니다.
- * WHY: 윈도우 환경 등에서 GPU 작업이 2초 이상 걸리면 발생하는 TDR(Timeout Detection and Recovery)을 회피하기 위해 작업을 쪼갭니다.
- * HOW: 약 1억 개(100M)의 요소를 기준으로 청크(chunk)를 나누도록 상수를 설정합니다.
- */
-const WORKLOAD_BUDGET_ELEMENTS = 100_000_000; // 100M elements per submit
-/**
- * WHAT: 단일 커맨드 제출 당 포함될 수 있는 최대 디스패치(오퍼레이션) 수입니다.
- * WHY: 워크로드가 작더라도 слишком 많은 작은 연산을 한 번에 보내면 발생할 수 있는 오버헤드와 브라우저 블로킹을 방지합니다.
- * HOW: 256개 명령어마다 무조건 큐에 submit 하도록 강제합니다.
- */
-const MAX_OPS_PER_SUBMIT = 256; // 안전장치: element 수 관계없이 256 ops마다 강제 분할
+const DEFAULT_RUNTIME_CONFIG = {
+    workloadBudgetElements: 100_000_000,
+    maxOpsPerSubmit: 256,
+    maxShapeDim: 8,
+    maxElements: 256 * 1024 * 1024,
+    maxInstructions: 10_000,
+    allowNonFinite: false,
+};
+let _runtimeConfig = { ...DEFAULT_RUNTIME_CONFIG };
+function configureRuntime(config) {
+    _runtimeConfig = {
+        ..._runtimeConfig,
+        ...config,
+    };
+}
+function getRuntimeConfig() {
+    return { ..._runtimeConfig };
+}
+const BUFFER_USAGE_STORAGE_COPY = typeof GPUBufferUsage !== 'undefined'
+    ? (GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST)
+    : (0x0080 | 0x0004 | 0x0008);
+const BUFFER_USAGE_UNIFORM_COPY = typeof GPUBufferUsage !== 'undefined'
+    ? (GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST)
+    : (0x0040 | 0x0008);
+const BUFFER_USAGE_STORAGE_SRC = typeof GPUBufferUsage !== 'undefined'
+    ? (GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC)
+    : (0x0080 | 0x0004);
 function _safeLog(msg) {
     try {
         if (typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'development') {
@@ -4543,13 +4940,13 @@ function processDeferredGC() {
             item.retries++;
             if (item.retries >= 3) {
                 try {
-                    _globalQuotaManager.releaseToken(item.token);
+                    _globalQuotaManager.markOrphaned(item.token, String(e));
                 }
-                catch (e) {
-                    _safeLog(`[DeferredGC] releaseToken failed: ${e}`);
+                catch (err) {
+                    _safeLog(`[DeferredGC] markOrphaned failed: ${err}`);
                 }
                 _deferredGCQueue.splice(i, 1);
-                _safeLog(`[DeferredGC] Failed to destroy buffer after 3 attempts, token released: ${e}`);
+                _safeLog(`[DeferredGC] Failed to destroy buffer after 3 attempts, token marked orphaned: ${item.token.id}`);
             }
         }
     }
@@ -4624,12 +5021,12 @@ function validateInstruction(inst, idx) {
         throw new AMEVAForgeShapeError(`Instruction[${idx}]: shape must be an array`);
     }
     // NM-06: rank 0 허용 (스칼라)
-    if (i.shape.length > MAX_SHAPE_DIM) {
-        throw new AMEVAForgeShapeError(`Instruction[${idx}]: shape rank must be 0–${MAX_SHAPE_DIM}, got ${i.shape.length}`);
+    if (i.shape.length > _runtimeConfig.maxShapeDim) {
+        throw new AMEVAForgeShapeError(`Instruction[${idx}]: shape rank must be 0–${_runtimeConfig.maxShapeDim}, got ${i.shape.length}`);
     }
     /**
      * WHAT: 해당 명령어 텐서의 누적 원소 수를 계산하는 변수입니다.
-     * WHY: 차원의 곱이 안전한 정수 범위를 넘거나 최대 한계(MAX_ELEMENTS)를 초과하는지 확인하기 위해 계산합니다.
+     * WHY: 차원의 곱이 안전한 정수 범위를 넘거나 최대 한계(_runtimeConfig.maxElements)를 초과하는지 확인하기 위해 계산합니다.
      * HOW: 루프를 통해 차원(dim)을 곱하여 누적합니다. 초기값은 스칼라 연산을 위해 1로 시작합니다.
      */
     let elements = 1;
@@ -4647,8 +5044,8 @@ function validateInstruction(inst, idx) {
         }
         elements *= dim;
     }
-    if (elements > MAX_ELEMENTS) {
-        throw new AMEVAForgeShapeError(`Instruction[${idx}]: tensor too large (${elements} elements > ${MAX_ELEMENTS})`);
+    if (elements > _runtimeConfig.maxElements) {
+        throw new AMEVAForgeShapeError(`Instruction[${idx}]: tensor too large (${elements} elements > ${_runtimeConfig.maxElements})`);
     }
     // NC-06: in 필드가 있으면 배열인지 확인
     if (i.in !== undefined && !Array.isArray(i.in)) {
@@ -4670,27 +5067,32 @@ function validateInstruction(inst, idx) {
         'sigmoid': { minIn: 1, exactIn: true, minParams: 0, exactParams: true },
         'tanh': { minIn: 1, exactIn: true, minParams: 0, exactParams: true },
         'neg': { minIn: 1, exactIn: true, minParams: 0, exactParams: true },
-        'relu_backward': { minIn: 2, exactIn: true, minParams: 0, exactParams: true },
+        'relu_backward': { minIn: 2, exactIn: true, minParams: 0, exactParams: false },
         'sigmoid_backward': { minIn: 2, exactIn: true, minParams: 0, exactParams: true },
         'tanh_backward': { minIn: 2, exactIn: true, minParams: 0, exactParams: true },
-        'pad': { minIn: 1, exactIn: true, minParams: 9, exactParams: true }, // pad는 최대 4차원 36바이트 = 9 uint32s.
-        'sum_axis': { minIn: 1, exactIn: true, minParams: 2, exactParams: true },
+        'pad': { minIn: 1, exactIn: true, minParams: 9, exactParams: false }, // pad는 최대 8차원 144바이트 = 36 uint32s.
+        'sum_axis': { minIn: 1, exactIn: true, minParams: 2, exactParams: false },
+        'max_axis': { minIn: 1, exactIn: true, minParams: 2, exactParams: false },
+        'max_axis_backward': { minIn: 2, exactIn: true, minParams: 2, exactParams: false },
         'dropout': { minIn: 1, exactIn: true, minParams: 2, exactParams: true },
         'maxpool2d': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
         'avgpool2d': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
         'im2col': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
+        'col2im': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
         'transpose': { minIn: 1, exactIn: true, minParams: 2, exactParams: false },
         'permute': { minIn: 1, exactIn: true, minParams: 1, exactParams: false }, // rank 길이 가변
-        'add': { minIn: 2, exactIn: true, minParams: 0, exactParams: true },
-        'sub': { minIn: 2, exactIn: true, minParams: 0, exactParams: true },
-        'mul': { minIn: 2, exactIn: true, minParams: 0, exactParams: true },
-        'div': { minIn: 2, exactIn: true, minParams: 0, exactParams: true },
-        'axpy': { minIn: 2, exactIn: true, minParams: 2, exactParams: true },
-        'gather': { minIn: 2, exactIn: true, minParams: 7, exactParams: true },
-        'scatter': { minIn: 2, exactIn: true, minParams: 7, exactParams: true },
+        'reshape': { minIn: 1, exactIn: true, minParams: 0, exactParams: false },
+        'add': { minIn: 2, exactIn: true, minParams: 0, exactParams: false },
+        'sub': { minIn: 2, exactIn: true, minParams: 0, exactParams: false },
+        'mul': { minIn: 2, exactIn: true, minParams: 0, exactParams: false },
+        'div': { minIn: 2, exactIn: true, minParams: 0, exactParams: false },
+        'axpy': { minIn: 2, exactIn: true, minParams: 2, exactParams: false },
+        'gather': { minIn: 2, exactIn: true, minParams: 7, exactParams: false },
+        'scatter': { minIn: 2, exactIn: false, minParams: 7, exactParams: false },
         'matmul': { minIn: 2, exactIn: true, minParams: 3, exactParams: true },
-        'batched_matmul': { minIn: 2, exactIn: true, minParams: 4, exactParams: true },
-        'where': { minIn: 3, exactIn: true, minParams: 0, exactParams: true },
+        'matmul_bias_relu': { minIn: 3, exactIn: true, minParams: 3, exactParams: true },
+        'batched_matmul': { minIn: 2, exactIn: true, minParams: 4, exactParams: false },
+        'where': { minIn: 3, exactIn: true, minParams: 0, exactParams: false },
         'cat': { minIn: 2, exactIn: false, minParams: 1, exactParams: false } // 가변 개수 입력, params는 axis 등
     };
     const opStr = i.op;
@@ -4751,11 +5153,6 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
     // Flush any pending deferred GC items before new execution
     processDeferredGC();
     // ── 1. Parse ──
-    /**
-     * WHAT: JSON 문자열에서 파싱된 원시(unvalidated) 자바스크립트 객체 배열입니다.
-     * WHY: 외부 문자열 데이터를 자바스크립트 객체 트리로 메모리에 올리기 위해 저장합니다.
-     * HOW: JSON.parse()를 시도하며, 예외 발생 시 AMEVAForgeSecurityError를 던집니다.
-     */
     let rawInstructions;
     try {
         rawInstructions = JSON.parse(instructionsJson, (key, value) => {
@@ -4774,21 +5171,21 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
     if (!Array.isArray(rawInstructions)) {
         throw new AMEVAForgeSecurityError("executeGraph: instructionsJson must be a JSON array");
     }
-    if (rawInstructions.length > MAX_INSTRUCTIONS) {
-        throw new AMEVAForgeSecurityError(`executeGraph: too many instructions (${rawInstructions.length} > ${MAX_INSTRUCTIONS})`);
+    if (rawInstructions.length > _runtimeConfig.maxInstructions) {
+        throw new AMEVAForgeSecurityError(`executeGraph: too many instructions (${rawInstructions.length} > ${_runtimeConfig.maxInstructions})`);
     }
     // ── 2. Validate ──
-    /**
-     * WHAT: 원시 배열을 검증하여 타입 안정성이 보장된 명령어들의 배열입니다.
-     * WHY: 이후의 실행 단계(Execution)에서 데이터를 신뢰하고 빠른 연산을 수행할 수 있도록 합니다.
-     * HOW: Array.map을 이용해 각 항목을 validateInstruction 함수로 통과시킵니다.
-     */
     const instructions = rawInstructions.map(validateInstruction);
-    /**
-     * WHAT: 그래프 실행 중 'upload' 오퍼레이션에서 사용할 외부 입력 데이터들의 배열입니다.
-     * WHY: GPU 밖에서 들어오는 가중치(weights)나 입력 데이터(inputs)를 순차적으로 소비하기 위해 변환해 둡니다.
-     * HOW: Pyodide의 toJs()가 있으면 변환하고, 없으면 배열로 간주하며, 둘 다 아니면 빈 배열로 초기화합니다.
-     */
+    // VULN-06: Ensure AXPY is only executed in the optimizer commit phase and not followed by downstream ops
+    let seenAxpy = false;
+    for (const inst of instructions) {
+        if (inst.op === 'axpy') {
+            seenAxpy = true;
+        }
+        else if (seenAxpy) {
+            throw new AMEVAForgeSecurityError(`Invalid graph execution: In-place 'axpy' is an optimizer commit phase operation and cannot be followed by downstream op '${inst.op}' in the same transaction.`);
+        }
+    }
     let inputs;
     if (jsInputs && typeof jsInputs.toJs === 'function') {
         inputs = jsInputs.toJs();
@@ -4802,49 +5199,20 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
     // ── 3. Plan ──
     // (In the future: calculate peak memory, check dependency DAG)
     // ── 4. Execute ──
-    /**
-     * WHAT: WebGPU 작업을 제출할 대상 디바이스 인터페이스입니다.
-     * WHY: 커맨드 인코더 생성과 버퍼 조작 및 에러 스코프를 설정하기 위해 필요합니다.
-     * HOW: getDevice()를 호출하여 얻습니다.
-     */
     const device = getDevice();
     device.pushErrorScope('validation');
     device.pushErrorScope('out-of-memory');
     device.pushErrorScope('internal');
-    /**
-     * WHAT: 현재 트랜잭션 배치의 GPU 명령을 기록하는 커맨드 인코더 객체입니다.
-     * WHY: 개별 오퍼레이션의 상태 변경과 디스패치를 모아 한 번에 GPU 큐로 전송하기 위해 유지합니다.
-     * HOW: device.createCommandEncoder()로 생성하며, 청크가 나뉠 때마다 재생성됩니다.
-     */
     let commandEncoder = device.createCommandEncoder();
-    /**
-     * WHAT: 현재 커맨드 인코더에 쌓인 오퍼레이션(디스패치)의 개수입니다.
-     * WHY: MAX_OPS_PER_SUBMIT 상한선에 도달했는지 판단하여 강제 플러시(flush)를 트리거하기 위해 카운팅합니다.
-     * HOW: 디스패치를 하나 추가할 때마다 1씩 증가시킵니다.
-     */
     let opsInCurrentBatch = 0;
     let encoderHasCommands = false;
-    /**
-     * WHAT: 현재 커맨드 인코더에 제출된 총 연산 원소 수(워크로드)입니다.
-     * WHY: WORKLOAD_BUDGET_ELEMENTS 상한선에 도달했는지 확인하여 TDR 현상을 피하도록 배치를 끊기 위해 계산합니다.
-     * HOW: 디스패치할 때마다 해당 텐서의 요소를 더합니다.
-     */
     let workloadElements = 0;
-    /**
-     * WHAT: 명령어 ID(명령어별 고유 식별자)를 생성된 텐서 핸들에 매핑하는 객체입니다.
-     * WHY: 최종적으로 외부 환경(Python 등)에 어떤 ID가 어떤 텐서를 반환했는지 결과를 돌려주기 위해 유지합니다.
-     * HOW: 키는 명령어 id, 값은 TensorHandle(문자열)로 할당합니다.
-     */
     const idToHandle = {};
     const idToBuffer = {};
     const idToByteLength = {};
+    const idToShape = {};
     const transaction = new GraphTransaction();
     let inputIdx = 0;
-    /**
-     * WHAT: 셰이더의 파라미터 전달을 위해 임시로 생성된 유니폼 버퍼(Uniform Buffer)들의 배열입니다.
-     * WHY: GPU 큐 작업이 비동기적으로 완료된 후, 이 임시 버퍼들을 모아서 파괴(destroy)하여 메모리 누수를 방지하기 위해 저장합니다.
-     * HOW: 디스패치 과정에서 createBuffer된 파라미터 버퍼들을 push()로 수집합니다.
-     */
     const paramsAllocations = [];
     try {
         /**
@@ -4880,26 +5248,12 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 idToHandle[inst.id] = handle;
                 idToBuffer[inst.id] = record.buffer;
                 idToByteLength[inst.id] = record.byteLength;
+                idToShape[inst.id] = record.shape;
                 continue;
             }
             if (inst.op === 'upload') {
-                /**
-                 * WHAT: CPU 혹은 Pyodide 메모리에서 건네받은 입력 텐서의 원시 데이터입니다.
-                 * WHY: 이 데이터를 GPU 버퍼로 복사하여 연산에 투입하기 위해 필요합니다.
-                 * HOW: inputs 배열에서 inputIdx가 가리키는 값을 꺼내옵니다.
-                 */
                 const rawData = inputs[inputIdx++];
-                /**
-                 * WHAT: 원시 데이터에서 실제 복사 가능한 형태로 추출된 Float32Array 데이터입니다.
-                 * WHY: WebGPU의 writeBuffer API는 타입화된 자바스크립트 배열 뷰를 요구하기 때문입니다.
-                 * HOW: 데이터의 타입(Pyodide 프록시, Float32Array, 일반 배열)에 따라 변환 및 캐스팅을 수행합니다.
-                 */
                 let actualData;
-                /**
-                 * WHAT: 외부 WASM 메모리 뷰 프록시입니다.
-                 * WHY: 데이터를 다 읽은 후 메모리 락을 해제(release)하기 위해 보존합니다.
-                 * HOW: 데이터가 getBuffer 메서드를 제공할 때만 생성됩니다.
-                 */
                 let bufProxy = null;
                 if (rawData && typeof rawData.getBuffer === 'function') {
                     bufProxy = rawData.getBuffer("f32");
@@ -4915,28 +5269,32 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 else {
                     throw new AMEVAForgeSecurityError(`upload input[${inputIdx - 1}] is not a Float32Array`);
                 }
-                // H-02 Fix: WASM 메모리 바운드 사전 검증
+                // H-02 Fix: WASM 메모리 바운드 및 Detached 버퍼 사전 검증
                 if (actualData && actualData.buffer) {
+                    const buf = actualData.buffer;
+                    if (buf.detached === true || actualData.byteLength === 0) {
+                        if (bufProxy)
+                            bufProxy.release();
+                        throw new AMEVAForgeSecurityError(`upload input[${inputIdx - 1}] buffer is detached (WASM heap growth)`);
+                    }
                     assertWasmRange(actualData.byteOffset, actualData.byteLength, actualData.buffer.byteLength);
                 }
-                // VUL-018: NaN / Inf 방어
-                /**
-                 * WHAT: 입력 데이터에 무한대나 NaN 값이 포함되어 있는지 검사하고 치환하는 방어 루프입니다.
-                 * WHY: NaN 또는 무한대 값이 GPU 셰이더로 흘러가면 연산을 망가뜨리고 TDR 크래시를 유발할 수 있으므로 보호막 역할을 합니다.
-                 * HOW: 배열의 모든 요소를 순회하며 Number.isFinite()로 검사하고, 유효하지 않으면 0으로 마스킹합니다.
-                 */
+                // VULN-10: NaN / Inf fail-fast check (Strictly governed by trusted ForgeRuntimeConfig)
+                const allowNonFinite = _runtimeConfig.allowNonFinite === true;
                 for (let i = 0; i < actualData.length; i++) {
                     if (!Number.isFinite(actualData[i])) {
-                        actualData[i] = 0; // TDR 방지를 위해 0으로 클램프하거나, 경고 로깅 가능 (여기서는 0으로 마스킹)
-                        _safeLog(`[GraphExecutor] NaN or Inf detected in upload input[${inputIdx - 1}], masked to 0`);
+                        if (allowNonFinite) {
+                            _safeLog(`[GraphExecutor] Non-finite value in upload input[${inputIdx - 1}] allowed by runtime config`);
+                        }
+                        else {
+                            if (bufProxy)
+                                bufProxy.release();
+                            throw new AMEVAForgeValidationError(`Invalid tensor data: upload input[${inputIdx - 1}] contains NaN or Infinity at index ${i}. ` +
+                                `Configure runtime allowNonFinite=true to bypass if intended.`);
+                        }
                     }
                 }
-                /**
-                 * WHAT: 업로드된 데이터를 담기 위해 GPU에 새로 생성된 스토리지 버퍼와 토큰입니다.
-                 * WHY: 데이터를 VRAM으로 옮겨 이후 연산 노드들이 접근할 수 있도록 만듭니다.
-                 * HOW: allocateBuffer 헬퍼를 호출하여 STORAGE 및 COPY 용도의 버퍼를 생성합니다.
-                 */
-                const { buffer, token } = allocateBuffer(byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, 'tensor', `Graph_${instructions[0]?.id}`);
+                const { buffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_COPY, 'tensor', `Graph_${instructions[0]?.id}`);
                 try {
                     writeFloat32Array(buffer, actualData);
                 }
@@ -4959,6 +5317,40 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 idToHandle[inst.id] = handle;
                 idToBuffer[inst.id] = buffer;
                 idToByteLength[inst.id] = byteLength;
+                idToShape[inst.id] = inst.shape;
+                continue;
+            }
+            if (inst.op === 'reshape') {
+                if (!inst.in || inst.in.length < 1) {
+                    throw new AMEVAForgeSecurityError(`reshape instruction missing 'in' tensor`);
+                }
+                const inBuf = idToBuffer[inst.in[0]];
+                const inByteLength = idToByteLength[inst.in[0]];
+                if (!inBuf) {
+                    throw new AMEVAForgeSecurityError(`reshape input tensor not found for id ${inst.in[0]}`);
+                }
+                if (inByteLength !== byteLength) {
+                    throw new AMEVAForgeShapeError(`reshape size mismatch: input has ${inByteLength / 4} elements, output has ${byteLength / 4} elements`);
+                }
+                const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_COPY, 'tensor', `Graph_${instructions[0]?.id}`);
+                commandEncoder.copyBufferToBuffer(inBuf, 0, outBuffer, 0, byteLength);
+                encoderHasCommands = true;
+                const uuid = typeof crypto !== 'undefined' && crypto.randomUUID
+                    ? crypto.randomUUID()
+                    : Math.random().toString(36).substring(2, 15);
+                const handle = `tensor_${uuid}`;
+                transaction.add({
+                    handle,
+                    buffer: outBuffer,
+                    token,
+                    shape: inst.shape,
+                    dtype: "float32",
+                    byteLength
+                });
+                idToHandle[inst.id] = handle;
+                idToBuffer[inst.id] = outBuffer;
+                idToByteLength[inst.id] = byteLength;
+                idToShape[inst.id] = inst.shape;
                 continue;
             }
             assertAllowedKernelName(inst.op);
@@ -4971,9 +5363,10 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 idToHandle[inst.id] = idToHandle[inst.in[1]];
                 idToBuffer[inst.id] = outBuffer;
                 idToByteLength[inst.id] = byteLength;
+                idToShape[inst.id] = inst.shape;
             }
             else {
-                const { buffer, token } = allocateBuffer(byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, 'tensor', `Graph_${instructions[0]?.id}`);
+                const { buffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_COPY, 'tensor', `Graph_${instructions[0]?.id}`);
                 outBuffer = buffer;
                 const uuid = typeof crypto !== 'undefined' && crypto.randomUUID
                     ? crypto.randomUUID()
@@ -4990,6 +5383,7 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 idToHandle[inst.id] = handle;
                 idToBuffer[inst.id] = outBuffer;
                 idToByteLength[inst.id] = byteLength;
+                idToShape[inst.id] = inst.shape;
             }
             /**
              * WHAT: 현재 오퍼레이션의 유니폼 파라미터를 담기 위해 필요한 바이트 크기입니다.
@@ -5002,35 +5396,17 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
             else if (inst.op === 'gather' || inst.op === 'scatter')
                 paramsSize = 112;
             else if (inst.op === 'maxpool2d' || inst.op === 'avgpool2d')
-                paramsSize = 48;
+                paramsSize = 64;
             else if (inst.op === 'im2col' || inst.op === 'col2im')
-                paramsSize = 40;
+                paramsSize = 48;
             else if (inst.op === 'permute')
                 paramsSize = 112;
-            /**
-             * WHAT: GPU 연산 커널에 동적 스칼라 인자를 전달하기 위한 유니폼 버퍼입니다.
-             * WHY: 각 연산의 크기나 특수 인자(스토라이드, 패딩 값 등)를 셰이더 내에서 읽을 수 있게 제공해야 합니다.
-             * HOW: 계산된 paramsSize로 device.createBuffer를 호출하고 UNIFORM 속성을 지정합니다. 생성 후에는 paramsBuffersToDestroy에 등록해 사후 삭제를 예약합니다.
-             */
-            const { buffer: paramsBuffer, token: paramsToken } = allocateBuffer(paramsSize, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, 'uniform', `Graph_${instructions[0]?.id}_params`);
+            else if (['add', 'sub', 'mul', 'div'].includes(inst.op))
+                paramsSize = 112;
+            const { buffer: paramsBuffer, token: paramsToken } = allocateBuffer(paramsSize, BUFFER_USAGE_UNIFORM_COPY, 'uniform', `Graph_${instructions[0]?.id}_params`);
             paramsAllocations.push({ buffer: paramsBuffer, token: paramsToken });
-            /**
-             * WHAT: 현재 실행할 WGSL 셰이더 소스 코드를 담는 문자열 변수입니다.
-             * WHY: 오퍼레이션 키워드(inst.op)에 맞는 셰이더를 매핑하여 캐시 조회 및 파이프라인 생성에 넘기기 위함입니다.
-             * HOW: op의 종류에 따라 상수 문자열을 매핑합니다.
-             */
             let wgslCode = "";
-            /**
-             * WHAT: 컴퓨트 셰이더를 실행할 3차원 그리드(워크그룹)의 X, Y, Z 디스패치 개수입니다.
-             * WHY: GPU 하드웨어에 얼마나 많은 스레드 블록을 띄워 연산을 처리할지 스케줄링하기 위해 계산합니다.
-             * HOW: 기본값 1로 시작하며, 텐서 크기와 연산 종류에 맞춰 수식이 변동됩니다.
-             */
             let dispatchX = 1, dispatchY = 1, dispatchZ = 1;
-            /**
-             * WHAT: 현재 오퍼레이션이 행렬 곱(Matmul) 계열인지 여부를 나타내는 불리언 플래그입니다.
-             * WHY: 행렬 곱 연산은 계산 집약적이므로 TDR 방지를 위해 특별한 청크 단위(chunking) 디스패치가 필요하여 이를 구분하기 위해 사용합니다.
-             * HOW: inst.op가 'matmul'일 때 true로 설정됩니다.
-             */
             let isMatmul = false;
             let B = 1, M = 1, N = 1, K = 1;
             if (inst.op === 'matmul' || inst.op === 'matmul_bias_relu') {
@@ -5050,7 +5426,10 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                     dispatchZ = Math.ceil(rawDispatchX / 65535);
                 }
                 const maxWorkgroupsM = Math.ceil(M / 8);
-                dispatchY = Math.min(65535, maxWorkgroupsM);
+                if (maxWorkgroupsM > 65535) {
+                    throw new AMEVAForgeSecurityError(`Matmul M dimension (${M}) exceeds single-pass dispatch limit (524,280 rows). Partition tensor or reduce batch size.`);
+                }
+                dispatchY = maxWorkgroupsM;
             }
             else if (inst.op === 'batched_matmul') {
                 if (!inst.params || inst.params.length < 4) {
@@ -5079,7 +5458,10 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 else {
                     throw new AMEVAForgeSecurityError(`batched_matmul dispatchZ (Batch) exceeded limit: ${B}`);
                 }
-                device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array(inst.params));
+                const strideA = inst.params.length >= 7 ? inst.params[4] : N_param * M_param;
+                const strideB = inst.params.length >= 7 ? inst.params[5] : M_param * P_param;
+                const strideC = inst.params.length >= 7 ? inst.params[6] : N_param * P_param;
+                device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([B_param, N_param, P_param, M_param, strideA, strideB, strideC, 0]));
             }
             else if (inst.op === 'transpose') {
                 if (!inst.params || inst.params.length < 2) {
@@ -5094,14 +5476,59 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 dispatchY = Math.ceil(rN / 8);
                 dispatchZ = rB;
             }
-            else if (inst.op === 'sum_axis') {
+            else if (inst.op === 'sum_axis' || inst.op === 'max_axis') {
                 if (!inst.params || inst.params.length < 2) {
-                    throw new AMEVAForgeSecurityError(`sum_axis instruction missing params`);
+                    throw new AMEVAForgeSecurityError(`${inst.op} instruction missing params`);
                 }
-                const [M_param, N_param] = inst.params;
-                wgslCode = SUM_AXIS_WGSL;
-                device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([M_param, N_param, 0, 0]));
-                dispatchX = Math.ceil(N_param / 64);
+                let outer_size = 1;
+                let reduction_size = 1;
+                let inner_stride = 1;
+                if (inst.params.length >= 3) {
+                    [outer_size, reduction_size, inner_stride] = inst.params;
+                }
+                else {
+                    [reduction_size, inner_stride] = inst.params;
+                    outer_size = 1;
+                }
+                const output_numel = outer_size * inner_stride;
+                wgslCode = inst.op === 'sum_axis' ? SUM_AXIS_WGSL : MAX_AXIS_WGSL;
+                const totalWGs = Math.ceil(output_numel / 64);
+                if (totalWGs <= 65535) {
+                    dispatchX = totalWGs;
+                    dispatchY = 1;
+                }
+                else {
+                    dispatchX = Math.min(65535, Math.ceil(Math.sqrt(totalWGs)));
+                    dispatchY = Math.min(65535, Math.ceil(totalWGs / dispatchX));
+                }
+                device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([outer_size, reduction_size, inner_stride, output_numel, dispatchX, 0, 0, 0]));
+            }
+            else if (inst.op === 'max_axis_backward') {
+                if (!inst.params || inst.params.length < 2) {
+                    throw new AMEVAForgeSecurityError(`max_axis_backward instruction missing params`);
+                }
+                let outer_size = 1;
+                let reduction_size = 1;
+                let inner_stride = 1;
+                if (inst.params.length >= 3) {
+                    [outer_size, reduction_size, inner_stride] = inst.params;
+                }
+                else {
+                    [reduction_size, inner_stride] = inst.params;
+                    outer_size = 1;
+                }
+                const input_numel = outer_size * reduction_size * inner_stride;
+                wgslCode = MAX_AXIS_BACKWARD_WGSL;
+                const totalWGs = Math.ceil(input_numel / 64);
+                if (totalWGs <= 65535) {
+                    dispatchX = totalWGs;
+                    dispatchY = 1;
+                }
+                else {
+                    dispatchX = Math.min(65535, Math.ceil(Math.sqrt(totalWGs)));
+                    dispatchY = Math.min(65535, Math.ceil(totalWGs / dispatchX));
+                }
+                device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([outer_size, reduction_size, inner_stride, input_numel, dispatchX, 0, 0, 0]));
             }
             else if (inst.op === 'fill') {
                 if (!inst.params || inst.params.length < 2) {
@@ -5110,11 +5537,20 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 const numElements = inst.params[0];
                 const fillValue = inst.params[1];
                 wgslCode = FILL_WGSL;
+                const totalWorkgroups = Math.ceil(numElements / 64);
+                if (totalWorkgroups <= 65535) {
+                    dispatchX = totalWorkgroups;
+                    dispatchY = 1;
+                }
+                else {
+                    dispatchX = Math.min(65535, Math.ceil(Math.sqrt(totalWorkgroups)));
+                    dispatchY = Math.min(65535, Math.ceil(totalWorkgroups / dispatchX));
+                }
                 const f32arr = new Float32Array([0, fillValue, 0, 0]);
                 const u32arr = new Uint32Array(f32arr.buffer);
                 u32arr[0] = numElements;
+                u32arr[2] = dispatchX; // workgroups_x
                 device.queue.writeBuffer(paramsBuffer, 0, u32arr);
-                dispatchX = Math.ceil(numElements / 64);
             }
             else if (inst.op === 'axpy') {
                 if (!inst.params || inst.params.length < 2) {
@@ -5123,15 +5559,33 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 const numElements = inst.params[0];
                 const lr = inst.params[1];
                 wgslCode = AXPY_WGSL;
+                const totalWorkgroups = Math.ceil(numElements / 64);
+                if (totalWorkgroups <= 65535) {
+                    dispatchX = totalWorkgroups;
+                    dispatchY = 1;
+                }
+                else {
+                    dispatchX = Math.min(65535, Math.ceil(Math.sqrt(totalWorkgroups)));
+                    dispatchY = Math.min(65535, Math.ceil(totalWorkgroups / dispatchX));
+                }
                 const f32arr = new Float32Array([0, lr, 0, 0]);
                 const u32arr = new Uint32Array(f32arr.buffer);
                 u32arr[0] = numElements;
+                u32arr[2] = dispatchX; // workgroups_x
                 device.queue.writeBuffer(paramsBuffer, 0, u32arr);
-                dispatchX = Math.ceil(numElements / 64);
             }
             else if (inst.op === 'pad') {
                 const numElements = byteLength / 4;
                 wgslCode = PAD_WGSL;
+                const totalWorkgroups = Math.ceil(numElements / 64);
+                if (totalWorkgroups <= 65535) {
+                    dispatchX = totalWorkgroups;
+                    dispatchY = 1;
+                }
+                else {
+                    dispatchX = Math.min(65535, Math.ceil(Math.sqrt(totalWorkgroups)));
+                    dispatchY = Math.min(65535, Math.ceil(totalWorkgroups / dispatchX));
+                }
                 const p = new Uint32Array(36);
                 /**
                  * WHAT: 패딩 옵션들을 유니폼 버퍼 배열에 복사하는 루프입니다.
@@ -5144,12 +5598,21 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                     else
                         p[i] = inst.params[i];
                 }
+                p[3] = dispatchX; // workgroups_x
                 device.queue.writeBuffer(paramsBuffer, 0, p);
-                dispatchX = Math.ceil(numElements / 64);
             }
             else if (inst.op === 'gather') {
                 const numElements = byteLength / 4;
                 wgslCode = GATHER_WGSL;
+                const totalWorkgroups = Math.ceil(numElements / 64);
+                if (totalWorkgroups <= 65535) {
+                    dispatchX = totalWorkgroups;
+                    dispatchY = 1;
+                }
+                else {
+                    dispatchX = Math.min(65535, Math.ceil(Math.sqrt(totalWorkgroups)));
+                    dispatchY = Math.min(65535, Math.ceil(totalWorkgroups / dispatchX));
+                }
                 const p = new Uint32Array(28);
                 /**
                  * WHAT: 파라미터를 복사하는 짧은 루프입니다.
@@ -5158,12 +5621,21 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                  */
                 for (let i = 0; i < inst.params.length; i++)
                     p[i] = inst.params[i];
+                p[3] = dispatchX; // workgroups_x
                 device.queue.writeBuffer(paramsBuffer, 0, p);
-                dispatchX = Math.ceil(numElements / 64);
             }
             else if (inst.op === 'scatter') {
                 const numElements = inst.params[0];
                 wgslCode = SCATTER_WGSL;
+                const totalWorkgroups = Math.ceil(numElements / 64);
+                if (totalWorkgroups <= 65535) {
+                    dispatchX = totalWorkgroups;
+                    dispatchY = 1;
+                }
+                else {
+                    dispatchX = Math.min(65535, Math.ceil(Math.sqrt(totalWorkgroups)));
+                    dispatchY = Math.min(65535, Math.ceil(totalWorkgroups / dispatchX));
+                }
                 const p = new Uint32Array(28);
                 /**
                  * WHAT: scatter 셰이더 인자를 복사하는 루프입니다.
@@ -5172,24 +5644,56 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                  */
                 for (let i = 0; i < inst.params.length; i++)
                     p[i] = inst.params[i];
+                p[3] = dispatchX; // workgroups_x
+                if (inst.params.length < 28) {
+                    const shapeX = (inst.in && inst.in.length >= 3 && idToShape[inst.in[2]]) ? idToShape[inst.in[2]] : inst.shape;
+                    for (let i = 0; i < shapeX.length; i++) {
+                        p[20 + i] = shapeX[i];
+                    }
+                }
                 device.queue.writeBuffer(paramsBuffer, 0, p);
-                dispatchX = Math.ceil(numElements / 64);
             }
             else if (inst.op === 'dropout') {
                 const numElements = byteLength / 4;
-                const seed = inst.params[0];
+                const rawSeed = Number(inst.params[0]);
+                const seed_u32 = (Number.isFinite(rawSeed) && rawSeed !== 0)
+                    ? (rawSeed >>> 0)
+                    : ((typeof crypto !== 'undefined' && crypto.getRandomValues)
+                        ? crypto.getRandomValues(new Uint32Array(1))[0]
+                        : (Math.floor(Math.random() * 0xFFFFFFFF) >>> 0));
                 const p_val = inst.params[1];
                 wgslCode = DROPOUT_WGSL;
-                const f32arr = new Float32Array([0, seed, p_val, 0]);
-                const u32arr = new Uint32Array(f32arr.buffer);
-                u32arr[0] = numElements;
-                device.queue.writeBuffer(paramsBuffer, 0, u32arr);
-                dispatchX = Math.ceil(numElements / 64);
+                const totalWorkgroups = Math.ceil(numElements / 64);
+                if (totalWorkgroups <= 65535) {
+                    dispatchX = totalWorkgroups;
+                    dispatchY = 1;
+                }
+                else {
+                    dispatchX = Math.min(65535, Math.ceil(Math.sqrt(totalWorkgroups)));
+                    dispatchY = Math.min(65535, Math.ceil(totalWorkgroups / dispatchX));
+                }
+                const buf = new ArrayBuffer(16);
+                const u32view = new Uint32Array(buf);
+                const f32view = new Float32Array(buf);
+                u32view[0] = numElements;
+                u32view[1] = seed_u32;
+                f32view[2] = p_val;
+                u32view[3] = dispatchX; // workgroups_x
+                device.queue.writeBuffer(paramsBuffer, 0, buf);
             }
             else if (inst.op === 'maxpool2d' || inst.op === 'avgpool2d') {
                 const numElements = byteLength / 4;
                 wgslCode = inst.op === 'maxpool2d' ? MAXPOOL2D_WGSL : AVGPOOL2D_WGSL;
-                const p = new Uint32Array(12);
+                const totalWorkgroups = Math.ceil(numElements / 64);
+                if (totalWorkgroups <= 65535) {
+                    dispatchX = totalWorkgroups;
+                    dispatchY = 1;
+                }
+                else {
+                    dispatchX = Math.min(65535, Math.ceil(Math.sqrt(totalWorkgroups)));
+                    dispatchY = Math.min(65535, Math.ceil(totalWorkgroups / dispatchX));
+                }
+                const p = new Uint32Array(16);
                 /**
                  * WHAT: 풀링 파라미터를 복사하는 루프입니다.
                  * WHY: 윈도우 크기, 스트라이드, 패딩 등 컨볼루션 구조를 셰이더에 넘기기 위함입니다.
@@ -5197,22 +5701,26 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                  */
                 for (let i = 0; i < inst.params.length; i++)
                     p[i] = inst.params[i];
+                p[12] = dispatchX; // workgroups_x
                 device.queue.writeBuffer(paramsBuffer, 0, p);
-                dispatchX = Math.ceil(numElements / 64);
             }
             else if (inst.op === 'im2col' || inst.op === 'col2im') {
                 const numElements = byteLength / 4;
                 wgslCode = inst.op === 'im2col' ? IM2COL_WGSL : COL2IM_WGSL;
-                const p = new Uint32Array(10);
-                /**
-                 * WHAT: 공간 변환 파라미터를 복사하는 루프입니다.
-                 * WHY: 이미지 크기와 패치 크기 데이터를 셰이더에 전달하기 위해 수행합니다.
-                 * HOW: 반복문을 통해 할당합니다.
-                 */
+                const totalWorkgroups = Math.ceil(numElements / 64);
+                if (totalWorkgroups <= 65535) {
+                    dispatchX = totalWorkgroups;
+                    dispatchY = 1;
+                }
+                else {
+                    dispatchX = Math.min(65535, Math.ceil(Math.sqrt(totalWorkgroups)));
+                    dispatchY = Math.min(65535, Math.ceil(totalWorkgroups / dispatchX));
+                }
+                const p = new Uint32Array(12);
                 for (let i = 0; i < inst.params.length; i++)
                     p[i] = inst.params[i];
+                p[10] = dispatchX; // workgroups_x
                 device.queue.writeBuffer(paramsBuffer, 0, p);
-                dispatchX = Math.ceil(numElements / 64);
             }
             else if (inst.op === 'permute') {
                 const numElements = byteLength / 4;
@@ -5220,7 +5728,7 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 const dims = inst.params;
                 const rank = dims.length;
                 const inHandle = idToHandle[inst.in[0]];
-                const inShape = _globalRegistry.get(inHandle).shape;
+                const inShape = idToShape[inst.in[0]] ?? (_globalRegistry.has(inHandle) ? _globalRegistry.get(inHandle).shape : inst.shape);
                 const inStrides = new Array(rank).fill(0);
                 let s = 1;
                 /**
@@ -5243,9 +5751,14 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                     outStrides[i] = s2;
                     s2 *= inst.shape[i];
                 }
+                const dispatch = computeDispatch2D(numElements, 64);
+                dispatchX = dispatch.dispatchX;
+                dispatchY = dispatch.dispatchY;
                 const p = new Uint32Array(28);
                 p[0] = rank;
                 p[1] = numElements;
+                p[2] = dispatch.workgroupsX;
+                p[3] = 0;
                 /**
                  * WHAT: 계산된 각 차원들의 스트라이드와 형태 정보를 WebGPU vec4 정렬 규칙에 맞게 유니폼 버퍼 패딩 구조에 삽입하는 루프입니다.
                  * WHY: GPU 셰이더 내에서 배열이나 벡터 형태로 데이터를 오차 없이 접근하기 위해 메모리 오프셋을 맞추어 기록합니다.
@@ -5260,14 +5773,6 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                     p[outStrideOffset] = outStrides[i];
                 }
                 device.queue.writeBuffer(paramsBuffer, 0, p);
-                const totalWorkgroups = Math.ceil(numElements / 64);
-                if (totalWorkgroups <= 65535) {
-                    dispatchX = totalWorkgroups;
-                }
-                else {
-                    dispatchX = Math.min(65535, Math.ceil(Math.sqrt(totalWorkgroups)));
-                    dispatchY = Math.min(65535, Math.ceil(totalWorkgroups / dispatchX));
-                }
             }
             else if (inst.op === 'sum' || inst.op === 'max') {
                 // Handled entirely dynamically below, but we need to bypass normal flow
@@ -5305,13 +5810,38 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                     dispatchX = Math.min(65535, Math.ceil(Math.sqrt(totalWorkgroups)));
                     dispatchY = Math.min(65535, Math.ceil(totalWorkgroups / dispatchX));
                 }
-                let numA = 0;
-                let numB = 0;
-                if (inst.in && inst.in.length >= 2) {
-                    numA = (idToByteLength[inst.in[0]] ?? byteLength) / 4;
-                    numB = (idToByteLength[inst.in[1]] ?? byteLength) / 4;
+                if (['add', 'sub', 'mul', 'div'].includes(inst.op)) {
+                    let shapeA = [1];
+                    let shapeB = [1];
+                    if (inst.in && inst.in.length >= 2) {
+                        const in0Handle = idToHandle[inst.in[0]];
+                        const in1Handle = idToHandle[inst.in[1]];
+                        shapeA = idToShape[inst.in[0]] ?? (_globalRegistry.has(in0Handle) ? _globalRegistry.get(in0Handle).shape : [1]);
+                        shapeB = idToShape[inst.in[1]] ?? (_globalRegistry.has(in1Handle) ? _globalRegistry.get(in1Handle).shape : [1]);
+                    }
+                    const { dOut, effSA, effSB } = computeBroadcastParams(inst.shape, shapeA, shapeB);
+                    const p = new Uint32Array(28);
+                    p[0] = numElements;
+                    p[1] = dispatchX;
+                    p[2] = inst.shape.length;
+                    p[3] = 0;
+                    for (let k = 0; k < 8; k++)
+                        p[4 + k] = dOut[k];
+                    for (let k = 0; k < 8; k++)
+                        p[12 + k] = effSA[k];
+                    for (let k = 0; k < 8; k++)
+                        p[20 + k] = effSB[k];
+                    device.queue.writeBuffer(paramsBuffer, 0, p);
                 }
-                device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([numElements, dispatchX, numA, numB, 0, 0, 0, 0]));
+                else {
+                    let numA = 0;
+                    let numB = 0;
+                    if (inst.in && inst.in.length >= 2) {
+                        numA = (idToByteLength[inst.in[0]] ?? byteLength) / 4;
+                        numB = (idToByteLength[inst.in[1]] ?? byteLength) / 4;
+                    }
+                    device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([numElements, dispatchX, numA, numB, 0, 0, 0, 0]));
+                }
                 if (inst.op === 'cat') {
                     if (!inst.params || inst.params.length < 3) {
                         throw new AMEVAForgeSecurityError(`cat instruction missing params`);
@@ -5321,11 +5851,6 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                     device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([numElements, dispatchX, a_dim, b_dim, stride, 0, 0, 0]));
                 }
             }
-            /**
-             * WHAT: 파이프라인 캐시에서 가져온 컴파일된 WebGPU 컴퓨트 파이프라인 객체입니다.
-             * WHY: 커맨드 인코더가 GPU에서 셰이더를 구동하기 위한 명세(Layout)를 설정하기 위해 참조합니다.
-             * HOW: _globalPipelineCache.getPipeline()을 통해 조회 혹은 캐싱 생성하여 얻습니다.
-             */
             const { pipeline } = _globalPipelineCache.getPipeline(inst.op, wgslCode);
             if (inst.op === 'sum' || inst.op === 'max') {
                 if (!inst.in || inst.in.length === 0) {
@@ -5345,18 +5870,23 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 let currentSize = currentByteLength / 4;
                 let currentInputBuf = idToBuffer[inst.in[0]];
                 const intermediateAllocations = [];
-                /**
-                 * WHAT: 병렬 리덕션(Reduction) 연산을 위한 다중 패스 트리 루프입니다.
-                 * WHY: 전체 배열을 하나의 스칼라로 압축하기 위해 여러 번의 컴퓨트 패스를 통해 계층적으로 데이터를 축소시키기 위함입니다.
-                 * HOW: 원소 수가 1이 될 때까지 while 루프를 돌며, 임시 버퍼를 만들고 리덕션 패스를 제출하여 크기를 줄여 나갑니다.
-                 */
                 while (currentSize > 1) {
                     const numWGs = Math.ceil(currentSize / REDUCTION_WG_SIZE);
-                    const { buffer: passBuf, token: passBufToken } = allocateBuffer(Math.max(4, numWGs * 4), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC, 'temporary', `Graph_${instructions[0]?.id}_reduction`);
+                    let rDispatchX = 1;
+                    let rDispatchY = 1;
+                    if (numWGs <= 65535) {
+                        rDispatchX = numWGs;
+                        rDispatchY = 1;
+                    }
+                    else {
+                        rDispatchX = Math.min(65535, Math.ceil(Math.sqrt(numWGs)));
+                        rDispatchY = Math.min(65535, Math.ceil(numWGs / rDispatchX));
+                    }
+                    const { buffer: passBuf, token: passBufToken } = allocateBuffer(Math.max(4, numWGs * 4), BUFFER_USAGE_STORAGE_SRC, 'temporary', `Graph_${instructions[0]?.id}_reduction`);
                     intermediateAllocations.push({ buffer: passBuf, token: passBufToken });
-                    const { buffer: passParamsBuf, token: passParamsToken } = allocateBuffer(16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, 'uniform', `Graph_${instructions[0]?.id}_reduction_params`);
+                    const { buffer: passParamsBuf, token: passParamsToken } = allocateBuffer(16, BUFFER_USAGE_UNIFORM_COPY, 'uniform', `Graph_${instructions[0]?.id}_reduction_params`);
                     intermediateAllocations.push({ buffer: passParamsBuf, token: passParamsToken });
-                    device.queue.writeBuffer(passParamsBuf, 0, new Uint32Array([currentSize, 0, 0, 0]));
+                    device.queue.writeBuffer(passParamsBuf, 0, new Uint32Array([currentSize, rDispatchX, 0, 0]));
                     const wgsl = inst.op === 'sum' ? SUM_WGSL : MAX_WGSL;
                     const { pipeline: reducePipeline } = _globalPipelineCache.getPipeline(inst.op + '_pass', wgsl);
                     const passEncoder = commandEncoder.beginComputePass();
@@ -5369,7 +5899,7 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                             { binding: 2, resource: { buffer: passBuf } },
                         ],
                     }));
-                    passEncoder.dispatchWorkgroups(numWGs);
+                    passEncoder.dispatchWorkgroups(rDispatchX, rDispatchY, 1);
                     passEncoder.end();
                     encoderHasCommands = true;
                     currentInputBuf = passBuf;
@@ -5377,24 +5907,14 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 }
                 commandEncoder.copyBufferToBuffer(currentInputBuf, 0, outBuffer, 0, 4);
                 encoderHasCommands = true;
-                /**
-                 * WHAT: 리덕션 연산 중 만들어진 중간 임시 버퍼들을 수집하는 루프입니다.
-                 * WHY: 작업 완료 후 가비지 컬렉션이나 명시적 해제를 수행하여 메모리 릭을 방지하기 위함입니다.
-                 * HOW: for...of 구문으로 intermediateBuffers 배열을 순회하여 paramsBuffersToDestroy에 등록합니다.
-                 */
                 for (const alloc of intermediateAllocations) {
                     paramsAllocations.push(alloc);
                 }
-                continue; // skip normal dispatch
+                continue;
             }
             if (inst.op !== 'fill' && (!inst.in || inst.in.length === 0)) {
                 throw new AMEVAForgeSecurityError(`Instruction op="${inst.op}" is missing 'in' field.`);
             }
-            /**
-             * WHAT: 파이프라인 레이아웃에 맞춰 GPUBuffer를 슬롯(binding)에 매핑하는 배열입니다.
-             * WHY: 컴퓨트 셰이더 내부의 @group(0) @binding(N) 변수들과 실제 VRAM 메모리를 연결하기 위해 필요합니다.
-             * HOW: 연산 종류에 따라 분기하여 각 입력 텐서 버퍼들과 출력 버퍼를 순서대로 할당합니다.
-             */
             let bindGroupEntries = [];
             if (inst.op === 'fill') {
                 bindGroupEntries = [
@@ -5403,13 +5923,6 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 ];
             }
             else if (inst.op === 'axpy') {
-                bindGroupEntries = [
-                    { binding: 0, resource: { buffer: paramsBuffer } },
-                    { binding: 1, resource: { buffer: idToBuffer[inst.in[0]] } },
-                    { binding: 2, resource: { buffer: idToBuffer[inst.in[1]] } },
-                ];
-            }
-            else if (inst.op === 'pad') {
                 bindGroupEntries = [
                     { binding: 0, resource: { buffer: paramsBuffer } },
                     { binding: 1, resource: { buffer: idToBuffer[inst.in[0]] } },
@@ -5462,40 +5975,37 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                     bindGroupEntries.push({ binding: 2, resource: { buffer: outBuffer } });
                 }
             }
-            /**
-             * WHAT: 앞서 설정한 bindGroupEntries 리스트를 토대로 생성된 바인드 그룹 객체입니다.
-             * WHY: 실제 컴퓨트 패스 인코더에 setBindGroup을 호출하기 위해 WebGPU의 투명한 핸들로 필요합니다.
-             * HOW: device.createBindGroup을 사용하여 파이프라인 레이아웃 규칙에 맞춰 버퍼들을 확정(commit)합니다.
-             */
-            const bindGroup = device.createBindGroup({
-                layout: pipeline.getBindGroupLayout(0),
-                entries: bindGroupEntries
-            });
             if (isMatmul) {
                 const MACS_PER_CHUNK = 2_000_000_000;
                 const macsPerRow = N * K;
                 let chunkY = Math.max(1, Math.floor(MACS_PER_CHUNK / macsPerRow));
-                // TS-H01 Fix: Ensure Y dispatch does not exceed 65535 workgroups
                 chunkY = Math.min(chunkY, 65535 * 8);
                 chunkY = Math.min(M, chunkY);
                 const has_bias = inst.op === 'matmul_bias_relu' ? (inst.params?.[3] ?? 1) : 0;
                 const has_relu = inst.op === 'matmul_bias_relu' ? (inst.params?.[4] ?? 1) : 0;
-                /**
-                 * WHAT: 행렬 곱셈 연산을 Y축(행) 기준으로 여러 청크(Chunk)로 분할 처리하는 루프입니다.
-                 * WHY: 단일 행렬 곱 연산이 너무 거대하여 GPU 실행 한계 시간(Timeout)을 초과하는 TDR 현상을 피하기 위해 작업을 작게 나눕니다.
-                 * HOW: for 루프를 통해 offsetY 변수를 증가시키면서 전체 행(M)을 chunkY만큼씩 잘라 컴퓨트 패스를 큐에 넘깁니다.
-                 */
                 for (let offsetY = 0; offsetY < M; offsetY += chunkY) {
                     const currentChunkY = Math.min(chunkY, M - offsetY);
-                    device.queue.writeBuffer(paramsBuffer, 0, new Uint32Array([M, N, K, offsetY, has_bias, has_relu, 0, 0]));
+                    const chunkParamEntry = _globalUniformPool.acquire(32);
+                    const chunkParamsBuffer = chunkParamEntry.buffer;
+                    paramsAllocations.push({ buffer: chunkParamsBuffer, token: chunkParamEntry.token, isUniformPool: true, uniformEntry: chunkParamEntry });
+                    device.queue.writeBuffer(chunkParamsBuffer, 0, new Uint32Array([M, N, K, offsetY, has_bias, has_relu, 0, 0]));
+                    const chunkBindGroupEntries = bindGroupEntries.map(e => {
+                        if (e.binding === 0)
+                            return { binding: 0, resource: { buffer: chunkParamsBuffer } };
+                        return e;
+                    });
+                    const chunkBindGroup = device.createBindGroup({
+                        layout: pipeline.getBindGroupLayout(0),
+                        entries: chunkBindGroupEntries
+                    });
                     const passEncoder = commandEncoder.beginComputePass();
                     passEncoder.setPipeline(pipeline);
-                    passEncoder.setBindGroup(0, bindGroup);
+                    passEncoder.setBindGroup(0, chunkBindGroup);
                     passEncoder.dispatchWorkgroups(dispatchX, Math.ceil(currentChunkY / 8), dispatchZ);
                     passEncoder.end();
                     opsInCurrentBatch++;
                     workloadElements += (dispatchX * currentChunkY * 8 * 8);
-                    if (offsetY + currentChunkY < M || workloadElements >= WORKLOAD_BUDGET_ELEMENTS || opsInCurrentBatch >= MAX_OPS_PER_SUBMIT) {
+                    if (offsetY + currentChunkY < M || workloadElements >= _runtimeConfig.workloadBudgetElements || opsInCurrentBatch >= _runtimeConfig.maxOpsPerSubmit) {
                         device.queue.submit([commandEncoder.finish()]);
                         commandEncoder = device.createCommandEncoder();
                         opsInCurrentBatch = 0;
@@ -5504,6 +6014,17 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 }
             }
             else {
+                if (inst.op === 'scatter') {
+                    // If in[2] exists (base tensor x), copy x to outBuffer so unscattered elements retain x values
+                    if (inst.in && inst.in.length >= 3 && idToBuffer[inst.in[2]]) {
+                        commandEncoder.copyBufferToBuffer(idToBuffer[inst.in[2]], 0, outBuffer, 0, byteLength);
+                        encoderHasCommands = true;
+                    }
+                }
+                const bindGroup = device.createBindGroup({
+                    layout: pipeline.getBindGroupLayout(0),
+                    entries: bindGroupEntries
+                });
                 const passEncoder = commandEncoder.beginComputePass();
                 passEncoder.setPipeline(pipeline);
                 passEncoder.setBindGroup(0, bindGroup);
@@ -5511,7 +6032,7 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 passEncoder.end();
                 opsInCurrentBatch++;
                 workloadElements += byteLength / 4;
-                if (workloadElements >= WORKLOAD_BUDGET_ELEMENTS || opsInCurrentBatch >= MAX_OPS_PER_SUBMIT) {
+                if (workloadElements >= _runtimeConfig.workloadBudgetElements || opsInCurrentBatch >= _runtimeConfig.maxOpsPerSubmit) {
                     device.queue.submit([commandEncoder.finish()]);
                     commandEncoder = device.createCommandEncoder();
                     opsInCurrentBatch = 0;
@@ -5525,17 +6046,22 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
         _safeLog(`[AMEVA Forge] Transaction Sync Failed. Rolling back... ${err}`);
         transaction.rollback();
         for (const alloc of paramsAllocations) {
-            try {
-                freeBuffer(alloc.buffer, alloc.token);
+            if (alloc.isUniformPool && alloc.uniformEntry) {
+                _globalUniformPool.releaseSync(alloc.uniformEntry);
             }
-            catch (e) {
-                _safeLog(`[GraphExecutor] Error freeing param buffer: ${e}`);
+            else {
+                try {
+                    freeBuffer(alloc.buffer, alloc.token);
+                }
+                catch (e) { }
             }
         }
-        // pop scopes to prevent leak
-        void device.popErrorScope();
-        void device.popErrorScope();
-        void device.popErrorScope();
+        try {
+            await device.popErrorScope();
+            await device.popErrorScope();
+            await device.popErrorScope();
+        }
+        catch { }
         throw err;
     }
     if (encoderHasCommands || opsInCurrentBatch > 0) {
@@ -5543,24 +6069,26 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
         encoderHasCommands = false;
     }
     // ── 5. Commit / Rollback (Async) — await error scopes before returning ──
-    const [internalError, oomError, validationError] = await Promise.all([
-        device.popErrorScope(),
-        device.popErrorScope(),
-        device.popErrorScope(),
-    ]);
+    const internalError = await device.popErrorScope();
+    const oomError = await device.popErrorScope();
+    const validationError = await device.popErrorScope();
     // Check for GPU errors BEFORE returning handles
     const gpuError = internalError || oomError || validationError;
     if (gpuError) {
         _safeLog(`[AMEVA Forge] GPU error detected. Rolling back transaction... ${gpuError}`);
         transaction.rollback();
         for (const alloc of paramsAllocations) {
-            try {
-                freeBuffer(alloc.buffer, alloc.token);
+            if (alloc.isUniformPool && alloc.uniformEntry) {
+                _globalUniformPool.releaseAfterSubmit(alloc.uniformEntry);
             }
-            catch (e) {
-                _safeLog(`[GraphExecutor] Error freeing param buffer during rollback: ${e}`);
+            else {
+                try {
+                    freeBuffer(alloc.buffer, alloc.token);
+                }
+                catch (e) { }
             }
         }
+        void _globalUniformPool.retireSubmitted(device);
         // Determine error type
         if (internalError) {
             throw new AMEVAForgeInternalGPUError(`Internal GPU Error: ${internalError.message}`);
@@ -5576,26 +6104,38 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
     transaction.commit(_globalRegistry);
     // ── 7. Cleanup temporary/uniform allocations after GPU completion ──
     if (paramsAllocations.length > 0) {
-        device.queue.onSubmittedWorkDone().then(() => {
-            for (const alloc of paramsAllocations) {
-                try {
-                    freeBuffer(alloc.buffer, alloc.token);
-                }
-                catch (e) {
-                    _safeLog(`[GraphExecutor] Error freeing submitted buffer: ${e}`);
-                }
+        const nonPoolAllocs = [];
+        for (const alloc of paramsAllocations) {
+            if (alloc.isUniformPool && alloc.uniformEntry) {
+                _globalUniformPool.releaseAfterSubmit(alloc.uniformEntry);
             }
-        }).catch((e) => {
-            _safeLog(`[GraphExecutor] onSubmittedWorkDone error: ${e}`);
-            for (const alloc of paramsAllocations) {
-                try {
-                    freeBuffer(alloc.buffer, alloc.token);
-                }
-                catch (err) {
-                    _safeLog(`[GraphExecutor] Error freeing submitted buffer on error: ${err}`);
-                }
+            else {
+                nonPoolAllocs.push(alloc);
             }
-        });
+        }
+        if (_globalUniformPool.inFlightBytes() > 512 * 1024) {
+            await _globalUniformPool.retireSubmitted(device);
+        }
+        else {
+            void _globalUniformPool.retireSubmitted(device);
+        }
+        if (nonPoolAllocs.length > 0) {
+            device.queue.onSubmittedWorkDone().then(() => {
+                for (const alloc of nonPoolAllocs) {
+                    try {
+                        freeBuffer(alloc.buffer, alloc.token);
+                    }
+                    catch (e) { }
+                }
+            }).catch(() => {
+                for (const alloc of nonPoolAllocs) {
+                    try {
+                        freeBuffer(alloc.buffer, alloc.token);
+                    }
+                    catch (e) { }
+                }
+            });
+        }
     }
     return idToHandle;
 }
@@ -5633,42 +6173,47 @@ function hasToJs(input) {
  * @param input Pyodide Proxy 객체이거나 ArrayBuffer/Float32Array 형태의 데이터
  * @returns 확보된 Float32Array
  */
-function ensureFloat32Array(input) {
-    /**
-     * WHAT: 입력 데이터가 Float32Array 타입인지 확인하는 조건문입니다.
-     * WHY: 불필요한 변환 과정을 생략하고 즉시 반환하여 성능(Zero-Copy)을 최적화하기 위함입니다.
-     * HOW: instanceof 연산자를 사용하여 입력 객체의 프로토타입 체인을 검사합니다.
-     */
+function isBufferDetached(buf) {
+    return buf.detached === true || buf.byteLength === 0;
+}
+function ensureFloat32Array(input, options = {}) {
     if (input instanceof Float32Array) {
-        return input; // H-05: 복사 제거 — 이미 올바른 타입
-    }
-    /**
-     * WHAT: 입력 데이터가 PyodideProxy와 유사한지 확인하는 조건문입니다.
-     * WHY: 파이썬으로부터 넘어온 래퍼 객체인 경우 이를 자바스크립트가 인식할 수 있는 원시 버퍼로 추출하기 위해 필요합니다.
-     * HOW: 앞서 정의한 hasToJs 타입 가드 함수를 호출하여 조건을 평가합니다.
-     */
-    if (hasToJs(input)) {
-        /**
-         * WHAT: 파이썬 객체(PyProxy)로부터 자바스크립트에서 다룰 수 있는 원시 뷰(JS View)나 배열을 추출하여 담는 변수입니다.
-         * WHY: 파이썬의 메모리 영역에 있는 데이터를 자바스크립트 타입 시스템 내에서 분석하고 활용하기 위해 존재합니다.
-         * HOW: input.toJs() 메서드를 호출하여 반환된 값을 할당합니다.
-         */
-        const jsView = input.toJs();
-        /**
-         * WHAT: 추출된 뷰가 Float32Array 타입인지 확인하는 조건문입니다.
-         * WHY: WASM 힙 뷰를 이미 올바른 포맷으로 갖고 있다면 또 다른 래핑 없이 바로 재사용하여 메모리 오버헤드를 막기 위함입니다.
-         * HOW: instanceof Float32Array 연산자로 타입을 확인한 후 참이면 그대로 리턴합니다.
-         */
-        if (jsView instanceof Float32Array) {
-            return jsView; // H-05: 복사 제거 — WASM 힙 뷰 그대로 반환
+        if (!isBufferDetached(input.buffer)) {
+            return input; // H-05: 복사 제거 — 이미 올바른 타입
         }
-        /**
-         * WHAT: 추출된 뷰가 ArrayBuffer 타입인지 확인하는 조건문입니다.
-         * WHY: 순수 바이트 배열인 경우 우리가 다룰 수 있는 32비트 부동소수점 데이터 뷰(Float32Array)로 해석하기 위해서입니다.
-         * HOW: instanceof ArrayBuffer 연산자로 확인한 후, new Float32Array(jsView)를 호출하여 새로운 뷰를 생성하고 리턴합니다.
-         */
+        if (options.retryDetached && options.reacquire) {
+            const fresh = options.reacquire();
+            if (!isBufferDetached(fresh.buffer)) {
+                return fresh;
+            }
+        }
+        throw new Error("WASM Memory Detached: ArrayBuffer has been detached by memory.grow.");
+    }
+    if (hasToJs(input)) {
+        const jsView = input.toJs();
+        if (jsView instanceof Float32Array) {
+            if (!isBufferDetached(jsView.buffer)) {
+                return jsView; // H-05: 복사 제거 — WASM 힙 뷰 그대로 반환
+            }
+            if (options.retryDetached && options.reacquire) {
+                const fresh = options.reacquire();
+                if (!isBufferDetached(fresh.buffer)) {
+                    return fresh;
+                }
+            }
+            throw new Error("WASM Memory Detached: ArrayBuffer has been detached by memory.grow.");
+        }
         if (jsView instanceof ArrayBuffer) {
-            return new Float32Array(jsView);
+            if (!isBufferDetached(jsView)) {
+                return new Float32Array(jsView);
+            }
+            if (options.retryDetached && options.reacquire) {
+                const fresh = options.reacquire();
+                if (!isBufferDetached(fresh.buffer)) {
+                    return fresh;
+                }
+            }
+            throw new Error("WASM Memory Detached: ArrayBuffer has been detached by memory.grow.");
         }
     }
     throw new Error("Invalid input type: expected Float32Array or a Pyodide proxy coercible to Float32Array.");
@@ -5757,13 +6302,21 @@ function registerPyodideBridge() {
         disposeBatch,
         getQuotaSnapshot,
         snapshotHandles: () => _globalRegistry.snapshotHandles(),
-        flushGC: async () => {
+        flushGC: async (options) => {
             try {
                 const dev = getDevice();
                 await dev.queue.onSubmittedWorkDone();
+                await _globalUniformPool.retireSubmitted(dev);
+                clearStagingPool();
+                _globalUniformPool.clear();
+                return { ok: true };
             }
             catch (e) {
                 _safeLog$2(`[pyodideBridge] flushGC work done error: ${e}`);
+                if (options && options.strict) {
+                    throw e;
+                }
+                return { ok: false, error: String(e) };
             }
         },
     };
@@ -5967,5 +6520,5 @@ const __testing = ((typeof process !== 'undefined' && process.env && process.env
     getDeviceInternal: getDevice,
 }) : undefined;
 
-export { AMEVAForgeDTypeError, AMEVAForgeDeviceError, AMEVAForgeDeviceLostError, AMEVAForgeDisposedError, AMEVAForgeError, AMEVAForgeInternalGPUError, AMEVAForgeOutOfMemoryError, AMEVAForgeQuotaExceededError, AMEVAForgeSecurityError, AMEVAForgeShapeError, AMEVAForgeStaleHandleError, AMEVAForgeUnsupportedOpError, AMEVAForgeValidationError, AMEVAForgeWebGPUUnavailableError, KERNEL_REGISTRY, QuotaManager, __testing, add, assertAllowedKernelName, assertAllowedShaderConstant, assertSafeShaderIdentifier, assertStaticShaderSourceOnly, assertWasmRange, clearStepLossHistory, cloneToFloat32Array, dispose, ensureFloat32Array, executeGraph, getAllowedKernelNames, getQuotaSnapshot, getTensorInfo, init, initWebGPU, isAvailable, mapBufferAsync, matmul, mountInspector, mul, random, read, readMappedInto, recordStepLoss, registerKernelNames, registerPyodideBridge, relu, relu_backward, resetRuntimeMemory, transpose, unmountInspector, uploadFloat32Array, validateDType, validateShape, warmupKernels };
+export { AMEVAForgeDTypeError, AMEVAForgeDeviceError, AMEVAForgeDeviceLostError, AMEVAForgeDisposedError, AMEVAForgeError, AMEVAForgeInternalGPUError, AMEVAForgeOutOfMemoryError, AMEVAForgeQuotaExceededError, AMEVAForgeSecurityError, AMEVAForgeShapeError, AMEVAForgeStaleHandleError, AMEVAForgeUnsupportedOpError, AMEVAForgeValidationError, AMEVAForgeWebGPUUnavailableError, KERNEL_REGISTRY, QuotaManager, __testing, add, assertAllowedKernelName, assertAllowedShaderConstant, assertSafeShaderIdentifier, assertStaticShaderSourceOnly, assertWasmRange, clearStagingPool, clearStepLossHistory, cloneToFloat32Array, computeBroadcastParams, computeDispatch2D, configureRuntime, dispose, ensureFloat32Array, executeGraph, flushGC, getAllowedKernelNames, getQuotaSnapshot, getRuntimeConfig, getTensorInfo, gpuCore, init, initWebGPU, isAvailable, mapBufferAsync, matmul, mountInspector, mul, random, read, readMappedInto, recordStepLoss, registerKernelNames, registerPyodideBridge, relu, relu_backward, resetRuntimeMemory, transpose, unmountInspector, uploadFloat32Array, validateDType, validateShape, warmupKernels };
 //# sourceMappingURL=index.esm.js.map

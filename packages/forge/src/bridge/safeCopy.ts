@@ -45,45 +45,59 @@ function hasToJs(input: unknown): input is PyodideLikeProxy {
  * @param input Pyodide Proxy 객체이거나 ArrayBuffer/Float32Array 형태의 데이터
  * @returns 확보된 Float32Array
  */
-export function ensureFloat32Array(input: unknown): Float32Array {
-  /**
-   * WHAT: 입력 데이터가 Float32Array 타입인지 확인하는 조건문입니다.
-   * WHY: 불필요한 변환 과정을 생략하고 즉시 반환하여 성능(Zero-Copy)을 최적화하기 위함입니다.
-   * HOW: instanceof 연산자를 사용하여 입력 객체의 프로토타입 체인을 검사합니다.
-   */
+function isBufferDetached(buf: ArrayBufferLike): boolean {
+  return (buf as any).detached === true || buf.byteLength === 0;
+}
+
+export type SafeCopyOptions = {
+  retryDetached?: boolean;
+  reacquire?: () => Float32Array;
+};
+
+export function ensureFloat32Array(
+  input: unknown,
+  options: SafeCopyOptions = {}
+): Float32Array {
   if (input instanceof Float32Array) {
-    return input; // H-05: 복사 제거 — 이미 올바른 타입
+    if (!isBufferDetached(input.buffer)) {
+      return input; // H-05: 복사 제거 — 이미 올바른 타입
+    }
+    if (options.retryDetached && options.reacquire) {
+      const fresh = options.reacquire();
+      if (!isBufferDetached(fresh.buffer)) {
+        return fresh;
+      }
+    }
+    throw new Error("WASM Memory Detached: ArrayBuffer has been detached by memory.grow.");
   }
 
-  /**
-   * WHAT: 입력 데이터가 PyodideProxy와 유사한지 확인하는 조건문입니다.
-   * WHY: 파이썬으로부터 넘어온 래퍼 객체인 경우 이를 자바스크립트가 인식할 수 있는 원시 버퍼로 추출하기 위해 필요합니다.
-   * HOW: 앞서 정의한 hasToJs 타입 가드 함수를 호출하여 조건을 평가합니다.
-   */
   if (hasToJs(input)) {
-    /**
-     * WHAT: 파이썬 객체(PyProxy)로부터 자바스크립트에서 다룰 수 있는 원시 뷰(JS View)나 배열을 추출하여 담는 변수입니다.
-     * WHY: 파이썬의 메모리 영역에 있는 데이터를 자바스크립트 타입 시스템 내에서 분석하고 활용하기 위해 존재합니다.
-     * HOW: input.toJs() 메서드를 호출하여 반환된 값을 할당합니다.
-     */
     const jsView = input.toJs();
     
-    /**
-     * WHAT: 추출된 뷰가 Float32Array 타입인지 확인하는 조건문입니다.
-     * WHY: WASM 힙 뷰를 이미 올바른 포맷으로 갖고 있다면 또 다른 래핑 없이 바로 재사용하여 메모리 오버헤드를 막기 위함입니다.
-     * HOW: instanceof Float32Array 연산자로 타입을 확인한 후 참이면 그대로 리턴합니다.
-     */
     if (jsView instanceof Float32Array) {
-      return jsView; // H-05: 복사 제거 — WASM 힙 뷰 그대로 반환
+      if (!isBufferDetached(jsView.buffer)) {
+        return jsView; // H-05: 복사 제거 — WASM 힙 뷰 그대로 반환
+      }
+      if (options.retryDetached && options.reacquire) {
+        const fresh = options.reacquire();
+        if (!isBufferDetached(fresh.buffer)) {
+          return fresh;
+        }
+      }
+      throw new Error("WASM Memory Detached: ArrayBuffer has been detached by memory.grow.");
     }
     
-    /**
-     * WHAT: 추출된 뷰가 ArrayBuffer 타입인지 확인하는 조건문입니다.
-     * WHY: 순수 바이트 배열인 경우 우리가 다룰 수 있는 32비트 부동소수점 데이터 뷰(Float32Array)로 해석하기 위해서입니다.
-     * HOW: instanceof ArrayBuffer 연산자로 확인한 후, new Float32Array(jsView)를 호출하여 새로운 뷰를 생성하고 리턴합니다.
-     */
     if (jsView instanceof ArrayBuffer) {
-      return new Float32Array(jsView);
+      if (!isBufferDetached(jsView)) {
+        return new Float32Array(jsView);
+      }
+      if (options.retryDetached && options.reacquire) {
+        const fresh = options.reacquire();
+        if (!isBufferDetached(fresh.buffer)) {
+          return fresh;
+        }
+      }
+      throw new Error("WASM Memory Detached: ArrayBuffer has been detached by memory.grow.");
     }
   }
 

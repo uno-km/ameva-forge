@@ -106,7 +106,10 @@ class GraphBuilder:
         """
         if not isinstance(op_name, str) or not op_name.strip():
             raise ValueError(f"op_name must be a valid non-empty string, got {op_name}")
-        if op_name in ("__proto__", "constructor", "prototype"):
+        if op_name in ("__proto__", "constructor", "prototype",
+                       "__import__", "eval", "exec", "compile",
+                       "__subclasses__", "__globals__", "__builtins__",
+                       "system", "popen", "subprocess"):
             raise ValueError(f"Prohibited op_name: {op_name}")
             
         if not isinstance(shape, (tuple, list)):

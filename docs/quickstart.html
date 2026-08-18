@@ -1,66 +1,80 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AMEVA-Forge: Quickstart Guide</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Quickstart guide for AMEVA-Forge. Learn how to train models on WebGPU.">
+  <title>Quickstart Guide — AMEVA-Forge</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="./dist/index.js"></script>
 </head>
 <body>
-    <header>
-        <h1>AMEVA-Forge Release 1 Documentation</h1>
-    </header>
-    
-    <div class="container">
-        <nav class="sidebar">
-            <h3>Documentation</h3>
-            <ul>
-                <li><a href="index.html">Home</a></li>
-                <li><a href="installation.html">Installation</a></li>
-                <li><a href="quickstart.html"><strong>Quickstart</strong></a></li>
-                <li><a href="api-reference.html">API Reference</a></li>
-            </ul>
-            <h3>Concepts</h3>
-            <ul>
-                <li><a href="what-is-forge.html">What is Forge?</a></li>
-                <li><a href="forge-vs-pytorch.html">Forge vs PyTorch</a></li>
-            </ul>
-            <h3>Playgrounds</h3>
-            <ul>
-                <li><a href="playgrounds/benchmark.html">Benchmark Playground</a></li>
-                <li><a href="playgrounds/mnist.html">MNIST Playground</a></li>
-            </ul>
-        </nav>
-        
-        <main class="content">
-            <h2>Quickstart Guide</h2>
-            <p>This guide provides a rapid introduction to defining a neural network, performing forward passes, backpropagation, and updating weights using AMEVA-Forge Release 1.</p>
+  <header class="site-header">
+    <a href="index.html" class="brand-area">
+      <div class="brand-logo">A</div>
+      <span class="brand-title">AMEVA-Forge</span>
+      <span class="brand-badge">v1.0.0</span>
+    </a>
+    <div class="header-actions">
+      <a href="demo.html" class="cta-button">⚡ Try Live Studio</a>
+      <a href="https://github.com/uno-km/AMEVA-Tensor" target="_blank" class="cta-button" style="background-color: var(--bg-tertiary);">GitHub</a>
+    </div>
+  </header>
 
-            <h3>1. Tensor Creation and Operations</h3>
-            <p>AMEVA-Forge's fundamental data structure is the <code>Tensor</code>. Tensor operations are recorded dynamically for automatic differentiation.</p>
-            <pre><code>import forge as fg
+  <div class="container">
+    <nav class="sidebar">
+      <div class="nav-group">
+        <h3>Playground</h3>
+        <ul>
+          <li><a href="demo.html">⚡ Live WebGPU Studio</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <h3>Documentation</h3>
+        <ul>
+          <li><a href="index.html">🏠 Home</a></li>
+          <li><a href="installation.html">📦 Installation</a></li>
+          <li><a href="quickstart.html" class="active">🚀 Quickstart Guide</a></li>
+          <li><a href="api-reference.html">📖 API Reference</a></li>
+        </ul>
+      </div>
+      <div class="nav-group">
+        <h3>Concepts & Architecture</h3>
+        <ul>
+          <li><a href="what-is-forge.html">🎯 What is Forge?</a></li>
+          <li><a href="forge-vs-pytorch.html">⚖️ Forge vs PyTorch</a></li>
+        </ul>
+      </div>
+    </nav>
 
-# Define standard tensors
-x = fg.tensor([[1.0, 2.0], [3.0, 4.0]], requires_grad=True)
-y = fg.tensor([[5.0, 6.0], [7.0, 8.0]])
+    <main class="content">
+      <h1>Quickstart Guide</h1>
+      <p>This guide provides a rapid introduction to defining a neural network, performing forward passes, backpropagation, and updating weights using AMEVA-Forge on CPU and WebGPU.</p>
 
-# Matrix multiplication
+      <h2>1. Tensor Creation and Operations</h2>
+      <p>AMEVA-Forge's fundamental data structure is the <code>Tensor</code>. Tensor operations are recorded dynamically for automatic differentiation.</p>
+      <pre><code>import forge as torch
+
+# Define standard tensors with autograd enabled
+x = torch.tensor([[1.0, 2.0], [3.0, 4.0]], requires_grad=True)
+y = torch.tensor([[5.0, 6.0], [7.0, 8.0]])
+
+# Matrix multiplication on CPU or GPU
 z = x @ y
-print("Forward Result:", z.data)</code></pre>
+print("Forward Result:\n", z.numpy())</code></pre>
 
-            <h3>2. Automatic Differentiation (Autograd)</h3>
-            <p>AMEVA-Forge Release 1 implements a reverse-mode automatic differentiation engine. Calling <code>.backward()</code> computes gradients for all descendant tensors where <code>requires_grad=True</code>.</p>
-            <pre><code># Compute a scalar loss
+      <h2>2. Reverse-Mode Autograd</h2>
+      <p>Calling <code>.backward()</code> computes gradients for all descendant tensors where <code>requires_grad=True</code>.</p>
+      <pre><code># Compute a scalar loss
 loss = z.sum()
 
 # Execute reverse accumulation
 loss.backward()
 
-print("Gradient of x:", x.grad)</code></pre>
+print("Gradient of x:\n", x.grad.numpy())</code></pre>
 
-            <h3>3. Building a Neural Network</h3>
-            <p>The <code>forge.nn</code> module provides a PyTorch-compatible API for constructing complex neural architectures.</p>
-            <pre><code>import forge.nn as nn
+      <h2>3. Building Neural Networks with <code>forge.nn</code></h2>
+      <pre><code>import forge.nn as nn
 import forge.optim as optim
 
 class SimpleMLP(nn.Module):
@@ -71,39 +85,38 @@ class SimpleMLP(nn.Module):
         self.fc2 = nn.Linear(4, 1)
         
     def forward(self, x):
-        x = self.fc1(x)
-        x = self.relu(x)
-        x = self.fc2(x)
-        return x
+        return self.fc2(self.relu(self.fc1(x)))
 
 model = SimpleMLP()
 print(model)</code></pre>
 
-            <h3>4. Training Loop</h3>
-            <p>Integrating the model with an optimizer allows for standard training loop implementations.</p>
-            <pre><code># Define inputs and target
-inputs = fg.randn((10, 2))
-targets = fg.ones((10, 1))
-
-# Initialize Optimizer and Loss Function
-optimizer = optim.SGD(model.parameters(), lr=0.01)
+      <h2>4. Browser WebGPU Training Loop</h2>
+      <p>Move the entire model to WebGPU using <code>.to("gpu")</code> and utilize async methods for non-blocking browser execution.</p>
+      <pre><code>model = SimpleMLP().to("gpu")
+optimizer = optim.SGD(model.parameters(), lr=0.05)
 criterion = nn.MSELoss()
 
-# Single training step
-optimizer.zero_grad()
-outputs = model(inputs)
-loss = criterion(outputs, targets)
+inputs = torch.randn((4, 2), device="gpu")
+targets = torch.tensor([[0.0], [1.0], [1.0], [0.0]], device="gpu")
 
-loss.backward()
-    loss_val = await loss.numpy_async()
-    print(f"Step {epoch} Loss: {loss_val.mean()}")</code></pre>
-            
-            <p>For detailed architectural implementation specifications, proceed to the <a href="api-reference.html">API Reference</a>.</p>
-        </main>
-    </div>
+for step in range(50):
+    optimizer.zero_grad()
+    outputs = model(inputs)
+    loss = criterion(outputs, targets)
     
-    <footer>
-        &copy; 2026 AMEVA AI. All rights reserved. Release 1 (v0.1.0).
-    </footer>
+    # Read loss scalar value asynchronously
+    loss_val = await loss.numpy_async()
+    
+    loss.backward()
+    await optimizer.step_async()
+    
+    if step % 10 == 0:
+        print(f"Step {step} | GPU Loss: {float(loss_val):.5f}")</code></pre>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    &copy; 2026 AMEVA-Forge Team. Released under Apache-2.0 License.
+  </footer>
 </body>
 </html>

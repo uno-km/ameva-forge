@@ -15,7 +15,9 @@ import { init, read, dispose, getTensorInfo, mapBufferAsync, readMappedInto, war
 import { executeGraph } from "../tensor/graphExecutor";
 import { _globalRegistry } from "../tensor/tensorRegistry";
 import { getQuotaSnapshot } from "../webgpu/quota";
-import { getDevice } from "../webgpu/device";
+import { getDevice, _safeLog } from "../webgpu/device";
+import { clearStagingPool } from "../webgpu/buffers";
+import { _globalUniformPool } from "../webgpu/uniformPool";
 import { TensorHandle } from "../types";
 
 /**
@@ -52,7 +54,7 @@ export interface AmevaTensorGlobalAPI {
   disposeBatch: (handles: TensorHandle[]) => void;
   getQuotaSnapshot: typeof getQuotaSnapshot;
   snapshotHandles: () => string[];
-  flushGC: () => Promise<void> | void;
+  flushGC: (options?: { strict?: boolean }) => Promise<{ ok: boolean; error?: string }>;
 }
 
 declare global {
@@ -87,7 +89,7 @@ function disposeBatch(handles: TensorHandle[]): void {
       try { 
         dispose(handle); 
       } catch (e) { 
-        /* Already disposed or invalid handle: safely ignore to not abort batch disposal */
+        _safeLog(`[pyodideBridge] disposeBatch handle "${handle}" failed: ${e}`);
       }
     }
   }
@@ -118,12 +120,20 @@ export function registerPyodideBridge(): AmevaTensorGlobalAPI {
     disposeBatch,
     getQuotaSnapshot,
     snapshotHandles: () => _globalRegistry.snapshotHandles(),
-    flushGC: async () => {
+    flushGC: async (options?: { strict?: boolean }) => {
       try {
         const dev = getDevice();
         await dev.queue.onSubmittedWorkDone();
-      } catch (e) {
-        // Device unavailable or queue error
+        await _globalUniformPool.retireSubmitted(dev);
+        clearStagingPool();
+        _globalUniformPool.clear();
+        return { ok: true };
+      } catch (e: any) {
+        _safeLog(`[pyodideBridge] flushGC work done error: ${e}`);
+        if (options && options.strict) {
+          throw e;
+        }
+        return { ok: false, error: String(e) };
       }
     },
   };

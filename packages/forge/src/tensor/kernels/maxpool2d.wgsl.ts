@@ -21,6 +21,10 @@ struct Params {
     sW: u32, // 너비 방향의 스트라이드(보폭)입니다.
     pH: u32, // 높이 방향에 추가된 제로 패딩 크기입니다.
     pW: u32, // 너비 방향에 추가된 제로 패딩 크기입니다.
+    workgroups_x: u32, // 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수입니다.
+    pad1: u32,
+    pad2: u32,
+    pad3: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params; // GPU에 메타데이터를 공급하는 유니폼 버퍼입니다.
@@ -33,7 +37,7 @@ struct Params {
  */
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let idx = global_id.x; // 출력 텐서에서 현재 스레드가 담당할 1D 위치(인덱스)입니다.
+    let idx = global_id.x + global_id.y * params.workgroups_x * 64u; // 2D 디스패치 선형 인덱스 복원
     // 연산이 필요한 전체 출력 데이터의 개수를 계산합니다.
     let total = params.batch * params.channels * params.out_h * params.out_w;
     

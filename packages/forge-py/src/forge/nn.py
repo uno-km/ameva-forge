@@ -12,11 +12,9 @@
 # WHY: 타입 힌팅을 통해 코드의 가독성을 높이고 정적 분석을 용이하게 하기 위함입니다.
 # HOW: 반환 값 등의 타입 명시에 사용됩니다.
 from typing import List
-
-# WHAT: 내부 모듈에서 Tensor 클래스를 임포트합니다.
-# WHY: 신경망 연산의 기본 데이터 구조인 텐서를 사용하기 위함입니다.
-# HOW: 가중치, 편향, 입출력 데이터 등을 표현하는 데 사용됩니다.
+from collections import OrderedDict
 from .tensor import Tensor
+from .errors import AMEVAForgeUnsupportedOperationError
 
 # WHAT: 내부 연산 모듈에서 다양한 수학적 연산 함수들을 임포트합니다.
 # WHY: 신경망 계층 내에서 순전파 연산을 수행하기 위해 필요한 연산들을 제공하기 때문입니다.
@@ -103,6 +101,29 @@ class Module:
             params.extend(m.parameters())
         return params
 
+    def to(self, device: str):
+        """
+        WHAT: 모델의 모든 파라미터(Parameter), 버퍼(Buffer: running_mean 등), 서브모듈을 지정된 디바이스로 일괄 이동합니다.
+        WHY: GPU 가속 또는 CPU 평가를 위해 모델 내 모든 텐서 자원의 연산 장치를 일치시키기 위함입니다.
+        HOW: _params와 인스턴스 내 모든 Tensor 객체들을 to(device)로 변환하고 _modules를 재귀 호출합니다.
+        """
+        if device not in ("cpu", "gpu"):
+            from .errors import AMEVAForgeDeviceError
+            raise AMEVAForgeDeviceError(
+                f"Unsupported device: {device!r}. "
+                "Expected 'cpu' or 'gpu'."
+            )
+        for name, parameter in self._params.items():
+            parameter.move_to_(device)
+        for name, value in self.__dict__.items():
+            if name.startswith('_'):
+                continue
+            if isinstance(value, Tensor) and name not in self._params:
+                value.move_to_(device)
+        for module in self._modules.values():
+            module.to(device)
+        return self
+
     # WHAT: 모델의 전체 파라미터 상태를 딕셔너리 형태로 추출하는 메서드입니다.
     # WHY: 모델의 가중치를 파일로 저장(Serialization)하거나 다른 모델로 복사할 때 사용하기 위함입니다.
     # HOW: OrderedDict를 생성한 후 자신의 파라미터를 추가하고 자식 모듈을 순회하며 상태를 누적합니다.
@@ -130,8 +151,18 @@ class Module:
             else:
                 # WHAT: 파라미터의 실제 수치 데이터(NumPy 배열 등)만 추출하여 저장합니다.
                 # WHY: 모델 저장 시 불필요한 메타데이터를 제외하고 순수 가중치만 저장하기 위함입니다.
-                # HOW: param이 numpy() 메서드를 가지면 호출하고, 없으면 내부 _data 속성을 사용합니다.
-                state[key] = param.numpy() if hasattr(param, 'numpy') else param._data
+                # HOW: CPU 텐서는 _data 또는 numpy()로 추출하고, GPU 텐서는 _data가 없을 경우 명시적 안내 에러를 발생시킵니다.
+                if param.device == 'cpu':
+                    state[key] = param._data if param._data is not None else param.numpy()
+                elif hasattr(param, '_data') and param._data is not None:
+                    state[key] = param._data
+                else:
+                    from .errors import AMEVAForgeDeviceError
+                    raise AMEVAForgeDeviceError(
+                        f"state_dict(keep_vars=False) cannot synchronously readback GPU parameter '{key}'. "
+                        "Use model.state_dict(keep_vars=True) to retain GPU tensor handles, "
+                        "or transfer model to CPU first: model.to('cpu').state_dict()."
+                    )
                 
         # WHAT: 하위 모듈들을 순회하는 루프입니다.
         # WHY: 트리 구조로 얽힌 모든 파라미터의 상태를 빠짐없이 수집하기 위함입니다.
@@ -306,12 +337,28 @@ class Sequential(Module):
     # WHY: 등록된 계층들을 순서대로 통과시켜 최종 결과를 얻기 위함입니다.
     # HOW: _modules에 저장된 하위 모듈들을 차례로 호출하며 이전 출력값을 다음 입력값으로 갱신합니다.
     def forward(self, x):
-        # WHAT: 내부 모듈들을 순회하는 루프입니다.
-        # WHY: 각 레이어를 순차적으로 실행하기 위함입니다.
-        # HOW: self._modules.values()로 등록된 모듈을 꺼내와서 x = module(x)로 업데이트합니다.
         for module in self._modules.values():
             x = module(x)
         return x
+
+    def __getitem__(self, idx):
+        return list(self._modules.values())[idx]
+
+    def __len__(self):
+        return len(self._modules)
+
+
+class MSELoss(Module):
+    """
+    Mean Squared Error loss module.
+    """
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, input: Tensor, target: Tensor) -> Tensor:
+        from .functional import mse_loss
+        return mse_loss(input, target)
+
 
 # WHAT: 2차원 공간 상의 최대 풀링(Max Pooling) 연산을 수행하는 계층입니다.
 # WHY: 공간적 해상도를 줄이면서 중요한 특징(가장 강한 신호)을 보존하여 위치 불변성을 얻고 계산량을 감소시키기 위함입니다.
@@ -520,20 +567,19 @@ class Conv2d(Module):
     # HOW: 입력과 가중치의 장치(device)가 다르면 동기화한 뒤, ops 모듈의 conv2d 함수를 호출합니다.
     def forward(self, x: 'Tensor') -> 'Tensor':
         from .ops import conv2d
+        from .errors import AMEVAForgeDeviceError
         
         if self.weight.device != x.device:
-            # WHAT: 가중치를 입력 텐서와 동일한 연산 장치(CPU/GPU)로 이동시킵니다.
-            # WHY: 텐서 연산은 동일 기기 내에서만 이루어져야 하므로 에러를 방지하기 위함입니다.
-            # HOW: to() 메서드로 이동한 후 기울기 추적을 다시 켭니다.
-            self.weight = self.weight.to(x.device)
-            self.weight.requires_grad = True
+            raise AMEVAForgeDeviceError(
+                f"Conv2d weight device '{self.weight.device}' does not match input device '{x.device}'. "
+                f"Call model.to('{x.device}') before executing forward or initializing the optimizer."
+            )
             
         if self.bias is not None and self.bias.device != x.device:
-            # WHAT: 편향을 입력 텐서와 동일한 장치로 이동시킵니다.
-            # WHY: 마찬가지로 호환성 문제를 막기 위함입니다.
-            # HOW: to()로 복사하고 requires_grad를 활성화합니다.
-            self.bias = self.bias.to(x.device)
-            self.bias.requires_grad = True
+            raise AMEVAForgeDeviceError(
+                f"Conv2d bias device '{self.bias.device}' does not match input device '{x.device}'. "
+                f"Call model.to('{x.device}') before executing forward or initializing the optimizer."
+            )
             
         # WHAT: 최종 2D 합성곱 연산을 실행합니다.
         # WHY: 입력과 학습된 필터들 간의 크로스 코릴레이션(cross-correlation) 결과를 구하기 위함입니다.
@@ -580,20 +626,19 @@ class LayerNorm(Module):
     # HOW: 파라미터가 장치에 맞게 준비되었는지 확인 후 내부 functional.layer_norm 함수를 부릅니다.
     def forward(self, x):
         from .functional import layer_norm
+        from .errors import AMEVAForgeDeviceError
         
         if self.weight is not None and self.weight.device != x.device:
-            # WHAT: 연산 전에 가중치의 디바이스를 입력 텐서와 동기화합니다.
-            # WHY: CPU와 GPU 텐서 간의 연산 시 충돌(Error)을 막기 위함입니다.
-            # HOW: to(device) 호출 및 그래디언트 플래그 재활성화.
-            self.weight = self.weight.to(x.device)
-            self.weight.requires_grad = True
+            raise AMEVAForgeDeviceError(
+                f"LayerNorm weight device '{self.weight.device}' does not match input device '{x.device}'. "
+                f"Call model.to('{x.device}') before executing forward or initializing the optimizer."
+            )
             
         if self.bias is not None and self.bias.device != x.device:
-            # WHAT: 편향 텐서 디바이스 동기화입니다.
-            # WHY: 연산 장치 일치를 위함입니다.
-            # HOW: 동일하게 처리합니다.
-            self.bias = self.bias.to(x.device)
-            self.bias.requires_grad = True
+            raise AMEVAForgeDeviceError(
+                f"LayerNorm bias device '{self.bias.device}' does not match input device '{x.device}'. "
+                f"Call model.to('{x.device}') before executing forward or initializing the optimizer."
+            )
             
         return layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
 
@@ -784,33 +829,41 @@ class PositionalEncoding(Module):
         # WHY: 짝수 인덱스와 홀수 인덱스 차원에 서로 90도 위상 차를 두어 상대적 거리를 쉽게 학습할 수 있게 하기 위함입니다.
         # HOW: 짝수 인덱스에는 sin, 홀수 인덱스에는 cos 값을 대입합니다.
         pe[0, :, 0::2] = np.sin(position * div_term)
-        pe[0, :, 1::2] = np.cos(position * div_term)
-        
-        # WHAT: 계산된 행렬을 텐서화하여 보관합니다.
-        # WHY: 백워드 패스에서 업데이트되지 않는 고정된 값으로 사용하기 위함입니다.
-        # HOW: requires_grad=False로 텐서를 생성합니다.
+        # WHAT: 계산된 행렬을 텐서화하여 보관하고, 원본 CPU NumPy 데이터를 별도 보존합니다.
+        # WHY: 텐서가 GPU로 이동된 후에도 다양한 가변 시퀀스 길이(seq_len) 슬라이스를 안전하게 생성하기 위함입니다.
+        # HOW: _pe_raw에 float32 배열을 보관하고 _pe_cache로 재사용합니다.
+        self._pe_raw = pe.copy().astype(np.float32)
         self.pe = tensor(pe, requires_grad=False)
+        self._pe_cache = OrderedDict()
         
     # WHAT: 포지셔널 인코딩의 순전파 메서드입니다.
     # WHY: 실제 모델 입력 텐서에 순서 정보를 합성하기 위함입니다.
-    # HOW: 입력의 시퀀스 길이만큼 pe 텐서를 자른 후, 원래 입력값 x와 더해서(add) 반환합니다.
+    # HOW: 디바이스/길이별 캐시에서 pe_slice를 조회하고 원래 입력값 x와 더해서(add) 반환합니다.
     def forward(self, x):
         from .ops import add, tensor
+        from .errors import AMEVAForgeDeviceError
         if self.pe.device != x.device:
-            # WHAT: 디바이스 동기화 처리입니다.
-            # WHY: 입력이 GPU에 있을 경우 에러를 막기 위함입니다.
-            # HOW: to() 메서드를 사용해 동일한 장치로 옮깁니다.
-            self.pe = self.pe.to(x.device)
+            raise AMEVAForgeDeviceError(
+                f"PositionalEncoding buffer device '{self.pe.device}' does not match input device '{x.device}'. "
+                f"Call model.to('{x.device}') before executing forward."
+            )
             
-        # WHAT: 현재 입력의 시퀀스 길이를 추출합니다.
-        # WHY: 미리 최대치로 계산된 pe 행렬을 현재 길이에 맞게 슬라이싱하기 위함입니다.
-        # HOW: x의 형상(shape)에서 1번 차원을 가져옵니다.
         seq_len = x.shape[1]
-        
-        # WHAT: 길이에 맞게 슬라이스된 위치 임베딩 텐서입니다.
-        # WHY: 불필요한 차원 연산을 없애고 정확히 매칭하기 위함입니다.
-        # HOW: _data를 잘라내고 새 tensor를 생성하여 반환된 값과 더합니다.
-        pe_slice = tensor(self.pe._data[:, :seq_len, :], device=x.device)
+        cache_key = (x.device, seq_len)
+        if cache_key in self._pe_cache:
+            self._pe_cache.move_to_end(cache_key)
+        else:
+            if len(self._pe_cache) >= 32:
+                old_key, old_tensor = self._pe_cache.popitem(last=False)
+                if getattr(old_tensor, 'device', None) == 'gpu':
+                    try:
+                        old_tensor.dispose()
+                    except Exception:
+                        pass
+            pe_slice_data = self._pe_raw[:, :seq_len, :].astype(np.float32)
+            self._pe_cache[cache_key] = tensor(pe_slice_data, device=x.device, requires_grad=False)
+            
+        pe_slice = self._pe_cache[cache_key]
         return add(x, pe_slice)
 
 
@@ -1018,6 +1071,11 @@ class RNN(Module):
     # WHY: 각 시점 데이터들을 차례로 셀에 밀어넣고 출력과 최종 상태를 얻기 위함입니다.
     # HOW: 루프를 돌며 상태를 갱신하고 결과를 리스트에 모은 뒤 결합하여 반환합니다.
     def forward(self, x, hx=None):
+        if x.device == "gpu":
+            raise AMEVAForgeUnsupportedOperationError(
+                "GPU RNN is not supported in Release 1. "
+                "RNN requires GPU slice/time-step kernels that are not part of the Release 1 scope."
+            )
         from .ops import cat, unsqueeze, permute
         
         if self.batch_first:
@@ -1087,6 +1145,11 @@ class LSTM(Module):
     # WHY: 여러 타임스텝에 걸쳐 입력 데이터를 차례로 처리하여 문맥 결과를 도출하기 위함입니다.
     # HOW: 시퀀스 차원을 기준으로 루프를 반복하며 셀 상태(c)와 은닉 상태(h)를 계속해서 누적 갱신합니다.
     def forward(self, x, hx=None):
+        if x.device == "gpu":
+            raise AMEVAForgeUnsupportedOperationError(
+                "GPU LSTM is not supported in Release 1. "
+                "Use CPU LSTM or wait for Release 2 recurrent kernels."
+            )
         from .ops import cat, unsqueeze, permute
         if self.batch_first:
             # WHAT: batch_first가 참일 경우 입력 데이터를 타임스텝 우선 순서로 뒤집습니다.

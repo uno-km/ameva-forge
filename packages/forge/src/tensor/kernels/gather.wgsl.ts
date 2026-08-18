@@ -12,7 +12,7 @@ struct Params {
   num_elements: u32, // 출력 텐서의 총 원소 개수입니다.
   dim: u32, // 요소를 수집할(gather) 대상 차원(axis)의 인덱스입니다.
   rank: u32, // 텐서의 차원 수 (랭크)입니다.
-  _pad: u32, // 16바이트 메모리 정렬을 위한 패딩입니다.
+  workgroups_x: u32, // 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수
   x_strides: array<u32, 8>, // 원본 입력 텐서의 각 차원별 스트라이드(보폭)입니다.
   out_strides: array<u32, 8>, // 출력 텐서의 각 차원별 스트라이드(보폭)입니다.
   x_shape: array<u32, 8>, // 원본 입력 텐서의 모양(각 차원의 크기)입니다.
@@ -29,7 +29,7 @@ struct Params {
  */
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  let idx = global_id.x; // 출력 텐서에서 현재 스레드가 처리할 1D 위치(인덱스)입니다.
+  let idx = global_id.x + global_id.y * params.workgroups_x * 64u; // 2D 디스패치 선형 인덱스 복원
   
   // 현재 처리할 인덱스가 전체 요소 수를 초과하면 실행을 중단합니다.
   if (idx >= params.num_elements) { return; }
@@ -45,8 +45,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // 현재 차원이 수집 대상 차원(dim)인 경우, 계산된 좌표 대신 index 배열에서 값을 읽어옵니다.
     if (i == params.dim) {
-      let idx_val = u32(index[idx]); // index 배열에서 대상 인덱스를 가져와 정수로 변환합니다.
-      in_idx = in_idx + idx_val * params.x_strides[i]; // 가져온 인덱스에 원본 텐서의 해당 차원 스트라이드를 곱해 누적합니다.
+      let raw_idx = index[idx];
+      let dim_size = i32(params.x_shape[i]);
+      var signed_idx = i32(raw_idx);
+      if (signed_idx < 0) {
+        signed_idx = signed_idx + dim_size;
+      }
+      let clamped_idx = u32(clamp(signed_idx, 0, max(0, dim_size - 1)));
+      in_idx = in_idx + clamped_idx * params.x_strides[i];
     } else {
       // 수집 대상 차원이 아닌 경우, 출력 텐서와 동일한 좌표를 유지합니다.
       in_idx = in_idx + coord * params.x_strides[i]; // 동일한 좌표에 원본 텐서의 해당 차원 스트라이드를 곱해 누적합니다.

@@ -124,6 +124,6 @@ class AMEVAForgeStaleHandleError(AMEVAForgeError):
     pass
 
 
-class AMEVAForgeUnsupportedOperationError(AMEVAForgeError):
+class AMEVAForgeUnsupportedOperationError(AMEVAForgeDeviceError):
     """Release 1에서 지원하지 않는 연산 오류."""
     pass
