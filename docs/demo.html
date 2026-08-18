@@ -60,6 +60,9 @@
                     <option value="mlp" data-i18n="demo.preset1">1. 2-Layer MLP (GPU In-Place SGD Training)</option>
                     <option value="transformer" data-i18n="demo.preset2">2. Mini-Transformer (Causal Masked Attention)</option>
                     <option value="benchmark" data-i18n="demo.preset3">3. Matmul Benchmark (NumPy CPU vs WebGPU)</option>
+                    <option value="llama" data-i18n="demo.preset4">4. LLaMA-3 / NanoGPT (FlashAttention + RoPE + RMSNorm Text Gen)</option>
+                    <option value="cartpole" data-i18n="demo.preset5">5. CartPole RL (WebGPU 60fps Live Agent Training)</option>
+                    <option value="pipeline" data-i18n="demo.preset6">6. HuggingFace Style Pipeline (forge.pipeline 3-Line AI)</option>
                 </select>
             </div>
 
@@ -223,6 +226,97 @@ print(f"Max Math Diff:   {diff:.6e} (Parity 100% Verified)")
 del A_gpu, B_gpu, C_gpu
 import gc; gc.collect()
 {"type": "benchmark", "cpu_ms": cpu_time, "gpu_ms": gpu_time, "speedup": speedup}
+`,
+            llama: `# ── LLaMA-3 / NanoGPT (FlashAttention + RoPE + RMSNorm Text Gen) ──
+import forge as torch
+from forge.models import LlamaConfig, LlamaForCausalLM
+import numpy as np
+
+print("Initializing LLaMA-3 WebGPU Architecture (RoPE + RMSNorm + FlashAttention)...")
+config = LlamaConfig(
+    vocab_size=256,
+    hidden_size=64,
+    intermediate_size=128,
+    num_hidden_layers=2,
+    num_attention_heads=4,
+    num_key_value_heads=4,
+    device="gpu"
+)
+
+model = LlamaForCausalLM(config).to("gpu")
+
+prompt_str = "AMEVA"
+prompt_tokens = [ord(c) for c in prompt_str]
+print(f"Input Prompt: '{prompt_str}' (Tokens: {prompt_tokens})")
+
+generated = await model.generate(prompt_tokens, max_new_tokens=8)
+gen_text = "".join([chr(t) if 32 <= t <= 126 else f"[{t}]" for t in generated])
+print(f"Generated Sequence: {gen_text}")
+print(f"FlashAttention Token Generation Complete! Total Tokens: {len(generated)}")
+
+del model
+import gc; gc.collect()
+{"type": "llama", "prompt": prompt_str, "tokens": generated, "text": gen_text}
+`,
+            cartpole: `# ── CartPole RL: 60fps Physics & WebGPU In-Place DQN ──
+import forge as torch
+from forge.rl import CartPoleEnv, DQNAgent
+
+print("Initializing WebGPU Reinforcement Learning Environment (CartPole-v1)...")
+env = CartPoleEnv()
+agent = DQNAgent(state_dim=4, hidden_dim=32, action_dim=2, lr=0.03, device="gpu")
+
+rewards = []
+for episode in range(1, 11):
+    state = env.reset()
+    total_reward = 0
+    done = False
+    
+    for step in range(30):
+        action = await agent.act(state, epsilon=0.15)
+        next_state, reward, done, _ = env.step(action)
+        await agent.train_step(state, action, reward, next_state, done)
+        state = next_state
+        total_reward += reward
+        if done:
+            break
+            
+    rewards.append(total_reward)
+    print(f"Episode {episode:02d}/10 | Balance Steps: {int(total_reward)} | WebGPU In-Place Updated")
+
+print(f"RL Training Complete! Max Balance Duration: {max(rewards):.0f} steps")
+
+del agent
+import gc; gc.collect()
+{"type": "cartpole", "episodes": list(range(1, 11)), "rewards": rewards}
+`,
+            pipeline: `# ── HuggingFace-Style 3-Line AI Pipeline (forge.pipeline) ──
+import forge as torch
+from forge.pipeline import pipeline
+import time
+
+print("Initializing forge.pipeline('sentiment-analysis', device='gpu')...")
+pipe = pipeline("sentiment-analysis", device="gpu")
+
+texts = [
+    "AMEVA-Forge WebGPU is lightning fast and revolutionary!",
+    "Slow legacy CPU loops are causing huge latency bottleneck.",
+    "Browser-native machine learning with zero server cost is awesome."
+]
+
+results = []
+for text in texts:
+    t0 = time.perf_counter()
+    res = await pipe(text)
+    latency_ms = (time.perf_counter() - t0) * 1000.0
+    res["latency_ms"] = round(latency_ms, 2)
+    res["text"] = text
+    results.append(res)
+    print(f"[{res['label']}] (Score: {res['score']:.4f} | {latency_ms:.2f}ms) -> \"{text}\"")
+
+del pipe
+import gc; gc.collect()
+{"type": "pipeline", "results": results}
 `
         };
 
@@ -445,6 +539,92 @@ import gc; gc.collect()
             ctx.fillText(`${gpuMs.toFixed(1)} ms`, pad + 75 + gpuWidth, 115);
         }
 
+        function drawLlamaTokens(tokens, text) {
+            ctx.clearRect(0, 0, lossCanvas.width, lossCanvas.height);
+            const w = lossCanvas.width;
+            const h = lossCanvas.height;
+            const pad = 20;
+
+            ctx.fillStyle = '#003399';
+            ctx.font = 'bold 12px Consolas, monospace';
+            ctx.fillText(`LLaMA-3 Token Stream (FlashAttention)`, pad, 20);
+
+            if (!tokens || tokens.length === 0) return;
+
+            const barW = Math.min((w - 2 * pad) / tokens.length, 36);
+            tokens.forEach((tok, i) => {
+                const x = pad + i * (barW + 4);
+                const char = (tok >= 32 && tok <= 126) ? String.fromCharCode(tok) : `[${tok}]`;
+                const barH = Math.min((tok / 256.0) * 80 + 20, 90);
+
+                ctx.fillStyle = i < 5 ? '#5577bb' : '#003399';
+                ctx.fillRect(x, h - pad - barH, barW, barH);
+
+                ctx.fillStyle = '#333333';
+                ctx.font = '10px Consolas, monospace';
+                ctx.fillText(char, x + 2, h - pad + 12);
+            });
+
+            ctx.fillStyle = '#666666';
+            ctx.font = '10px Arial, sans-serif';
+            ctx.fillText(`Output: "${text}"`, pad, 36);
+        }
+
+        function drawCartPoleRewards(episodes, rewards) {
+            ctx.clearRect(0, 0, lossCanvas.width, lossCanvas.height);
+            const w = lossCanvas.width;
+            const h = lossCanvas.height;
+            const pad = 25;
+
+            ctx.fillStyle = '#003399';
+            ctx.font = 'bold 12px Consolas, monospace';
+            ctx.fillText(`CartPole-v1: Episode Balance Steps (DQN WebGPU)`, pad, 18);
+
+            const maxR = Math.max(...rewards, 30);
+            const barW = (w - 2 * pad) / episodes.length - 4;
+
+            rewards.forEach((r, i) => {
+                const x = pad + i * (barW + 4);
+                const barH = (r / maxR) * (h - 2 * pad - 20);
+
+                ctx.fillStyle = r >= 20 ? '#008800' : '#003399';
+                ctx.fillRect(x, h - pad - barH, barW, barH);
+
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '9px Consolas, monospace';
+                if (barH > 14) {
+                    ctx.fillText(`${Math.round(r)}`, x + 3, h - pad - barH + 11);
+                }
+
+                ctx.fillStyle = '#666666';
+                ctx.fillText(`E${i+1}`, x + 2, h - pad + 12);
+            });
+        }
+
+        function drawPipelineResults(results) {
+            ctx.clearRect(0, 0, lossCanvas.width, lossCanvas.height);
+            const w = lossCanvas.width;
+            const h = lossCanvas.height;
+            const pad = 20;
+
+            ctx.fillStyle = '#003399';
+            ctx.font = 'bold 12px Consolas, monospace';
+            ctx.fillText(`HuggingFace Pipeline: Sentiment Confidence`, pad, 18);
+
+            results.forEach((res, i) => {
+                const y = 40 + i * 36;
+                const barW = (w - 2 * pad - 120) * res.score;
+
+                ctx.fillStyle = res.label === 'POSITIVE' ? '#008800' : '#cc0000';
+                ctx.fillRect(pad + 80, y, barW, 20);
+
+                ctx.fillStyle = '#222222';
+                ctx.font = '10px Consolas, monospace';
+                ctx.fillText(`[${res.label}]`, pad, y + 14);
+                ctx.fillText(`${(res.score * 100).toFixed(1)}% (${res.latency_ms}ms)`, pad + 85 + barW, y + 14);
+            });
+        }
+
         async function initEnvironment() {
             const gpuStatus = document.getElementById('gpuStatus');
 
@@ -461,14 +641,15 @@ import gc; gc.collect()
 
             try {
                 if (window.ameva && typeof window.ameva.registerPyodideBridge === 'function') {
-                    const bridgeApi = window.ameva.registerPyodideBridge();
-                    window.forge = Object.assign({}, window.ameva, bridgeApi);
-                    window.amevaForge = window.forge;
+                    window.bridgeApi = window.ameva.registerPyodideBridge();
+                    window.forge = window.bridgeApi;
                 }
-                if (window.forge && typeof window.forge.init === 'function') {
+                if (window.bridgeApi && typeof window.bridgeApi.init === 'function') {
+                    await window.bridgeApi.init();
+                } else if (window.forge && typeof window.forge.init === 'function') {
                     await window.forge.init();
-                } else if (window.forge && typeof window.forge.initWebGPU === 'function') {
-                    await window.forge.initWebGPU();
+                } else if (window.ameva && typeof window.ameva.initWebGPU === 'function') {
+                    await window.ameva.initWebGPU();
                 }
                 
                 const adapterDesc = (window.forge && window.forge.adapterInfo && window.forge.adapterInfo.description) ? window.forge.adapterInfo.description : 'Active';
@@ -528,7 +709,9 @@ print(f"[Ready] forge v0.1.0 ready on Pyodide. WebGPU bridge active.")
                 return;
             }
 
-            if (window.forge && typeof window.forge.init === 'function') {
+            if (window.bridgeApi && typeof window.bridgeApi.init === 'function') {
+                try { await window.bridgeApi.init(); } catch (e) {}
+            } else if (window.forge && typeof window.forge.init === 'function') {
                 try { await window.forge.init(); } catch (e) {}
             }
 
@@ -561,6 +744,17 @@ print(f"[Ready] forge v0.1.0 ready on Pyodide. WebGPU bridge active.")
                 } else if (jsRes && jsRes.type === 'benchmark') {
                     metricLoss.textContent = jsRes.speedup.toFixed(1) + 'x Speedup';
                     drawBenchmarkBars(jsRes.cpu_ms, jsRes.gpu_ms, jsRes.speedup);
+                } else if (jsRes && jsRes.type === 'llama') {
+                    metricLoss.textContent = 'Gen: ' + jsRes.tokens.length + ' tokens';
+                    drawLlamaTokens(jsRes.tokens, jsRes.text);
+                } else if (jsRes && jsRes.type === 'cartpole') {
+                    const maxR = Math.max(...jsRes.rewards);
+                    metricLoss.textContent = 'Max: ' + maxR + ' steps';
+                    drawCartPoleRewards(jsRes.episodes, jsRes.rewards);
+                } else if (jsRes && jsRes.type === 'pipeline') {
+                    const topRes = jsRes.results[0];
+                    metricLoss.textContent = `${topRes.label} (${(topRes.score*100).toFixed(0)}%)`;
+                    drawPipelineResults(jsRes.results);
                 } else {
                     metricLoss.textContent = 'Complete';
                 }
