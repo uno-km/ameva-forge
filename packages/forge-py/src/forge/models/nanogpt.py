@@ -46,13 +46,15 @@ class CausalSelfAttention(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         B, T, C = x.shape
-        q = self.q_proj(x).reshape((B, self.n_head, T, self.head_dim))
-        k = self.k_proj(x).reshape((B, self.n_head, T, self.head_dim))
-        v = self.v_proj(x).reshape((B, self.n_head, T, self.head_dim))
+        # [B, T, C] -> [B, T, n_head, head_dim] -> [B, n_head, T, head_dim]
+        q = self.q_proj(x).reshape((B, T, self.n_head, self.head_dim)).permute(0, 2, 1, 3)
+        k = self.k_proj(x).reshape((B, T, self.n_head, self.head_dim)).permute(0, 2, 1, 3)
+        v = self.v_proj(x).reshape((B, T, self.n_head, self.head_dim)).permute(0, 2, 1, 3)
 
         scale = 1.0 / math.sqrt(self.head_dim)
         y = F.scaled_dot_product_attention(q, k, v, scale=scale, is_causal=True)
-        y = y.reshape((B, T, C))
+        # [B, n_head, T, head_dim] -> [B, T, n_head, head_dim] -> [B, T, C]
+        y = y.permute(0, 2, 1, 3).reshape((B, T, C))
         return self.c_proj(y)
 
 
@@ -93,6 +95,7 @@ class GPT(nn.Module):
         self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
         self.ln_f = nn.LayerNorm(config.n_embd)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.to(config.device)
 
     def forward(self, idx: Tensor) -> Tensor:
         B, T = idx.shape

@@ -944,13 +944,15 @@ class Tensor:
         from .ops import flatten
         return flatten(self, start_dim, end_dim)
         
-    def permute(self, dims: tuple):
+    def permute(self, *dims):
         """
         WHAT: 텐서의 차원 순서를 지정된 배열(dims)대로 재배치합니다.
-        WHY: 이미지 데이터의 채널 순서 변경(NHWC <-> NCHW)이나 행렬 전치 등을 수행하기 위함입니다.
-        HOW: ops.permute를 호출합니다.
+        WHY: 이미지 데이터의 채널 순서 변경(NHWC <-> NCHW)이나 어텐션 헤드 축 전치 등을 수행하기 위함입니다.
+        HOW: ops.permute를 호출합니다. 가변 인자와 튜플/리스트 전달을 모두 지원합니다.
         """
         self._check_disposed()
+        if len(dims) == 1 and isinstance(dims[0], (tuple, list)):
+            dims = tuple(dims[0])
         from .ops import permute
         return permute(self, dims)
 

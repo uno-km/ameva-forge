@@ -2244,12 +2244,13 @@ def dropout(x: Tensor, p: float = 0.5, training: bool = True) -> Tensor:
 class EmbeddingFunction(Function):
     @staticmethod
     def forward(ctx, weight: Tensor, index: Tensor) -> Tensor:
-        if weight.device == "gpu" or index.device == "gpu":
-            raise AMEVAForgeUnsupportedOperationError(
-                "GPU Embedding is not supported in Release 1. "
-                "Embedding requires GPU scatter-add or atomic accumulation for correct backward."
-            )
+        _ensure_same_device(weight, index, "embedding")
         ctx.save_for_backward(weight, index)
+        out_shape = index.shape + (weight.shape[-1],)
+        if weight.device == "gpu" and index.device == "gpu":
+            return Tensor(shape=out_shape, dtype="float32", device="gpu",
+                          op="gather", parents=(weight, index),
+                          requires_grad=weight.requires_grad)
         data_w = _require_cpu_data(weight, "weight")
         data_i = _require_cpu_data(index, "index").astype(int)
         
@@ -2261,11 +2262,12 @@ class EmbeddingFunction(Function):
 
     @staticmethod
     def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, type(None)]:
-        if grad_output.device == "gpu":
-            raise AMEVAForgeUnsupportedOperationError(
-                "GPU Embedding backward is not supported in Release 1."
-            )
         weight, index = ctx.saved_tensors
+        if grad_output.device == "gpu" or weight.device == "gpu":
+            raise AMEVAForgeUnsupportedOperationError(
+                "GPU Embedding backward is not supported in Release 1/2 without atomic accumulation. "
+                "Transfer model to CPU before calling backward() on embedding layers."
+            )
         data_i = _require_cpu_data(index, "index").astype(int)
         data_g = _require_cpu_data(grad_output, "grad_output")
         

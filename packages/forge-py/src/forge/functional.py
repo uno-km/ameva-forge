@@ -132,15 +132,21 @@ class SoftmaxFunction(Function):
             diff = sub(grad_output, sum_val)
             return (mul(res, diff),)
 
-def softmax(x, axis=-1):
+def softmax(x, axis=None, dim=None):
     """
-    Numerically stable softmax.
-    
-    무엇을: Softmax 연산을 수행하는 래퍼(wrapper) 함수이다.
-    왜: 사용자가 Function.apply를 직접 호출하지 않고 직관적으로 함수를 사용할 수 있도록 하기 위함이다.
-    어떻게: SoftmaxFunction.apply를 호출하여 텐서를 넘긴다.
+    Numerically stable softmax. Supports both PyTorch (dim) and NumPy (axis) naming.
     """
+    if axis is None:
+        axis = -1 if dim is None else dim
     return SoftmaxFunction.apply(x, axis=axis)
+
+def log_softmax(x, axis=None, dim=None):
+    """
+    Numerically stable log_softmax. Supports both PyTorch (dim) and NumPy (axis) naming.
+    """
+    if axis is None:
+        axis = -1 if dim is None else dim
+    return LogSoftmaxFunction.apply(x, axis=axis)
 
 class LogSoftmaxFunction(Function):
     """

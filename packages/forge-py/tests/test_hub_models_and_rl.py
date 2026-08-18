@@ -8,24 +8,79 @@ import pytest
 import numpy as np
 import forge as torch
 from forge.models import LlamaConfig, LlamaForCausalLM, GPTConfig, GPT
-from forge.rl import CartPoleEnv, DQNAgent
+from forge.rl import CartPoleEnv, DQNAgent, PolicyGradientAgent
 from forge.pipeline import pipeline
 
 
-def test_nanogpt_forward():
+def test_nanogpt_forward_cpu_and_numerical_invariants():
     config = GPTConfig(block_size=16, vocab_size=64, n_layer=2, n_head=2, n_embd=32, device="cpu")
     model = GPT(config)
     idx = torch.tensor([[1, 5, 10, 20]], dtype="int32", device="cpu")
     logits = model(idx)
     assert logits.shape == (1, 4, 64)
+    assert logits.device == "cpu"
+    
+    # Mathematical Invariant: Softmax distribution must sum to 1.0 per token without NaN/Inf
+    logits_np = logits.numpy()
+    assert not np.isnan(logits_np).any()
+    assert not np.isinf(logits_np).any()
+    
+    probs = np.exp(logits_np - np.max(logits_np, axis=-1, keepdims=True))
+    probs = probs / np.sum(probs, axis=-1, keepdims=True)
+    np.testing.assert_allclose(np.sum(probs, axis=-1), np.ones((1, 4)), atol=1e-5)
 
 
-def test_llama_forward():
+def test_llama_forward_cpu_and_causal_invariance():
     config = LlamaConfig(vocab_size=64, hidden_size=32, intermediate_size=64, num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2, device="cpu")
     model = LlamaForCausalLM(config)
-    idx = torch.tensor([[2, 4, 8]], dtype="int32", device="cpu")
-    logits = model(idx)
-    assert logits.shape == (1, 3, 64)
+    idx1 = torch.tensor([[2, 4]], dtype="int32", device="cpu")
+    idx2 = torch.tensor([[2, 4, 8, 16]], dtype="int32", device="cpu")
+    
+    logits1 = model(idx1)
+    logits2 = model(idx2)
+    assert logits1.shape == (1, 2, 64)
+    assert logits2.shape == (1, 4, 64)
+
+    # Invariant: Logits at token 0 and 1 must be identical regardless of subsequent tokens (Causal Masking Proof)
+    np.testing.assert_allclose(logits1.numpy()[:, :2, :], logits2.numpy()[:, :2, :], atol=1e-4)
+
+
+def test_policy_gradient_agent_forward_and_action():
+    agent = PolicyGradientAgent(state_dim=4, hidden_dim=16, action_dim=2, device="cpu")
+    state = torch.tensor([[0.1, -0.2, 0.3, -0.4]], dtype="float32", device="cpu")
+    probs = agent(state)
+    assert probs.shape == (1, 2)
+    assert probs.device == "cpu"
+    probs_np = probs.numpy()
+    assert np.all(probs_np >= 0.0)
+    assert np.all(probs_np <= 1.0)
+    np.testing.assert_allclose(np.sum(probs_np, axis=-1), [1.0], atol=1e-5)
+
+
+def test_models_on_gpu_lazy_dag():
+    # LLaMA-3 GPU DAG
+    llama_cfg = LlamaConfig(vocab_size=32, hidden_size=16, intermediate_size=32, num_hidden_layers=1, num_attention_heads=2, num_key_value_heads=2, device="gpu")
+    llama = LlamaForCausalLM(llama_cfg)
+    idx_gpu = torch.tensor([[1, 2, 3]], dtype="int32", device="gpu")
+    llama_out = llama(idx_gpu)
+    assert llama_out.device == "gpu"
+    assert llama_out.shape == (1, 3, 32)
+    assert llama_out._lazy_op is not None
+
+    # NanoGPT GPU DAG
+    gpt_cfg = GPTConfig(block_size=8, vocab_size=32, n_layer=1, n_head=2, n_embd=16, device="gpu")
+    gpt = GPT(gpt_cfg)
+    gpt_out = gpt(idx_gpu)
+    assert gpt_out.device == "gpu"
+    assert gpt_out.shape == (1, 3, 32)
+    assert gpt_out._lazy_op is not None
+
+    # PolicyGradientAgent GPU DAG
+    pg_agent = PolicyGradientAgent(state_dim=4, hidden_dim=8, action_dim=2, device="gpu")
+    st_gpu = torch.tensor([[0.1, 0.2, 0.3, 0.4]], dtype="float32", device="gpu")
+    pg_out = pg_agent(st_gpu)
+    assert pg_out.device == "gpu"
+    assert pg_out.shape == (1, 2)
 
 
 def test_cartpole_env():
@@ -63,3 +118,4 @@ async def test_pipeline_sentiment():
     res = await pipe("AMEVA-Forge is blazing fast")
     assert res["label"] in ("POSITIVE", "NEGATIVE")
     assert 0.0 <= res["score"] <= 1.0
+

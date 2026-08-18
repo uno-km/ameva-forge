@@ -87,10 +87,10 @@ class LlamaAttention(nn.Module):
         k = self.k_proj(hidden_states)
         v = self.v_proj(hidden_states)
 
-        # Reshape to [B, H, L, d]
-        q = q.reshape((B, self.num_heads, L, self.head_dim))
-        k = k.reshape((B, self.num_key_value_heads, L, self.head_dim))
-        v = v.reshape((B, self.num_key_value_heads, L, self.head_dim))
+        # [B, L, H * d] -> [B, L, H, d] -> [B, H, L, d] (Permute to separate heads properly)
+        q = q.reshape((B, L, self.num_heads, self.head_dim)).permute(0, 2, 1, 3)
+        k = k.reshape((B, L, self.num_key_value_heads, self.head_dim)).permute(0, 2, 1, 3)
+        v = v.reshape((B, L, self.num_key_value_heads, self.head_dim)).permute(0, 2, 1, 3)
 
         # Apply Rotary Position Embeddings (RoPE)
         q = F.rope(q, base_freq=self.rope_theta, offset_pos=offset_pos)
@@ -100,8 +100,8 @@ class LlamaAttention(nn.Module):
         scale = 1.0 / math.sqrt(self.head_dim)
         attn_output = F.scaled_dot_product_attention(q, k, v, scale=scale, is_causal=True)
 
-        # [B, H, L, d] -> [B, L, H * d]
-        attn_output = attn_output.reshape((B, L, self.hidden_size))
+        # [B, H, L, d] -> [B, L, H, d] -> [B, L, H * d] (Restore sequence-contiguous layout)
+        attn_output = attn_output.permute(0, 2, 1, 3).reshape((B, L, self.hidden_size))
         return self.o_proj(attn_output)
 
 
@@ -148,6 +148,7 @@ class LlamaForCausalLM(nn.Module):
         self.config = config
         self.model = LlamaModel(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.to(config.device)
 
     def forward(self, input_ids: Tensor) -> Tensor:
         hidden_states = self.model(input_ids)

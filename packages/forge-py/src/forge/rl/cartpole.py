@@ -18,6 +18,7 @@ import forge.nn as nn
 import forge.optim as optim
 import forge.functional as F
 from forge.ops import tensor
+from forge.tensor import Tensor
 
 
 class CartPoleEnv:
@@ -143,6 +144,6 @@ class PolicyGradientAgent(nn.Module):
         ).to(device)
         self.optimizer = optim.SGD(self.net.parameters(), lr=lr)
 
-    def forward(self, state_tensor: torch.Tensor) -> torch.Tensor:
+    def forward(self, state_tensor: Tensor) -> Tensor:
         logits = self.net(state_tensor)
         return F.softmax(logits, dim=-1)
