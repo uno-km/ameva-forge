@@ -7,6 +7,7 @@
     <title>AMEVA-Forge: Live WebGPU Studio</title>
     <link rel="stylesheet" href="style.css">
     <script src="./dist/index.js"></script>
+    <script src="./dist/forge-py-bundle.js"></script>
     <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
 </head>
 <body>
@@ -109,7 +110,7 @@ class MLP(nn.Module):
         return self.fc2(torch.relu(self.fc1(x)))
 
 model = MLP().to('gpu')
-optimizer = optim.SGD(model.parameters(), lr=0.05)
+optimizer = optim.SGD(model.parameters(), lr=0.1)
 
 # 2. Synthetic XOR Dataset
 X_np = np.array([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]], dtype=np.float32)
@@ -120,7 +121,7 @@ Y = torch.tensor(Y_np, device='gpu')
 
 # 3. Training Loop on WebGPU
 losses = []
-for epoch in range(1, 41):
+for epoch in range(1, 51):
     optimizer.zero_grad()
     preds = model(X)
     diff = preds - Y
@@ -133,7 +134,7 @@ for epoch in range(1, 41):
     await optimizer.step_async()
     
     if epoch % 10 == 0 or epoch == 1:
-        print(f"Epoch {epoch:02d}/40 | WebGPU Loss: {loss_val:.6f}")
+        print(f"Epoch {epoch:02d}/50 | WebGPU Loss: {loss_val:.6f}")
 
 print("Training Complete! Final Loss:", losses[-1])
 losses
@@ -288,8 +289,11 @@ print(f"Max Math Diff:   {diff:.6e} (Parity Verified)")
                 if (window.ameva && typeof window.ameva.registerPyodideBridge === 'function') {
                     const bridgeApi = window.ameva.registerPyodideBridge();
                     window.forge = Object.assign({}, window.ameva, bridgeApi);
+                    window.amevaForge = window.forge;
                 }
-                if (window.forge && window.forge.initWebGPU) {
+                if (window.forge && typeof window.forge.init === 'function') {
+                    await window.forge.init();
+                } else if (window.forge && typeof window.forge.initWebGPU === 'function') {
                     await window.forge.initWebGPU();
                 }
                 gpuStatus.textContent = '[ WebGPU Active ]';
@@ -302,24 +306,39 @@ print(f"Max Math Diff:   {diff:.6e} (Parity Verified)")
             }
 
             try {
-                log('[Pyodide] Loading Python 3.11 runtime...');
+                log('[Pyodide] Loading Python 3.11 runtime & NumPy...');
                 pyodideInstance = await loadPyodide({
                     indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/"
                 });
-                await pyodideInstance.loadPackage("micropip");
                 await pyodideInstance.loadPackage("numpy");
-                const micropip = pyodideInstance.pyimport("micropip");
-                try {
+
+                // 1. Direct FS installation from embedded source bundle
+                if (window.__FORGE_PY_FILES__) {
+                    const pyFiles = window.__FORGE_PY_FILES__;
+                    for (const [relPath, content] of Object.entries(pyFiles)) {
+                        const fullPath = '/lib/python3.11/site-packages/forge/' + relPath;
+                        const dir = fullPath.substring(0, fullPath.lastIndexOf('/'));
+                        try { pyodideInstance.FS.mkdirTree(dir); } catch (e) {}
+                        pyodideInstance.FS.writeFile(fullPath, content);
+                    }
+                    log('[AMEVA-Forge] Installed forge Python package directly into virtual filesystem.');
+                } else {
+                    // Fallback to micropip
+                    await pyodideInstance.loadPackage("micropip");
+                    const micropip = pyodideInstance.pyimport("micropip");
                     await micropip.install("./pkg/forge-0.1.0-py3-none-any.whl");
-                    log('[AMEVA-Forge] Python wheel forge v0.1.0 installed.');
-                } catch (e) {
-                    log('[Notice] Local wheel install skipped; using embedded bridge.');
-                } finally {
-                    try { micropip.destroy(); } catch {}
+                    micropip.destroy();
                 }
-                log('[Ready] Studio ready. Click "Run Experiment" to execute.');
+
+                // Verify import
+                await pyodideInstance.runPythonAsync(`
+import forge as torch
+print(f"[Ready] forge v0.1.0 ready on Pyodide. WebGPU bridge active.")
+`);
+                log('[Ready] Studio initialized. Click "▶ Run Experiment" to start!');
             } catch (err) {
                 log('[Pyodide Error] ' + err.message);
+                console.error(err);
             }
         }
 

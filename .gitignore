@@ -42,6 +42,7 @@ diff_utf8.txt
 
 # Binary & Package Distribution Artifacts (WHL, TGZ, TAR.GZ)
 *.whl
+!docs/pkg/*.whl
 *.tar.gz
 *.tgz
 *.egg-info/
@@ -73,6 +74,8 @@ scripts/__pycache__/
 scripts/codes/
 docs/audits/
 packages/forge/test-results/
+packages/forge/docs/
+packages/forge/packages/
 test-results/
 scratch/
-scripts/scratch/
+scripts/scratch/
