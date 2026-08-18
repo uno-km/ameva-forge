@@ -19,7 +19,7 @@ No installation or CUDA configuration required! Open the interactive demo in Chr
 
 ## 🚀 Release 1.0 Capabilities & Verified Boundaries
 
-AMEVA-Forge Release 1.0 is engineered with 100% PyTorch syntax compatibility and mathematically closed-form GPU gradients:
+AMEVA-Forge Release 1.0 provides PyTorch-aligned syntax compatibility and mathematically closed-form GPU gradients:
 
 - **Core Tensors**: Multi-dimensional float32 tensors with 8D broadcasting and unified 112-byte uniform stride parameters.
 - **Hardware Scalability**: 2D Workgroup Grid Indexing supporting large dispatches ($N > 4,300,000$ elements) without silent truncation.
