@@ -17,7 +17,7 @@ WHY:
 """
 
 import math
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Any, Union
 from dataclasses import dataclass
 
 import forge as torch
@@ -80,7 +80,12 @@ class LlamaAttention(nn.Module):
         self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
 
-    def forward(self, hidden_states: Tensor, offset_pos: int = 0) -> Tensor:
+    def forward(
+        self,
+        hidden_states: Tensor,
+        offset_pos: int = 0,
+        past_key_value: Optional[Tuple[Tensor, Tensor]] = None
+    ) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
         B, L, _ = hidden_states.shape
 
         q = self.q_proj(hidden_states)
@@ -96,13 +101,21 @@ class LlamaAttention(nn.Module):
         q = F.rope(q, base_freq=self.rope_theta, offset_pos=offset_pos)
         k = F.rope(k, base_freq=self.rope_theta, offset_pos=offset_pos)
 
+        # Append to KV-Cache if provided
+        if past_key_value is not None:
+            from forge.ops import cat
+            k = cat([past_key_value[0], k], dim=2)
+            v = cat([past_key_value[1], v], dim=2)
+
+        present_key_value = (k, v)
+
         # FlashAttention / Scaled Dot-Product Attention
         scale = 1.0 / math.sqrt(self.head_dim)
         attn_output = F.scaled_dot_product_attention(q, k, v, scale=scale, is_causal=True)
 
         # [B, H, L, d] -> [B, L, H, d] -> [B, L, H * d] (Restore sequence-contiguous layout)
         attn_output = attn_output.permute(0, 2, 1, 3).reshape((B, L, self.hidden_size))
-        return self.o_proj(attn_output)
+        return self.o_proj(attn_output), present_key_value
 
 
 class LlamaDecoderLayer(nn.Module):
@@ -113,10 +126,15 @@ class LlamaDecoderLayer(nn.Module):
         self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mlp = LlamaMLP(config)
 
-    def forward(self, hidden_states: Tensor, offset_pos: int = 0) -> Tensor:
+    def forward(
+        self,
+        hidden_states: Tensor,
+        offset_pos: int = 0,
+        past_key_value: Optional[Tuple[Tensor, Tensor]] = None
+    ) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
         # Pre-LN Self-Attention with Residual Connection
         normed = self.input_layernorm(hidden_states)
-        attn_out = self.self_attn(normed, offset_pos=offset_pos)
+        attn_out, present_kv = self.self_attn(normed, offset_pos=offset_pos, past_key_value=past_key_value)
         hidden_states = hidden_states + attn_out
 
         # Pre-LN SwiGLU MLP with Residual Connection
@@ -124,7 +142,7 @@ class LlamaDecoderLayer(nn.Module):
         mlp_out = self.mlp(normed_mlp)
         hidden_states = hidden_states + mlp_out
 
-        return hidden_states
+        return hidden_states, present_kv
 
 
 class LlamaModel(nn.Module):
@@ -135,11 +153,19 @@ class LlamaModel(nn.Module):
         self.layers = nn.ModuleList([LlamaDecoderLayer(config) for _ in range(config.num_hidden_layers)])
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-    def forward(self, input_ids: Tensor) -> Tensor:
+    def forward(
+        self,
+        input_ids: Tensor,
+        past_key_values: Optional[List[Tuple[Tensor, Tensor]]] = None,
+        offset_pos: int = 0
+    ) -> Tuple[Tensor, List[Tuple[Tensor, Tensor]]]:
         hidden_states = self.embed_tokens(input_ids)
-        for layer in self.layers:
-            hidden_states = layer(hidden_states)
-        return self.norm(hidden_states)
+        present_kvs = []
+        for idx, layer in enumerate(self.layers):
+            p_kv = past_key_values[idx] if past_key_values is not None else None
+            hidden_states, present_kv = layer(hidden_states, offset_pos=offset_pos, past_key_value=p_kv)
+            present_kvs.append(present_kv)
+        return self.norm(hidden_states), present_kvs
 
 
 class LlamaForCausalLM(nn.Module):
@@ -150,26 +176,54 @@ class LlamaForCausalLM(nn.Module):
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.to(config.device)
 
-    def forward(self, input_ids: Tensor) -> Tensor:
-        hidden_states = self.model(input_ids)
+    def forward(
+        self,
+        input_ids: Tensor,
+        past_key_values: Optional[List[Tuple[Tensor, Tensor]]] = None,
+        offset_pos: int = 0,
+        use_cache: bool = False
+    ) -> Any:
+        hidden_states, present_kvs = self.model(input_ids, past_key_values=past_key_values, offset_pos=offset_pos)
         logits = self.lm_head(hidden_states)
+        if use_cache or past_key_values is not None:
+            return logits, present_kvs
         return logits
 
-    async def generate(self, prompt_tokens: List[int], max_new_tokens: int = 20) -> List[int]:
+    async def generate(self, prompt_tokens: List[int], max_new_tokens: int = 20, use_cache: bool = True) -> List[int]:
         """
-        Autoregressive generation loop supporting non-blocking WebGPU execution.
+        Autoregressive generation loop with O(N) WebGPU KV-Cache acceleration.
         """
         generated = list(prompt_tokens)
         device = self.config.device
 
-        for _ in range(max_new_tokens):
-            inp = tensor([generated], dtype="int32", device=device)
-            logits = self.forward(inp)  # [1, L, vocab_size]
+        if not use_cache:
+            for _ in range(max_new_tokens):
+                inp = tensor([generated], dtype="int32", device=device)
+                logits = self.forward(inp)  # [1, L, vocab_size]
+                last_token_logits = logits[0, -1, :]
+                np_logits = await last_token_logits.numpy_async()
+                next_token = int(np_logits.argmax())
+                generated.append(next_token)
+            return generated
+
+        # --- O(N) Linear Time KV-Cache Accelerated Generation ---
+        # 1. Prefill Step (Process initial prompt)
+        inp = tensor([prompt_tokens], dtype="int32", device=device)
+        logits, past_kvs = self.forward(inp, use_cache=True, offset_pos=0)
+        last_token_logits = logits[0, -1, :]
+        np_logits = await last_token_logits.numpy_async()
+        next_token = int(np_logits.argmax())
+        generated.append(next_token)
+
+        # 2. Decode Steps (Single token forward per step)
+        for step in range(1, max_new_tokens):
+            inp = tensor([[next_token]], dtype="int32", device=device)
+            offset = len(prompt_tokens) + step - 1
+            logits, past_kvs = self.forward(inp, past_key_values=past_kvs, offset_pos=offset, use_cache=True)
             last_token_logits = logits[0, -1, :]
-            
-            # Read back logits to select top token
             np_logits = await last_token_logits.numpy_async()
             next_token = int(np_logits.argmax())
             generated.append(next_token)
 
         return generated
+

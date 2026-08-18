@@ -275,51 +275,39 @@ class CrossEntropyFunction(Function):
             ctx.target_data = target_data
             return Tensor(shape=(), dtype='float32', device='cpu', data=np.array(loss, dtype=np.float32))
         else:
-            from .ops import _require_cpu_data, tensor, mul, sum_op, div, neg
+            from .ops import tensor, sum_op, div, _require_cpu_data
             if targets.device == 'cpu':
-                target_data = _require_cpu_data(targets, 'targets').astype(np.int64)
-            elif hasattr(targets, '_data') and targets._data is not None:
-                target_data = targets._data.astype(np.int64)
+                target_data = _require_cpu_data(targets, 'targets').astype(np.int32)
+                targets_gpu = tensor(target_data, dtype='int32', device='gpu', requires_grad=False)
             else:
-                from .errors import AMEVAForgeDeviceError
-                raise AMEVAForgeDeviceError(
-                    "CrossEntropyLoss expects target class indices on CPU (e.g., forge.tensor(y, device='cpu')) "
-                    "in Release 1 for host-side one-hot indexing."
-                )
+                targets_gpu = targets
+
             n, c = predictions.shape
-            if n * c > 4_000_000:
-                from .errors import AMEVAForgeUnsupportedOperationError
-                raise AMEVAForgeUnsupportedOperationError(
-                    f"GPU CrossEntropy currently uses dense one-hot targets in Release 1. "
-                    f"Requested one-hot size is {n}x{c} ({n * c * 4 / (1024 * 1024):.1f} MB). "
-                    f"Use smaller class count or wait for sparse_cross_entropy GPU kernel in Release 2."
-                )
-            
-            # 1. GPU Log-Softmax 계산
-            log_probs = log_softmax(predictions, axis=-1)
-            
-            # 2. Host에서 One-Hot 행렬 생성 후 GPU 텐서로 변환
-            one_hot = np.zeros((n, c), dtype=np.float32)
-            one_hot[np.arange(n), target_data] = 1.0
-            one_hot_t = tensor(one_hot, device=predictions.device, requires_grad=False)
-            
-            # 3. NLL Loss = -sum(one_hot * log_probs) / n
-            nll = neg(sum_op(mul(one_hot_t, log_probs)))
-            loss = div(nll, tensor(float(n), device=predictions.device, requires_grad=False))
-            
-            # 4. Softmax 확률 및 메타데이터 저장 (역전파용)
-            probs = softmax(predictions, axis=-1)
-            ctx.probs = probs
-            ctx.one_hot_t = one_hot_t
             ctx.batch_size = float(n)
-            return loss
+            ctx.num_classes = c
+            ctx.targets_gpu = targets_gpu
+
+            # WebGPU Native Sparse Cross-Entropy Forward: O(N) memory, No Dense One-Hot!
+            loss_per_sample = Tensor(
+                shape=(n,),
+                dtype='float32',
+                device='gpu',
+                op='sparse_cross_entropy',
+                parents=(predictions, targets_gpu),
+                op_params=[c, -100, 0, 0],
+                requires_grad=predictions.requires_grad
+            )
+            
+            # Mean reduction over batch
+            total_loss = sum_op(loss_per_sample)
+            return div(total_loss, tensor(float(n), device=predictions.device, requires_grad=False))
 
     @staticmethod
     def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, None]:
         """
         무엇을: Cross Entropy 손실 함수의 역전파를 수행한다.
         왜: 소프트맥스와 NLLLoss의 결합 도함수인 (probs - one_hot) / N 을 통해 입력 로짓의 그래디언트를 구하기 위함이다.
-        어떻게: GPU/CPU 디바이스별로 최적화된 연산 체인을 적용하여 그래디언트를 산출한다.
+        어떻게: GPU 환경에서는 융합 sparse_cross_entropy_backward 커널을, CPU에서는 NumPy 역전파를 적용한다.
         """
         predictions, targets = ctx.saved_tensors
         if predictions.device == 'cpu':
@@ -336,18 +324,20 @@ class CrossEntropyFunction(Function):
                 grad_pred = grad_pred * float(grad_output.numpy())
             return (Tensor(shape=grad_pred.shape, dtype='float32', device='cpu', data=grad_pred), None)
         else:
-            from .ops import sub, div, mul, tensor
-            probs = ctx.probs
-            one_hot_t = ctx.one_hot_t
+            targets_gpu = ctx.targets_gpu
             n = ctx.batch_size
-            
-            # grad_pred = (probs - one_hot) / n
-            grad_unscaled = sub(probs, one_hot_t)
-            grad_pred = div(grad_unscaled, tensor(n, device=predictions.device, requires_grad=False))
-            
-            # Multiply by grad_output (chain rule propagation for scalar/tensor loss gradients)
-            grad_pred = mul(grad_pred, grad_output)
-            return (grad_pred, None)
+            reduction_scale = 1.0 / n
+
+            # WebGPU Native Sparse Cross-Entropy Backward: 1-Pass Fused Gradient
+            grad_logits = Tensor(
+                shape=predictions.shape,
+                dtype='float32',
+                device='gpu',
+                op='sparse_cross_entropy_backward',
+                parents=(predictions, targets_gpu, grad_output),
+                op_params=[-100, reduction_scale]
+            )
+            return (grad_logits, None)
 
 def cross_entropy(predictions, targets):
     """
@@ -552,7 +542,8 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     if is_causal:
         from .ops import tensor
         L_q, L_k = scores.shape[-2], scores.shape[-1]
-        mask_np = np.triu(np.full((L_q, L_k), -1e4, dtype=np.float32), k=1)
+        diagonal_offset = (L_k - L_q) + 1
+        mask_np = np.triu(np.full((L_q, L_k), -1e4, dtype=np.float32), k=diagonal_offset)
         causal_mask = tensor(mask_np, device=scores.device)
         scores = add(scores, causal_mask)
     elif attn_mask is not None:

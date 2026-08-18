@@ -4916,6 +4916,213 @@ fn main(
 `;
 
     /**
+     * ============================================================================
+     * [FILE METADATA]
+     * Project: AMEVA-Forge
+     * File: packages/forge/src/tensor/kernels/sparse_cross_entropy.wgsl.ts
+     * Type: WebGPU WGSL Compute Kernel (Fused Sparse Cross-Entropy Forward)
+     * Created: 2026-08-19T01:00:00+09:00
+     * ============================================================================
+     * WHAT:
+     *   [N, C] 크기의 Logits 텐서와 [N] 크기의 정수 Target 텐서를 받아
+     *   Dense One-Hot 행렬 생성 없이 VRAM O(N)으로 직접 Cross-Entropy Loss를 계산하는 융합 커널입니다.
+     * WHY:
+     *   LLM과 같이 어휘집 크기(C=32k~128k)가 큰 모델에서 Dense One-Hot 할당으로 인한 VRAM OOM을 100% 제거하기 위함입니다.
+     * HOW:
+     *   1개 워크그룹(256 스레드)이 1개 배치 샘플을 전담하여, 공유 메모리 2단계 병렬 트리 리덕션으로
+     *   Max 값과 Log-Sum-Exp를 계산한 뒤, 정수 타겟 인덱스의 NLL Loss를 직접 산출합니다.
+     */
+    const SPARSE_CROSS_ENTROPY_WGSL = /* wgsl */ `
+struct Params {
+  num_samples: u32,
+  num_classes: u32,
+  ignore_index: i32,
+  pad: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> logits: array<f32>;
+@group(0) @binding(2) var<storage, read> targets: array<u32>;
+@group(0) @binding(3) var<storage, read_write> loss: array<f32>;
+
+var<workgroup> s_max: array<f32, 256>;
+var<workgroup> s_sum: array<f32, 256>;
+
+@compute @workgroup_size(256, 1, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let thread_id = local_id.x;
+  let sample_idx = workgroup_id.x + workgroup_id.y * 65535u;
+
+  if (sample_idx >= params.num_samples) {
+    return;
+  }
+
+  let row_offset = sample_idx * params.num_classes;
+
+  // 1. 최대값(Max) 탐색 (수치 안정성 확보)
+  var local_max: f32 = -3.402823e+38;
+  for (var c: u32 = thread_id; c < params.num_classes; c = c + 256u) {
+    let val = logits[row_offset + c];
+    local_max = max(local_max, val);
+  }
+  s_max[thread_id] = local_max;
+
+  workgroupBarrier();
+
+  for (var stride: u32 = 128u; stride > 0u; stride = stride / 2u) {
+    if (thread_id < stride) {
+      s_max[thread_id] = max(s_max[thread_id], s_max[thread_id + stride]);
+    }
+    workgroupBarrier();
+  }
+
+  let max_val = s_max[0];
+
+  // 2. Sum of Exponentials 계산
+  var local_sum: f32 = 0.0;
+  for (var c: u32 = thread_id; c < params.num_classes; c = c + 256u) {
+    let val = logits[row_offset + c];
+    local_sum = local_sum + exp(val - max_val);
+  }
+  s_sum[thread_id] = local_sum;
+
+  workgroupBarrier();
+
+  for (var stride: u32 = 128u; stride > 0u; stride = stride / 2u) {
+    if (thread_id < stride) {
+      s_sum[thread_id] = s_sum[thread_id] + s_sum[thread_id + stride];
+    }
+    workgroupBarrier();
+  }
+
+  let sum_exp = s_sum[0];
+
+  // 3. Thread 0이 NLL Loss 계산 및 출력 버퍼에 기록
+  if (thread_id == 0u) {
+    let raw_target = targets[sample_idx];
+    let target_idx = i32(raw_target);
+
+    if (target_idx == params.ignore_index || raw_target >= params.num_classes) {
+      loss[sample_idx] = 0.0;
+    } else {
+      let target_logit = logits[row_offset + raw_target];
+      let log_sum_exp = log(max(sum_exp, 1e-12)) + max_val;
+      loss[sample_idx] = log_sum_exp - target_logit;
+    }
+  }
+}
+`;
+
+    /**
+     * ============================================================================
+     * [FILE METADATA]
+     * Project: AMEVA-Forge
+     * File: packages/forge/src/tensor/kernels/sparse_cross_entropy_backward.wgsl.ts
+     * Type: WebGPU WGSL Compute Kernel (Fused Sparse Cross-Entropy Backward Gradient)
+     * Created: 2026-08-19T01:00:00+09:00
+     * ============================================================================
+     * WHAT:
+     *   Sparse Cross-Entropy의 기울기(grad_logits, [N, C])를 One-Hot 행렬 없이
+     *   GPU 상에서 단일 패스 Softmax - Indicator 수식으로 직접 계산하는 역전파 커널입니다.
+     * WHY:
+     *   O(N * C) 중간 미분 텐서 할당을 완전히 제거하여 거대 어휘집(C=32k~128k) 환경에서
+     *   VRAM 메모리 대역폭을 절감하고 초고속 역전파를 지원하기 위함입니다.
+     * HOW:
+     *   1개 워크그룹(256 스레드)이 1개 배치 샘플을 전담하여, Logits의 Softmax 확률을 구한 후
+     *   (prob[c] - (c == target ? 1.0 : 0.0)) * grad_out * reduction_scale을 직접 기록합니다.
+     */
+    const SPARSE_CROSS_ENTROPY_BACKWARD_WGSL = /* wgsl */ `
+struct Params {
+  num_samples: u32,
+  num_classes: u32,
+  ignore_index: i32,
+  reduction_scale: f32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> logits: array<f32>;
+@group(0) @binding(2) var<storage, read> targets: array<u32>;
+@group(0) @binding(3) var<storage, read> grad_output: array<f32>;
+@group(0) @binding(4) var<storage, read_write> grad_logits: array<f32>;
+
+var<workgroup> s_max: array<f32, 256>;
+var<workgroup> s_sum: array<f32, 256>;
+
+@compute @workgroup_size(256, 1, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let thread_id = local_id.x;
+  let sample_idx = workgroup_id.x + workgroup_id.y * 65535u;
+
+  if (sample_idx >= params.num_samples) {
+    return;
+  }
+
+  let row_offset = sample_idx * params.num_classes;
+
+  // 1. 최대값(Max) 탐색
+  var local_max: f32 = -3.402823e+38;
+  for (var c: u32 = thread_id; c < params.num_classes; c = c + 256u) {
+    let val = logits[row_offset + c];
+    local_max = max(local_max, val);
+  }
+  s_max[thread_id] = local_max;
+
+  workgroupBarrier();
+
+  for (var stride: u32 = 128u; stride > 0u; stride = stride / 2u) {
+    if (thread_id < stride) {
+      s_max[thread_id] = max(s_max[thread_id], s_max[thread_id + stride]);
+    }
+    workgroupBarrier();
+  }
+
+  let max_val = s_max[0];
+
+  // 2. Sum of Exponentials 계산
+  var local_sum: f32 = 0.0;
+  for (var c: u32 = thread_id; c < params.num_classes; c = c + 256u) {
+    let val = logits[row_offset + c];
+    local_sum = local_sum + exp(val - max_val);
+  }
+  s_sum[thread_id] = local_sum;
+
+  workgroupBarrier();
+
+  for (var stride: u32 = 128u; stride > 0u; stride = stride / 2u) {
+    if (thread_id < stride) {
+      s_sum[thread_id] = s_sum[thread_id] + s_sum[thread_id + stride];
+    }
+    workgroupBarrier();
+  }
+
+  let sum_exp = max(s_sum[0], 1e-12);
+  let raw_target = targets[sample_idx];
+  let target_idx = i32(raw_target);
+  let g_out = grad_output[sample_idx];
+  let scale = g_out * params.reduction_scale;
+
+  // 3. 각 클래스별 기울기 계산: (prob - indicator) * scale
+  for (var c: u32 = thread_id; c < params.num_classes; c = c + 256u) {
+    let val = logits[row_offset + c];
+    let prob = exp(val - max_val) / sum_exp;
+
+    if (target_idx == params.ignore_index || raw_target >= params.num_classes) {
+      grad_logits[row_offset + c] = 0.0;
+    } else {
+      let indicator = select(0.0, 1.0, c == raw_target);
+      grad_logits[row_offset + c] = (prob - indicator) * scale;
+    }
+  }
+}
+`;
+
+    /**
      * Created: 2026-08-12T12:14:52+09:00
      * Modified:
      *   - 2026-08-12T12:59:35+09:00: Feat: Introduce v3.0 features (CNN, Pooling, Dropout, Serialization)
@@ -4960,6 +5167,8 @@ fn main(
         ['embedding_backward', EMBEDDING_BACKWARD_WGSL],
         ['adam_step', ADAM_STEP_WGSL],
         ['sgd_momentum_step', SGD_MOMENTUM_STEP_WGSL],
+        ['sparse_cross_entropy', SPARSE_CROSS_ENTROPY_WGSL],
+        ['sparse_cross_entropy_backward', SPARSE_CROSS_ENTROPY_BACKWARD_WGSL],
         ['relu', RELU_WGSL],
         ['add', ADD_WGSL],
         ['mul', MUL_WGSL],
@@ -5981,6 +6190,71 @@ fn main(
             dispatchY,
         });
     }
+    /**
+     * WHAT: GPU 상에서 One-Hot 없이 Logits [N, C]와 Targets [N]으로부터 Cross-Entropy Loss [N]를 직접 계산합니다.
+     * WHY: VRAM O(N)으로 LLM 및 거대 어휘집 분류 손실을 가속하기 위함입니다.
+     */
+    function sparseCrossEntropy(handleLogits, handleTargets, ignoreIndex = -100) {
+        const logits = _globalRegistry.get(handleLogits);
+        const targets = _globalRegistry.get(handleTargets);
+        if (logits.shape.length !== 2) {
+            throw new AMEVAForgeShapeError(`[AMEVA Forge] sparseCrossEntropy: logits must be 2D [N, C], got shape [${logits.shape.join(", ")}]`);
+        }
+        const numSamples = logits.shape[0];
+        const numClasses = logits.shape[1];
+        const byteLength = numSamples * 4;
+        const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_SRC$1, 'tensor', 'gpuCore_sparseCrossEntropy');
+        const paramsArray = new ArrayBuffer(16);
+        const u32View = new Uint32Array(paramsArray);
+        const i32View = new Int32Array(paramsArray);
+        u32View[0] = numSamples;
+        u32View[1] = numClasses;
+        i32View[2] = ignoreIndex;
+        u32View[3] = 0;
+        const { dispatchX, dispatchY } = computeDispatch2D(numSamples, 1);
+        dispatchKernel({
+            opKey: 'sparse_cross_entropy',
+            wgslCode: SPARSE_CROSS_ENTROPY_WGSL,
+            paramsData: u32View,
+            inputBuffers: [logits.buffer, targets.buffer],
+            outBuffer,
+            dispatchX,
+            dispatchY,
+        });
+        return _globalRegistry.register({ buffer: outBuffer, token, shape: [numSamples], dtype: "float32", byteLength });
+    }
+    /**
+     * WHAT: Sparse Cross-Entropy의 역전파 기울기 [N, C]를 GPU 상에서 One-Hot 없이 직접 계산합니다.
+     */
+    function sparseCrossEntropyBackward(handleLogits, handleTargets, handleGradOutput, ignoreIndex = -100, reductionScale = 1.0) {
+        const logits = _globalRegistry.get(handleLogits);
+        const targets = _globalRegistry.get(handleTargets);
+        const gradOut = _globalRegistry.get(handleGradOutput);
+        const numSamples = logits.shape[0];
+        const numClasses = logits.shape[1];
+        const totalElements = numSamples * numClasses;
+        const byteLength = totalElements * 4;
+        const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_SRC$1, 'tensor', 'gpuCore_sparseCrossEntropyBackward');
+        const paramsArray = new ArrayBuffer(16);
+        const u32View = new Uint32Array(paramsArray);
+        const i32View = new Int32Array(paramsArray);
+        const f32View = new Float32Array(paramsArray);
+        u32View[0] = numSamples;
+        u32View[1] = numClasses;
+        i32View[2] = ignoreIndex;
+        f32View[3] = reductionScale;
+        const { dispatchX, dispatchY } = computeDispatch2D(numSamples, 1);
+        dispatchKernel({
+            opKey: 'sparse_cross_entropy_backward',
+            wgslCode: SPARSE_CROSS_ENTROPY_BACKWARD_WGSL,
+            paramsData: u32View,
+            inputBuffers: [logits.buffer, targets.buffer, gradOut.buffer],
+            outBuffer,
+            dispatchX,
+            dispatchY,
+        });
+        return _globalRegistry.register({ buffer: outBuffer, token, shape: [numSamples, numClasses], dtype: "float32", byteLength });
+    }
     const gpuCore = {
         add,
         mul,
@@ -5995,6 +6269,8 @@ fn main(
         embedding_backward,
         adam_step,
         sgd_momentum_step,
+        sparseCrossEntropy,
+        sparseCrossEntropyBackward,
         relu,
         relu_backward,
         transpose,
@@ -6027,7 +6303,7 @@ fn main(
         'fill', 'sum', 'max', 'sum_axis', 'max_axis', 'max_axis_backward', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
         'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape',
         'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant', 'embedding', 'embedding_backward',
-        'adam_step', 'sgd_momentum_step'
+        'adam_step', 'sgd_momentum_step', 'sparse_cross_entropy', 'sparse_cross_entropy_backward'
     ]);
     const DEFAULT_RUNTIME_CONFIG = {
         workloadBudgetElements: 100_000_000,
@@ -6238,6 +6514,8 @@ fn main(
             'embedding_backward': { minIn: 2, exactIn: true, minParams: 0, exactParams: false },
             'adam_step': { minIn: 4, exactIn: true, minParams: 6, exactParams: false }, // param, grad, m, v
             'sgd_momentum_step': { minIn: 3, exactIn: true, minParams: 2, exactParams: false }, // param, grad, velocity
+            'sparse_cross_entropy': { minIn: 2, exactIn: true, minParams: 0, exactParams: false }, // logits, targets
+            'sparse_cross_entropy_backward': { minIn: 3, exactIn: true, minParams: 0, exactParams: false }, // logits, targets, grad_out
             'cat': { minIn: 2, exactIn: false, minParams: 1, exactParams: false } // 가변 개수 입력, params는 axis 등
         };
         const opStr = i.op;
@@ -7102,6 +7380,44 @@ fn main(
                     u32view[3] = dispatchX;
                     device.queue.writeBuffer(paramsBuffer, 0, u32view);
                 }
+                else if (inst.op === 'sparse_cross_entropy') {
+                    wgslCode = SPARSE_CROSS_ENTROPY_WGSL;
+                    const numSamples = inst.shape[0];
+                    const numClasses = inst.params?.[0] ?? 1000;
+                    const ignoreIndex = inst.params?.[1] ?? -100;
+                    const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numSamples, 1);
+                    dispatchX = dx;
+                    dispatchY = dy;
+                    dispatchZ = 1;
+                    const buf = new ArrayBuffer(16);
+                    const u32view = new Uint32Array(buf);
+                    const i32view = new Int32Array(buf);
+                    u32view[0] = numSamples;
+                    u32view[1] = numClasses;
+                    i32view[2] = ignoreIndex;
+                    u32view[3] = 0;
+                    device.queue.writeBuffer(paramsBuffer, 0, u32view);
+                }
+                else if (inst.op === 'sparse_cross_entropy_backward') {
+                    wgslCode = SPARSE_CROSS_ENTROPY_BACKWARD_WGSL;
+                    const numSamples = inst.shape[0];
+                    const numClasses = inst.shape[1];
+                    const ignoreIndex = inst.params?.[0] ?? -100;
+                    const reductionScale = inst.params?.[1] ?? 1.0;
+                    const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numSamples, 1);
+                    dispatchX = dx;
+                    dispatchY = dy;
+                    dispatchZ = 1;
+                    const buf = new ArrayBuffer(16);
+                    const u32view = new Uint32Array(buf);
+                    const i32view = new Int32Array(buf);
+                    const f32view = new Float32Array(buf);
+                    u32view[0] = numSamples;
+                    u32view[1] = numClasses;
+                    i32view[2] = ignoreIndex;
+                    f32view[3] = reductionScale;
+                    device.queue.writeBuffer(paramsBuffer, 0, u32view);
+                }
                 else if (inst.op === 'sum' || inst.op === 'max') {
                     // Handled entirely dynamically below, but we need to bypass normal flow
                     wgslCode = inst.op === 'sum' ? SUM_WGSL : MAX_WGSL;
@@ -7290,6 +7606,23 @@ fn main(
                         { binding: 1, resource: { buffer: idToBuffer[inst.in[1]] } }, // grad (read)
                         { binding: 2, resource: { buffer: idToBuffer[inst.in[2]] } }, // velocity (read_write)
                         { binding: 3, resource: { buffer: outBuffer } }, // param (read_write)
+                    ];
+                }
+                else if (inst.op === 'sparse_cross_entropy') {
+                    bindGroupEntries = [
+                        { binding: 0, resource: { buffer: paramsBuffer } },
+                        { binding: 1, resource: { buffer: idToBuffer[inst.in[0]] } }, // logits (read)
+                        { binding: 2, resource: { buffer: idToBuffer[inst.in[1]] } }, // targets (read)
+                        { binding: 3, resource: { buffer: outBuffer } }, // loss (read_write)
+                    ];
+                }
+                else if (inst.op === 'sparse_cross_entropy_backward') {
+                    bindGroupEntries = [
+                        { binding: 0, resource: { buffer: paramsBuffer } },
+                        { binding: 1, resource: { buffer: idToBuffer[inst.in[0]] } }, // logits (read)
+                        { binding: 2, resource: { buffer: idToBuffer[inst.in[1]] } }, // targets (read)
+                        { binding: 3, resource: { buffer: idToBuffer[inst.in[2]] } }, // grad_output (read)
+                        { binding: 4, resource: { buffer: outBuffer } }, // grad_logits (read_write)
                     ];
                 }
                 else if (inst.op === 'gather' || inst.op === 'scatter') {
@@ -7946,6 +8279,8 @@ fn main(
     exports.rmsNorm = rmsNorm;
     exports.rope = rope;
     exports.sgd_momentum_step = sgd_momentum_step;
+    exports.sparseCrossEntropy = sparseCrossEntropy;
+    exports.sparseCrossEntropyBackward = sparseCrossEntropyBackward;
     exports.swiglu = swiglu;
     exports.transpose = transpose;
     exports.unmountInspector = unmountInspector;

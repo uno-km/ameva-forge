@@ -75,6 +75,8 @@ import { EMBEDDING_WGSL } from "./kernels/embedding.wgsl";
 import { EMBEDDING_BACKWARD_WGSL } from "./kernels/embedding_backward.wgsl";
 import { ADAM_STEP_WGSL } from "./kernels/adam_step.wgsl";
 import { SGD_MOMENTUM_STEP_WGSL } from "./kernels/sgd_momentum_step.wgsl";
+import { SPARSE_CROSS_ENTROPY_WGSL } from "./kernels/sparse_cross_entropy.wgsl";
+import { SPARSE_CROSS_ENTROPY_BACKWARD_WGSL } from "./kernels/sparse_cross_entropy_backward.wgsl";
 
 /** 
  * WHAT: 그래프 실행기가 처리할 수 있는 모든 허용된 오퍼레이션(op)의 집합입니다.
@@ -87,7 +89,7 @@ const ALLOWED_OPS = new Set([
   'fill', 'sum', 'max', 'sum_axis', 'max_axis', 'max_axis_backward', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
   'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape',
   'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant', 'embedding', 'embedding_backward',
-  'adam_step', 'sgd_momentum_step'
+  'adam_step', 'sgd_momentum_step', 'sparse_cross_entropy', 'sparse_cross_entropy_backward'
 ]);
 
 export type ForgeRuntimeConfig = {
@@ -363,6 +365,8 @@ function validateInstruction(inst: unknown, idx: number): GraphInstruction {
     'embedding_backward': { minIn: 2, exactIn: true, minParams: 0, exactParams: false },
     'adam_step': { minIn: 4, exactIn: true, minParams: 6, exactParams: false }, // param, grad, m, v
     'sgd_momentum_step': { minIn: 3, exactIn: true, minParams: 2, exactParams: false }, // param, grad, velocity
+    'sparse_cross_entropy': { minIn: 2, exactIn: true, minParams: 0, exactParams: false }, // logits, targets
+    'sparse_cross_entropy_backward': { minIn: 3, exactIn: true, minParams: 0, exactParams: false }, // logits, targets, grad_out
     'cat': { minIn: 2, exactIn: false, minParams: 1, exactParams: false } // 가변 개수 입력, params는 axis 등
   };
 
@@ -1274,6 +1278,44 @@ async function _executeGraphCore(
         f32view[2] = momentum;
         u32view[3] = dispatchX;
         device.queue.writeBuffer(paramsBuffer, 0, u32view);
+      } else if (inst.op === 'sparse_cross_entropy') {
+        wgslCode = SPARSE_CROSS_ENTROPY_WGSL;
+        const numSamples = inst.shape[0];
+        const numClasses = inst.params?.[0] ?? 1000;
+        const ignoreIndex = inst.params?.[1] ?? -100;
+        const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numSamples, 1);
+        dispatchX = dx;
+        dispatchY = dy;
+        dispatchZ = 1;
+
+        const buf = new ArrayBuffer(16);
+        const u32view = new Uint32Array(buf);
+        const i32view = new Int32Array(buf);
+        u32view[0] = numSamples;
+        u32view[1] = numClasses;
+        i32view[2] = ignoreIndex;
+        u32view[3] = 0;
+        device.queue.writeBuffer(paramsBuffer, 0, u32view);
+      } else if (inst.op === 'sparse_cross_entropy_backward') {
+        wgslCode = SPARSE_CROSS_ENTROPY_BACKWARD_WGSL;
+        const numSamples = inst.shape[0];
+        const numClasses = inst.shape[1];
+        const ignoreIndex = inst.params?.[0] ?? -100;
+        const reductionScale = inst.params?.[1] ?? 1.0;
+        const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numSamples, 1);
+        dispatchX = dx;
+        dispatchY = dy;
+        dispatchZ = 1;
+
+        const buf = new ArrayBuffer(16);
+        const u32view = new Uint32Array(buf);
+        const i32view = new Int32Array(buf);
+        const f32view = new Float32Array(buf);
+        u32view[0] = numSamples;
+        u32view[1] = numClasses;
+        i32view[2] = ignoreIndex;
+        f32view[3] = reductionScale;
+        device.queue.writeBuffer(paramsBuffer, 0, u32view);
       } else if (inst.op === 'sum' || inst.op === 'max') {
         // Handled entirely dynamically below, but we need to bypass normal flow
         wgslCode = inst.op === 'sum' ? SUM_WGSL : MAX_WGSL;
@@ -1475,6 +1517,21 @@ async function _executeGraphCore(
           { binding: 1, resource: { buffer: idToBuffer[inst.in![1]] } }, // grad (read)
           { binding: 2, resource: { buffer: idToBuffer[inst.in![2]] } }, // velocity (read_write)
           { binding: 3, resource: { buffer: outBuffer } },               // param (read_write)
+        ];
+      } else if (inst.op === 'sparse_cross_entropy') {
+        bindGroupEntries = [
+          { binding: 0, resource: { buffer: paramsBuffer } },
+          { binding: 1, resource: { buffer: idToBuffer[inst.in![0]] } }, // logits (read)
+          { binding: 2, resource: { buffer: idToBuffer[inst.in![1]] } }, // targets (read)
+          { binding: 3, resource: { buffer: outBuffer } },               // loss (read_write)
+        ];
+      } else if (inst.op === 'sparse_cross_entropy_backward') {
+        bindGroupEntries = [
+          { binding: 0, resource: { buffer: paramsBuffer } },
+          { binding: 1, resource: { buffer: idToBuffer[inst.in![0]] } }, // logits (read)
+          { binding: 2, resource: { buffer: idToBuffer[inst.in![1]] } }, // targets (read)
+          { binding: 3, resource: { buffer: idToBuffer[inst.in![2]] } }, // grad_output (read)
+          { binding: 4, resource: { buffer: outBuffer } },               // grad_logits (read_write)
         ];
       } else if (inst.op === 'gather' || inst.op === 'scatter') {
         bindGroupEntries = [

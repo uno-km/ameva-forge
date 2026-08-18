@@ -157,6 +157,15 @@ export declare function adam_step(handleParam: TensorHandle, handleGrad: TensorH
  * WHY: VRAM 내에서 velocity와 param을 단일 커널로 인플레이스 갱신하기 위함입니다.
  */
 export declare function sgd_momentum_step(handleParam: TensorHandle, handleGrad: TensorHandle, handleVelocity: TensorHandle, lr: number, momentum: number): void;
+/**
+ * WHAT: GPU 상에서 One-Hot 없이 Logits [N, C]와 Targets [N]으로부터 Cross-Entropy Loss [N]를 직접 계산합니다.
+ * WHY: VRAM O(N)으로 LLM 및 거대 어휘집 분류 손실을 가속하기 위함입니다.
+ */
+export declare function sparseCrossEntropy(handleLogits: TensorHandle, handleTargets: TensorHandle, ignoreIndex?: number): TensorHandle;
+/**
+ * WHAT: Sparse Cross-Entropy의 역전파 기울기 [N, C]를 GPU 상에서 One-Hot 없이 직접 계산합니다.
+ */
+export declare function sparseCrossEntropyBackward(handleLogits: TensorHandle, handleTargets: TensorHandle, handleGradOutput: TensorHandle, ignoreIndex?: number, reductionScale?: number): TensorHandle;
 export declare const gpuCore: {
     add: typeof add;
     mul: typeof mul;
@@ -171,6 +180,8 @@ export declare const gpuCore: {
     embedding_backward: typeof embedding_backward;
     adam_step: typeof adam_step;
     sgd_momentum_step: typeof sgd_momentum_step;
+    sparseCrossEntropy: typeof sparseCrossEntropy;
+    sparseCrossEntropyBackward: typeof sparseCrossEntropyBackward;
     relu: typeof relu;
     relu_backward: typeof relu_backward;
     transpose: typeof transpose;

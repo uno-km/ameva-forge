@@ -48,17 +48,20 @@ class TextGenerationPipeline:
         tokens = self.tokenizer.encode(prompt)
         curr = list(tokens)
 
-        for _ in range(max_new_tokens):
-            inp = tensor([curr], dtype="int32", device=self.device)
-            logits = self.model(inp)
-            last_logits = logits[0, -1, :]
-            np_logits = await last_logits.numpy_async()
-            
-            # Scaled temperature sampling
-            probs = np.exp(np_logits / max(temperature, 1e-4))
-            probs = probs / np.sum(probs)
-            next_token = int(np.random.choice(len(probs), p=probs))
-            curr.append(next_token)
+        if hasattr(self.model, "generate"):
+            curr = await self.model.generate(tokens, max_new_tokens=max_new_tokens, use_cache=True)
+        else:
+            for _ in range(max_new_tokens):
+                inp = tensor([curr], dtype="int32", device=self.device)
+                logits = self.model(inp)
+                last_logits = logits[0, -1, :]
+                np_logits = await last_logits.numpy_async()
+                
+                # Scaled temperature sampling
+                probs = np.exp(np_logits / max(temperature, 1e-4))
+                probs = probs / np.sum(probs)
+                next_token = int(np.random.choice(len(probs), p=probs))
+                curr.append(next_token)
 
         generated_text = self.tokenizer.decode(curr)
         return {

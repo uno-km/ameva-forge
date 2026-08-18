@@ -82,6 +82,8 @@ import { EMBEDDING_WGSL } from "./kernels/embedding.wgsl";
 import { EMBEDDING_BACKWARD_WGSL } from "./kernels/embedding_backward.wgsl";
 import { ADAM_STEP_WGSL } from "./kernels/adam_step.wgsl";
 import { SGD_MOMENTUM_STEP_WGSL } from "./kernels/sgd_momentum_step.wgsl";
+import { SPARSE_CROSS_ENTROPY_WGSL } from "./kernels/sparse_cross_entropy.wgsl";
+import { SPARSE_CROSS_ENTROPY_BACKWARD_WGSL } from "./kernels/sparse_cross_entropy_backward.wgsl";
 
 // WebGPU Buffer Usage bitmasks with Node.js environment fallback
 const BUFFER_USAGE_STORAGE_SRC = typeof GPUBufferUsage !== 'undefined'
@@ -115,6 +117,8 @@ export const KERNEL_REGISTRY: ReadonlyMap<string, string> = new Map([
   ['embedding_backward', EMBEDDING_BACKWARD_WGSL],
   ['adam_step', ADAM_STEP_WGSL],
   ['sgd_momentum_step', SGD_MOMENTUM_STEP_WGSL],
+  ['sparse_cross_entropy', SPARSE_CROSS_ENTROPY_WGSL],
+  ['sparse_cross_entropy_backward', SPARSE_CROSS_ENTROPY_BACKWARD_WGSL],
   ['relu', RELU_WGSL],
   ['add', ADD_WGSL],
   ['mul', MUL_WGSL],
@@ -1316,6 +1320,108 @@ export function sgd_momentum_step(
   });
 }
 
+/**
+ * WHAT: GPU 상에서 One-Hot 없이 Logits [N, C]와 Targets [N]으로부터 Cross-Entropy Loss [N]를 직접 계산합니다.
+ * WHY: VRAM O(N)으로 LLM 및 거대 어휘집 분류 손실을 가속하기 위함입니다.
+ */
+export function sparseCrossEntropy(
+  handleLogits: TensorHandle,
+  handleTargets: TensorHandle,
+  ignoreIndex: number = -100
+): TensorHandle {
+  const logits = _globalRegistry.get(handleLogits);
+  const targets = _globalRegistry.get(handleTargets);
+
+  if (logits.shape.length !== 2) {
+    throw new AMEVAForgeShapeError(
+      `[AMEVA Forge] sparseCrossEntropy: logits must be 2D [N, C], got shape [${logits.shape.join(", ")}]`
+    );
+  }
+
+  const numSamples = logits.shape[0];
+  const numClasses = logits.shape[1];
+  const byteLength = numSamples * 4;
+
+  const { buffer: outBuffer, token } = allocateBuffer(
+    byteLength,
+    BUFFER_USAGE_STORAGE_SRC,
+    'tensor',
+    'gpuCore_sparseCrossEntropy'
+  );
+
+  const paramsArray = new ArrayBuffer(16);
+  const u32View = new Uint32Array(paramsArray);
+  const i32View = new Int32Array(paramsArray);
+  u32View[0] = numSamples;
+  u32View[1] = numClasses;
+  i32View[2] = ignoreIndex;
+  u32View[3] = 0;
+
+  const { dispatchX, dispatchY } = computeDispatch2D(numSamples, 1);
+
+  dispatchKernel({
+    opKey: 'sparse_cross_entropy',
+    wgslCode: SPARSE_CROSS_ENTROPY_WGSL,
+    paramsData: u32View,
+    inputBuffers: [logits.buffer, targets.buffer],
+    outBuffer,
+    dispatchX,
+    dispatchY,
+  });
+
+  return _globalRegistry.register({ buffer: outBuffer, token, shape: [numSamples], dtype: "float32", byteLength });
+}
+
+/**
+ * WHAT: Sparse Cross-Entropy의 역전파 기울기 [N, C]를 GPU 상에서 One-Hot 없이 직접 계산합니다.
+ */
+export function sparseCrossEntropyBackward(
+  handleLogits: TensorHandle,
+  handleTargets: TensorHandle,
+  handleGradOutput: TensorHandle,
+  ignoreIndex: number = -100,
+  reductionScale: number = 1.0
+): TensorHandle {
+  const logits = _globalRegistry.get(handleLogits);
+  const targets = _globalRegistry.get(handleTargets);
+  const gradOut = _globalRegistry.get(handleGradOutput);
+
+  const numSamples = logits.shape[0];
+  const numClasses = logits.shape[1];
+  const totalElements = numSamples * numClasses;
+  const byteLength = totalElements * 4;
+
+  const { buffer: outBuffer, token } = allocateBuffer(
+    byteLength,
+    BUFFER_USAGE_STORAGE_SRC,
+    'tensor',
+    'gpuCore_sparseCrossEntropyBackward'
+  );
+
+  const paramsArray = new ArrayBuffer(16);
+  const u32View = new Uint32Array(paramsArray);
+  const i32View = new Int32Array(paramsArray);
+  const f32View = new Float32Array(paramsArray);
+  u32View[0] = numSamples;
+  u32View[1] = numClasses;
+  i32View[2] = ignoreIndex;
+  f32View[3] = reductionScale;
+
+  const { dispatchX, dispatchY } = computeDispatch2D(numSamples, 1);
+
+  dispatchKernel({
+    opKey: 'sparse_cross_entropy_backward',
+    wgslCode: SPARSE_CROSS_ENTROPY_BACKWARD_WGSL,
+    paramsData: u32View,
+    inputBuffers: [logits.buffer, targets.buffer, gradOut.buffer],
+    outBuffer,
+    dispatchX,
+    dispatchY,
+  });
+
+  return _globalRegistry.register({ buffer: outBuffer, token, shape: [numSamples, numClasses], dtype: "float32", byteLength });
+}
+
 export const gpuCore = {
   add,
   mul,
@@ -1330,6 +1436,8 @@ export const gpuCore = {
   embedding_backward,
   adam_step,
   sgd_momentum_step,
+  sparseCrossEntropy,
+  sparseCrossEntropyBackward,
   relu,
   relu_backward,
   transpose,
