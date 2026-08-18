@@ -679,6 +679,17 @@ async function _executeGraphCore(
         idToBuffer[inst.id] = outBuffer;
         idToByteLength[inst.id] = byteLength;
         idToShape[inst.id] = inst.shape;
+      } else if (inst.op === 'adam_step' || inst.op === 'sgd_momentum_step') {
+        const requiredInLen = inst.op === 'adam_step' ? 4 : 3;
+        if (!inst.in || inst.in.length < requiredInLen) {
+          throw new AMEVAForgeSecurityError(`Instruction ${inst.op} is missing required 'in' fields (expected ${requiredInLen}, got ${inst.in ? inst.in.length : 0}).`);
+        }
+        // inst.in[0]은 param_id이므로 원본 가중치 버퍼를 직접 outBuffer로 재사용 (In-Place 갱신 보장)
+        outBuffer = idToBuffer[inst.in[0]];
+        idToHandle[inst.id] = idToHandle[inst.in[0]];
+        idToBuffer[inst.id] = outBuffer;
+        idToByteLength[inst.id] = byteLength;
+        idToShape[inst.id] = inst.shape;
       } else {
         const { buffer, token } = allocateBuffer(
           byteLength,

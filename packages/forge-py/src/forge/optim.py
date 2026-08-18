@@ -220,7 +220,8 @@ class SGD(Optimizer):
 
             if self.momentum > 0.0:
                 if self.velocity[i] is None or not isinstance(self.velocity[i], Tensor) or self.velocity[i].device != "gpu":
-                    self.velocity[i] = Tensor(shape=p.shape, dtype="float32", device="gpu", data=np.zeros(p.shape, dtype=np.float32))
+                    from .ops import zeros
+                    self.velocity[i] = zeros(p.shape, device="gpu", dtype="float32")
                 await self.velocity[i].realize()
                 vel_id = builder.add_load(self.velocity[i].shape, self.velocity[i]._handle)
                 param_entries.append((p, num_elements, grad_id, param_id, vel_id))
@@ -404,10 +405,11 @@ class Adam(Optimizer):
                     "GPU Adam requires realized parameter and gradient handles."
                 )
 
+            from .ops import zeros
             if self.m[i] is None or not isinstance(self.m[i], Tensor) or self.m[i].device != "gpu":
-                self.m[i] = Tensor(shape=p.shape, dtype="float32", device="gpu", data=np.zeros(p.shape, dtype=np.float32))
+                self.m[i] = zeros(p.shape, device="gpu", dtype="float32")
             if self.v[i] is None or not isinstance(self.v[i], Tensor) or self.v[i].device != "gpu":
-                self.v[i] = Tensor(shape=p.shape, dtype="float32", device="gpu", data=np.zeros(p.shape, dtype=np.float32))
+                self.v[i] = zeros(p.shape, device="gpu", dtype="float32")
 
             await self.m[i].realize()
             await self.v[i].realize()

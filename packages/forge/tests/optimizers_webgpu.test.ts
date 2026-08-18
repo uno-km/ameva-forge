@@ -43,6 +43,8 @@ describe('WebGPU Native Fused Adam & Momentum SGD Optimizer Tests', () => {
       copyBufferToBuffer: jest.fn(),
       finish: jest.fn(() => ({})),
     })),
+    pushErrorScope: jest.fn(),
+    popErrorScope: jest.fn().mockResolvedValue(null),
     queue: {
       submit: jest.fn(),
       writeBuffer: jest.fn(),
@@ -114,21 +116,18 @@ describe('WebGPU Native Fused Adam & Momentum SGD Optimizer Tests', () => {
     expect(u32view[0]).toBe(N);
   });
 
-  it('should validate adam_step and sgd_momentum_step schemas in executeGraph', async () => {
+  it('should validate in-place parameter handle preservation in executeGraph', async () => {
     const instructions = [
       { id: 1, op: 'upload', in: [], shape: [64], params: [] },
       { id: 2, op: 'upload', in: [], shape: [64], params: [] },
       { id: 3, op: 'upload', in: [], shape: [64], params: [] },
       { id: 4, op: 'upload', in: [], shape: [64], params: [] },
       { id: 5, op: 'adam_step', in: [1, 2, 3, 4], shape: [64], params: [0.001, 0.9, 0.999, 1e-8, 0.9, 0.999] },
-      { id: 6, op: 'sgd_momentum_step', in: [1, 2, 3], shape: [64], params: [0.01, 0.9] }
     ];
 
-    try {
-      await executeGraph(JSON.stringify(instructions), []);
-    } catch (err: any) {
-      expect(err.message).not.toContain('expected min');
-      expect(err.message).not.toContain('Unknown operation');
-    }
+    const inputBuf = new Float32Array(64);
+    const result = await executeGraph(JSON.stringify(instructions), [inputBuf, inputBuf, inputBuf, inputBuf]);
+    // In-place contract: result for node 5 (adam_step) MUST equal handle for node 1 (param)
+    expect(result['5']).toBe(result['1']);
   });
 });
