@@ -994,10 +994,10 @@ export function rmsNorm(handleX: TensorHandle, handleGamma?: TensorHandle, eps =
   f32View[2] = eps;
   u32View[3] = handleGamma !== undefined ? 1 : 0;
 
-  const inputBuffers = [x.buffer];
-  if (handleGamma !== undefined) {
-    inputBuffers.push(_globalRegistry.get(handleGamma).buffer);
-  }
+  const inputBuffers = [
+    x.buffer,
+    handleGamma !== undefined ? _globalRegistry.get(handleGamma).buffer : x.buffer
+  ];
 
   const { dispatchX, dispatchY } = computeDispatch2D(numTokens);
   dispatchKernel({
@@ -1092,7 +1092,7 @@ export function unpackQuant(
   const byteLength = numElements * 4;
   const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_COPY);
 
-  const paramsArray = new Uint32Array([numElements, groupSize, bits, 0]);
+  const paramsArray = new Uint32Array([numElements, bits, groupSize, 0]);
   const { dispatchX, dispatchY } = computeDispatch2D(Math.ceil(numElements / 64));
 
   dispatchKernel({

@@ -4314,9 +4314,10 @@ struct Params {
 @group(0) @binding(3) var<storage, read> v: array<f32>;
 @group(0) @binding(4) var<storage, read_write> o: array<f32>;
 
-// 워크그룹 공유 메모리: 쿼리 벡터(s_q)와 현재 키 벡터(s_k)를 온칩 SRAM에 캐시
+// 워크그룹 공유 메모리: 쿼리 벡터(s_q), 키 벡터(s_k), 내적 트리 리덕션(s_dot)
 var<workgroup> s_q: array<f32, 256>;
 var<workgroup> s_k: array<f32, 256>;
+var<workgroup> s_dot: array<f32, 64>;
 
 @compute @workgroup_size(64, 1, 1)
 fn main(
@@ -4385,12 +4386,29 @@ fn main(
     }
     workgroupBarrier();
 
-    // Step A: 내적 Score S_ij = scale * sum_{c} Q[c] * K[j, c] (온칩 SRAM 고속 접근)
-    var dot: f32 = 0.0;
-    for (var c: u32 = 0u; c < params.d; c = c + 1u) {
-      dot = dot + s_q[c] * s_k[c];
-    }
-    let score = dot * params.scale;
+    // Step A: 병렬 내적 Score S_ij = scale * sum_{c} Q[c] * K[j, c] (Tree Reduction)
+    var part_dot: f32 = 0.0;
+    if (dim_idx0 < params.d) { part_dot = part_dot + s_q[dim_idx0] * s_k[dim_idx0]; }
+    if (dim_idx1 < params.d) { part_dot = part_dot + s_q[dim_idx1] * s_k[dim_idx1]; }
+    if (dim_idx2 < params.d) { part_dot = part_dot + s_q[dim_idx2] * s_k[dim_idx2]; }
+    if (dim_idx3 < params.d) { part_dot = part_dot + s_q[dim_idx3] * s_k[dim_idx3]; }
+    s_dot[thread_id] = part_dot;
+    workgroupBarrier();
+
+    if (thread_id < 32u) { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 32u]; }
+    workgroupBarrier();
+    if (thread_id < 16u) { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 16u]; }
+    workgroupBarrier();
+    if (thread_id < 8u)  { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 8u]; }
+    workgroupBarrier();
+    if (thread_id < 4u)  { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 4u]; }
+    workgroupBarrier();
+    if (thread_id < 2u)  { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 2u]; }
+    workgroupBarrier();
+    if (thread_id < 1u)  { s_dot[0] = s_dot[0] + s_dot[1]; }
+    workgroupBarrier();
+
+    let score = s_dot[0] * params.scale;
 
     // Step B: FlashAttention-2 Online Softmax Rescale
     let m_new = max(m_prev, score);
@@ -5496,10 +5514,10 @@ fn main(
         u32View[1] = dim;
         f32View[2] = eps;
         u32View[3] = handleGamma !== undefined ? 1 : 0;
-        const inputBuffers = [x.buffer];
-        if (handleGamma !== undefined) {
-            inputBuffers.push(_globalRegistry.get(handleGamma).buffer);
-        }
+        const inputBuffers = [
+            x.buffer,
+            handleGamma !== undefined ? _globalRegistry.get(handleGamma).buffer : x.buffer
+        ];
         const { dispatchX, dispatchY } = computeDispatch2D(numTokens);
         dispatchKernel({
             opKey: 'rmsnorm',
@@ -5572,7 +5590,7 @@ fn main(
         const zeros = _globalRegistry.get(handleZeros);
         const byteLength = numElements * 4;
         const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_COPY$1);
-        const paramsArray = new Uint32Array([numElements, groupSize, bits, 0]);
+        const paramsArray = new Uint32Array([numElements, bits, groupSize, 0]);
         const { dispatchX, dispatchY } = computeDispatch2D(Math.ceil(numElements / 64));
         dispatchKernel({
             opKey: 'unpack_quant',
@@ -6599,9 +6617,9 @@ fn main(
                 else if (inst.op === 'unpack_quant') {
                     wgslCode = UNPACK_QUANT_WGSL;
                     const numElements = inst.shape.reduce((a, b) => a * b, 1);
-                    const groupSize = inst.params?.[0] ?? 128;
-                    const bits = inst.params?.[1] ?? 4;
-                    const p = new Uint32Array([numElements, groupSize, bits, 0]);
+                    const bits = inst.params?.[0] ?? 4;
+                    const groupSize = inst.params?.[1] ?? 128;
+                    const p = new Uint32Array([numElements, bits, groupSize, 0]);
                     const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(Math.ceil(numElements / 64));
                     dispatchX = dx;
                     dispatchY = dy;
@@ -6761,6 +6779,24 @@ fn main(
                         { binding: 0, resource: { buffer: paramsBuffer } },
                         { binding: 1, resource: { buffer: idToBuffer[inst.in[0]] } },
                         { binding: 2, resource: { buffer: outBuffer } },
+                    ];
+                }
+                else if (inst.op === 'rmsnorm') {
+                    const gammaBuf = (inst.in && inst.in.length >= 2) ? idToBuffer[inst.in[1]] : idToBuffer[inst.in[0]];
+                    bindGroupEntries = [
+                        { binding: 0, resource: { buffer: paramsBuffer } },
+                        { binding: 1, resource: { buffer: idToBuffer[inst.in[0]] } },
+                        { binding: 2, resource: { buffer: gammaBuf } },
+                        { binding: 3, resource: { buffer: outBuffer } },
+                    ];
+                }
+                else if (inst.op === 'unpack_quant' || inst.op === 'flash_attention') {
+                    bindGroupEntries = [
+                        { binding: 0, resource: { buffer: paramsBuffer } },
+                        { binding: 1, resource: { buffer: idToBuffer[inst.in[0]] } },
+                        { binding: 2, resource: { buffer: idToBuffer[inst.in[1]] } },
+                        { binding: 3, resource: { buffer: idToBuffer[inst.in[2]] } },
+                        { binding: 4, resource: { buffer: outBuffer } },
                     ];
                 }
                 else if (inst.op === 'gather' || inst.op === 'scatter') {

@@ -339,11 +339,8 @@ class CrossEntropyFunction(Function):
             grad_unscaled = sub(probs, one_hot_t)
             grad_pred = div(grad_unscaled, tensor(n, device=predictions.device, requires_grad=False))
             
-            if grad_output.shape != ():
-                grad_pred = mul(grad_pred, grad_output)
-            elif float(getattr(grad_output, '_data', 1.0) if hasattr(grad_output, '_data') and grad_output._data is not None else 1.0) != 1.0:
-                grad_pred = mul(grad_pred, grad_output)
-                
+            # Multiply by grad_output (chain rule propagation for scalar/tensor loss gradients)
+            grad_pred = mul(grad_pred, grad_output)
             return (grad_pred, None)
 
 def cross_entropy(predictions, targets):
@@ -583,26 +580,23 @@ def rms_norm(x, weight=None, eps=1e-5):
     왜: LayerNorm 대비 평균 계산을 생략하여 추론 및 학습 처리 속도를 20~30% 가속한다.
     어떻게: x / sqrt(mean(x^2) + eps) * weight
     """
-    from .ops import mul, div, sqrt, sum_axis, full, add, unsqueeze
+    if x.device == 'gpu':
+        from .bridge import is_webgpu_available
+        if is_webgpu_available():
+            from .graph import trace_or_execute
+            inputs = [x] if weight is None else [x, weight]
+            return trace_or_execute('rmsnorm', inputs, x.shape, params=[float(eps)])
     
-    # x^2 계산
-    x_sq = mul(x, x)
-    dim = x.shape[-1]
-    
-    # 마지막 축에 대해 합산 후 차원 크기로 나눔
-    sum_sq = sum_axis(x_sq, axis=-1)
-    dim_tensor = full(sum_sq.shape, float(dim), device=x.device, dtype=x.dtype)
-    mean_sq = div(sum_sq, dim_tensor)
-    
-    # RMS 스케일
-    eps_tensor = full(mean_sq.shape, eps, device=x.device, dtype=x.dtype)
-    inv_rms = div(full(mean_sq.shape, 1.0, device=x.device, dtype=x.dtype), sqrt(add(mean_sq, eps_tensor)))
-    inv_rms_expanded = unsqueeze(inv_rms, -1)
-    
-    out = mul(x, inv_rms_expanded)
+    # CPU Reference Math
+    from .ops import tensor
+    data = x.numpy()
+    dim = data.shape[-1]
+    mean_sq = np.mean(data * data, axis=-1, keepdims=True)
+    inv_rms = 1.0 / np.sqrt(mean_sq + eps)
+    out_np = data * inv_rms
     if weight is not None:
-        out = mul(out, weight)
-    return out
+        out_np = out_np * weight.numpy()
+    return tensor(out_np, device=x.device, dtype=x.dtype, requires_grad=x.requires_grad)
 
 def swiglu(gate, up):
     """
@@ -610,24 +604,33 @@ def swiglu(gate, up):
     왜: LLaMA 및 Gemma 등의 최신 FFN 아키텍처 비선형성을 효율적으로 제공하기 위함이다.
     어떻게: (gate * sigmoid(gate)) * up
     """
-    from .ops import sigmoid, mul
-    swish_gate = mul(gate, sigmoid(gate))
-    return mul(swish_gate, up)
+    if gate.device == 'gpu':
+        from .bridge import is_webgpu_available
+        if is_webgpu_available():
+            from .graph import trace_or_execute
+            return trace_or_execute('swiglu', [gate, up], gate.shape)
+            
+    # CPU Reference Math
+    from .ops import tensor
+    g_data = gate.numpy()
+    u_data = up.numpy()
+    swish_g = g_data / (1.0 + np.exp(-g_data))
+    out_np = swish_g * u_data
+    return tensor(out_np, device=gate.device, dtype=gate.dtype, requires_grad=gate.requires_grad)
 
 def rope(x, base_freq=10000.0, offset_pos=0):
     """
     무엇을: Rotary Position Embedding (RoPE) 2D 복소수 평면 회전을 수행한다.
     왜: 토큰 위치 정보를 Query와 Key 벡터에 인플레이스로 주입하기 위함이다.
     """
-    from .ops import tensor
-    if x.device == 'gpu' and hasattr(x, '_handle') and x._handle is not None:
+    if x.device == 'gpu':
         from .bridge import is_webgpu_available
         if is_webgpu_available():
-            # WebGPU Graph Instruction Dispatch
             from .graph import trace_or_execute
             return trace_or_execute('rope', [x], x.shape, params=[float(base_freq), float(offset_pos)])
     
     # CPU Reference Math
+    from .ops import tensor
     data = x.numpy()
     orig_shape = data.shape
     B, H, N, d = orig_shape

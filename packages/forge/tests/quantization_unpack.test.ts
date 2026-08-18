@@ -138,9 +138,10 @@ describe('SCRUM-234: INT4 / INT8 Quantized Weight Dequantization Suite', () => {
       expect(rec.shape).toEqual([numElements]);
       expect(rec.dtype).toBe('float32');
 
-      for (let i = 0; i < 100; i++) {
-        const idx = Math.floor(Math.random() * expected.length);
-        expect(Number.isFinite(expected[idx])).toBe(true);
+      const actual = cpuUnpackInt4(packed, scales, zeros, groupSize, numElements);
+      expect(actual.length).toBe(expected.length);
+      for (let i = 0; i < numElements; i++) {
+        expect(Math.abs(actual[i] - expected[i])).toBeLessThanOrEqual(1e-4);
       }
     });
   });
@@ -185,9 +186,10 @@ describe('SCRUM-234: INT4 / INT8 Quantized Weight Dequantization Suite', () => {
       expect(rec.shape).toEqual([numElements]);
       expect(rec.dtype).toBe('float32');
 
-      for (let i = 0; i < 100; i++) {
-        const idx = Math.floor(Math.random() * expected.length);
-        expect(Number.isFinite(expected[idx])).toBe(true);
+      const actual = cpuUnpackInt8(packed, scales, zeros, groupSize, numElements);
+      expect(actual.length).toBe(expected.length);
+      for (let i = 0; i < numElements; i++) {
+        expect(Math.abs(actual[i] - expected[i])).toBeLessThanOrEqual(1e-4);
       }
     });
   });

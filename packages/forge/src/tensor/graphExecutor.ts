@@ -1169,9 +1169,9 @@ async function _executeGraphCore(
       } else if (inst.op === 'unpack_quant') {
         wgslCode = UNPACK_QUANT_WGSL;
         const numElements = inst.shape.reduce((a, b) => a * b, 1);
-        const groupSize = inst.params?.[0] ?? 128;
-        const bits = inst.params?.[1] ?? 4;
-        const p = new Uint32Array([numElements, groupSize, bits, 0]);
+        const bits = inst.params?.[0] ?? 4;
+        const groupSize = inst.params?.[1] ?? 128;
+        const p = new Uint32Array([numElements, bits, groupSize, 0]);
         const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(Math.ceil(numElements / 64));
         dispatchX = dx;
         dispatchY = dy;
@@ -1347,6 +1347,22 @@ async function _executeGraphCore(
           { binding: 0, resource: { buffer: paramsBuffer } },
           { binding: 1, resource: { buffer: idToBuffer[inst.in![0]] } },
           { binding: 2, resource: { buffer: outBuffer } },
+        ];
+      } else if (inst.op === 'rmsnorm') {
+        const gammaBuf = (inst.in && inst.in.length >= 2) ? idToBuffer[inst.in[1]] : idToBuffer[inst.in![0]];
+        bindGroupEntries = [
+          { binding: 0, resource: { buffer: paramsBuffer } },
+          { binding: 1, resource: { buffer: idToBuffer[inst.in![0]] } },
+          { binding: 2, resource: { buffer: gammaBuf } },
+          { binding: 3, resource: { buffer: outBuffer } },
+        ];
+      } else if (inst.op === 'unpack_quant' || inst.op === 'flash_attention') {
+        bindGroupEntries = [
+          { binding: 0, resource: { buffer: paramsBuffer } },
+          { binding: 1, resource: { buffer: idToBuffer[inst.in![0]] } },
+          { binding: 2, resource: { buffer: idToBuffer[inst.in![1]] } },
+          { binding: 3, resource: { buffer: idToBuffer[inst.in![2]] } },
+          { binding: 4, resource: { buffer: outBuffer } },
         ];
       } else if (inst.op === 'gather' || inst.op === 'scatter') {
         bindGroupEntries = [

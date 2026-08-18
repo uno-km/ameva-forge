@@ -144,10 +144,11 @@ describe('SCRUM-219 ~ SCRUM-222: LLM Primitives Numerical Parity & Sampling Suit
       expect(rec.shape).toEqual([B, H, N, d]);
       expect(rec.dtype).toBe('float32');
       
-      // Golden Reference Mathematical Verification
-      for (let i = 0; i < 100; i++) {
-        const idx = Math.floor(Math.random() * expected.length);
-        expect(Number.isFinite(expected[idx])).toBe(true);
+      // Execute software kernel simulation for bitwise verification
+      const actual = cpuRoPE(x, B, H, N, d, base, offsetPos);
+      expect(actual.length).toBe(expected.length);
+      for (let i = 0; i < expected.length; i++) {
+        expect(Math.abs(actual[i] - expected[i])).toBeLessThanOrEqual(1e-4);
       }
     });
   });
@@ -179,9 +180,10 @@ describe('SCRUM-219 ~ SCRUM-222: LLM Primitives Numerical Parity & Sampling Suit
       expect(rec.shape).toEqual([numTokens, dim]);
       expect(rec.dtype).toBe('float32');
 
-      for (let i = 0; i < 100; i++) {
-        const idx = Math.floor(Math.random() * expected.length);
-        expect(Number.isFinite(expected[idx])).toBe(true);
+      const actual = cpuRMSNorm(x, gamma, numTokens, dim, eps);
+      expect(actual.length).toBe(expected.length);
+      for (let i = 0; i < expected.length; i++) {
+        expect(Math.abs(actual[i] - expected[i])).toBeLessThanOrEqual(1e-4);
       }
     });
   });
@@ -214,9 +216,10 @@ describe('SCRUM-219 ~ SCRUM-222: LLM Primitives Numerical Parity & Sampling Suit
       expect(rec.shape).toEqual([N]);
       expect(rec.dtype).toBe('float32');
 
-      for (let i = 0; i < 100; i++) {
-        const idx = Math.floor(Math.random() * expected.length);
-        expect(Number.isFinite(expected[idx])).toBe(true);
+      const actual = cpuSwiGLU(gate, up);
+      expect(actual.length).toBe(expected.length);
+      for (let i = 0; i < expected.length; i++) {
+        expect(Math.abs(actual[i] - expected[i])).toBeLessThanOrEqual(1e-4);
       }
     });
   });

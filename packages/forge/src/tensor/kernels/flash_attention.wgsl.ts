@@ -32,9 +32,10 @@ struct Params {
 @group(0) @binding(3) var<storage, read> v: array<f32>;
 @group(0) @binding(4) var<storage, read_write> o: array<f32>;
 
-// 워크그룹 공유 메모리: 쿼리 벡터(s_q)와 현재 키 벡터(s_k)를 온칩 SRAM에 캐시
+// 워크그룹 공유 메모리: 쿼리 벡터(s_q), 키 벡터(s_k), 내적 트리 리덕션(s_dot)
 var<workgroup> s_q: array<f32, 256>;
 var<workgroup> s_k: array<f32, 256>;
+var<workgroup> s_dot: array<f32, 64>;
 
 @compute @workgroup_size(64, 1, 1)
 fn main(
@@ -103,12 +104,29 @@ fn main(
     }
     workgroupBarrier();
 
-    // Step A: 내적 Score S_ij = scale * sum_{c} Q[c] * K[j, c] (온칩 SRAM 고속 접근)
-    var dot: f32 = 0.0;
-    for (var c: u32 = 0u; c < params.d; c = c + 1u) {
-      dot = dot + s_q[c] * s_k[c];
-    }
-    let score = dot * params.scale;
+    // Step A: 병렬 내적 Score S_ij = scale * sum_{c} Q[c] * K[j, c] (Tree Reduction)
+    var part_dot: f32 = 0.0;
+    if (dim_idx0 < params.d) { part_dot = part_dot + s_q[dim_idx0] * s_k[dim_idx0]; }
+    if (dim_idx1 < params.d) { part_dot = part_dot + s_q[dim_idx1] * s_k[dim_idx1]; }
+    if (dim_idx2 < params.d) { part_dot = part_dot + s_q[dim_idx2] * s_k[dim_idx2]; }
+    if (dim_idx3 < params.d) { part_dot = part_dot + s_q[dim_idx3] * s_k[dim_idx3]; }
+    s_dot[thread_id] = part_dot;
+    workgroupBarrier();
+
+    if (thread_id < 32u) { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 32u]; }
+    workgroupBarrier();
+    if (thread_id < 16u) { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 16u]; }
+    workgroupBarrier();
+    if (thread_id < 8u)  { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 8u]; }
+    workgroupBarrier();
+    if (thread_id < 4u)  { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 4u]; }
+    workgroupBarrier();
+    if (thread_id < 2u)  { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 2u]; }
+    workgroupBarrier();
+    if (thread_id < 1u)  { s_dot[0] = s_dot[0] + s_dot[1]; }
+    workgroupBarrier();
+
+    let score = s_dot[0] * params.scale;
 
     // Step B: FlashAttention-2 Online Softmax Rescale
     let m_new = max(m_prev, score);
