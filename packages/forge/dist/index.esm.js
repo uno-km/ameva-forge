@@ -4750,6 +4750,66 @@ fn main(
 `;
 
 /**
+ * ============================================================================
+ * [FILE METADATA]
+ * Project: AMEVA-Forge
+ * File: packages/forge/src/tensor/kernels/embedding_backward.wgsl.ts
+ * Type: WebGPU WGSL Compute Kernel (Native Embedding Backward Gradient Accumulation)
+ * Created: 2026-08-18T23:36:00+09:00
+ * ============================================================================
+ * WHAT:
+ *   임베딩 순전파의 출력 기울기(grad_output, [B, L, D])와 토큰 인덱스(index, [B, L])를 입력받아
+ *   임베딩 가중치 행렬의 기울기(grad_weight, [Vocab, D])를 계산하는 WebGPU Native 역전파 커널입니다.
+ * WHY:
+ *   atomicAdd 없이도 100% 표준 WebGPU WGSL 환경에서 임베딩 계층의 역전파를
+ *   완전 Lock-free 병렬 누산으로 안전하게 수행하기 위함입니다.
+ * HOW:
+ *   출력 grad_weight[v, d]의 각 성분을 독립적인 GPU 스레드에 매핑하고,
+ *   토큰 인덱스 버퍼를 스캔하여 index[t] == v인 경우 grad_output[t, d]를 결정론적으로 합산합니다.
+ */
+const EMBEDDING_BACKWARD_WGSL = /* wgsl */ `
+struct EmbeddingBackwardParams {
+  num_tokens: u32,
+  embedding_dim: u32,
+  vocab_size: u32,
+  total_weight_elements: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: EmbeddingBackwardParams;
+@group(0) @binding(1) var<storage, read> grad_output: array<f32>;
+@group(0) @binding(2) var<storage, read> index: array<u32>;
+@group(0) @binding(3) var<storage, read_write> grad_weight: array<f32>;
+
+@compute @workgroup_size(64, 1, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let thread_id = local_id.x;
+  let flat_idx = (workgroup_id.x + workgroup_id.y * 65535u) * 64u + thread_id;
+
+  if (flat_idx >= params.total_weight_elements) {
+    return;
+  }
+
+  let vocab_id = flat_idx / params.embedding_dim;
+  let d = flat_idx % params.embedding_dim;
+
+  var acc: f32 = 0.0;
+
+  // index[t] == vocab_id인 모든 토큰 t에 대해 grad_output[t, d] 누산 (Lock-Free & Deterministic)
+  for (var t: u32 = 0u; t < params.num_tokens; t = t + 1u) {
+    if (index[t] == vocab_id) {
+      let grad_out_offset = t * params.embedding_dim + d;
+      acc = acc + grad_output[grad_out_offset];
+    }
+  }
+
+  grad_weight[flat_idx] = acc;
+}
+`;
+
+/**
  * Created: 2026-08-12T12:14:52+09:00
  * Modified:
  *   - 2026-08-12T12:59:35+09:00: Feat: Introduce v3.0 features (CNN, Pooling, Dropout, Serialization)
@@ -4791,6 +4851,7 @@ const KERNEL_REGISTRY = new Map([
     ['swiglu', SWIGLU_WGSL],
     ['unpack_quant', UNPACK_QUANT_WGSL],
     ['embedding', EMBEDDING_WGSL],
+    ['embedding_backward', EMBEDDING_BACKWARD_WGSL],
     ['relu', RELU_WGSL],
     ['add', ADD_WGSL],
     ['mul', MUL_WGSL],
@@ -5701,6 +5762,42 @@ function embedding(handleWeight, handleIndex) {
     });
     return _globalRegistry.register({ buffer: outBuffer, token, shape: outShape, dtype: "float32", byteLength });
 }
+/**
+ * WHAT: 임베딩 출력 기울기(gradOutput)와 토큰 인덱스(index)를 받아 가중치 기울기(gradWeight)를 WebGPU 상에서 계산합니다.
+ * WHY: 트랜스포머 언어 모델의 임베딩 계층을 GPU 상에서 atomic 없이 완전 Lock-Free로 역전파 학습하기 위함입니다.
+ * HOW: embedding_backward.wgsl 컴퓨트 셰이더를 2D 그리드로 디스패치하여 [Vocab, D] 크기의 gradWeight를 생성합니다.
+ */
+function embedding_backward(handleGradOutput, handleIndex, vocabSize, embeddingDim) {
+    const gradOut = _globalRegistry.get(handleGradOutput);
+    const index = _globalRegistry.get(handleIndex);
+    const numTokens = index.shape.reduce((a, b) => a * b, 1);
+    const totalWeightElements = vocabSize * embeddingDim;
+    const byteLength = totalWeightElements * 4;
+    const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_SRC$1, 'tensor', 'gpuCore_embedding_backward');
+    const paramsArray = new Uint32Array([
+        numTokens,
+        embeddingDim,
+        vocabSize,
+        totalWeightElements,
+    ]);
+    const { dispatchX, dispatchY } = computeDispatch2D(Math.ceil(totalWeightElements / 64));
+    dispatchKernel({
+        opKey: 'embedding_backward',
+        wgslCode: EMBEDDING_BACKWARD_WGSL,
+        paramsData: paramsArray,
+        inputBuffers: [gradOut.buffer, index.buffer],
+        outBuffer,
+        dispatchX,
+        dispatchY,
+    });
+    return _globalRegistry.register({
+        buffer: outBuffer,
+        token,
+        shape: [vocabSize, embeddingDim],
+        dtype: "float32",
+        byteLength,
+    });
+}
 const gpuCore = {
     add,
     mul,
@@ -5712,6 +5809,7 @@ const gpuCore = {
     swiglu,
     unpackQuant,
     embedding,
+    embedding_backward,
     relu,
     relu_backward,
     transpose,
@@ -5743,7 +5841,7 @@ const ALLOWED_OPS = new Set([
     'sub', 'neg', 'div', 'exp', 'log', 'sigmoid', 'tanh', 'sigmoid_backward', 'tanh_backward',
     'fill', 'sum', 'max', 'sum_axis', 'max_axis', 'max_axis_backward', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
     'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape',
-    'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant', 'embedding'
+    'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant', 'embedding', 'embedding_backward'
 ]);
 const DEFAULT_RUNTIME_CONFIG = {
     workloadBudgetElements: 100_000_000,
@@ -5951,6 +6049,7 @@ function validateInstruction(inst, idx) {
         'batched_matmul': { minIn: 2, exactIn: true, minParams: 4, exactParams: false },
         'where': { minIn: 3, exactIn: true, minParams: 0, exactParams: false },
         'embedding': { minIn: 2, exactIn: true, minParams: 0, exactParams: false },
+        'embedding_backward': { minIn: 2, exactIn: true, minParams: 0, exactParams: false },
         'cat': { minIn: 2, exactIn: false, minParams: 1, exactParams: false } // 가변 개수 입력, params는 axis 등
     };
     const opStr = i.op;
@@ -6740,6 +6839,19 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 dispatchZ = 1;
                 device.queue.writeBuffer(paramsBuffer, 0, p);
             }
+            else if (inst.op === 'embedding_backward') {
+                wgslCode = EMBEDDING_BACKWARD_WGSL;
+                const vocabSize = inst.shape[0];
+                const embeddingDim = inst.shape[1];
+                const numTokens = inst.params?.[0] ?? 1;
+                const totalWeightElements = vocabSize * embeddingDim;
+                const p = new Uint32Array([numTokens, embeddingDim, vocabSize, totalWeightElements]);
+                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(Math.ceil(totalWeightElements / 64));
+                dispatchX = dx;
+                dispatchY = dy;
+                dispatchZ = 1;
+                device.queue.writeBuffer(paramsBuffer, 0, p);
+            }
             else if (inst.op === 'sum' || inst.op === 'max') {
                 // Handled entirely dynamically below, but we need to bypass normal flow
                 wgslCode = inst.op === 'sum' ? SUM_WGSL : MAX_WGSL;
@@ -7505,5 +7617,5 @@ const __testing = ((typeof process !== 'undefined' && process.env && process.env
     getDeviceInternal: getDevice,
 }) : undefined;
 
-export { AMEVAForgeDTypeError, AMEVAForgeDeviceError, AMEVAForgeDeviceLostError, AMEVAForgeDisposedError, AMEVAForgeError, AMEVAForgeInternalGPUError, AMEVAForgeOutOfMemoryError, AMEVAForgeQuotaExceededError, AMEVAForgeSecurityError, AMEVAForgeShapeError, AMEVAForgeStaleHandleError, AMEVAForgeUnsupportedOpError, AMEVAForgeValidationError, AMEVAForgeWebGPUUnavailableError, KERNEL_REGISTRY, QuotaManager, __testing, add, assertAllowedKernelName, assertAllowedShaderConstant, assertSafeShaderIdentifier, assertStaticShaderSourceOnly, assertWasmRange, clearStagingPool, clearStepLossHistory, cloneToFloat32Array, computeBroadcastParams, computeDispatch2D, configureRuntime, dispose, embedding, ensureFloat32Array, executeGraph, flashAttention, flushGC, getAllowedKernelNames, getQuotaSnapshot, getRuntimeConfig, getTensorInfo, gpuCore, init, initWebGPU, isAvailable, mapBufferAsync, matmul, matmulTiled, mountInspector, mul, random, read, readMappedInto, recordStepLoss, registerKernelNames, registerPyodideBridge, relu, relu_backward, resetRuntimeMemory, rmsNorm, rope, swiglu, transpose, unmountInspector, unpackQuant, uploadFloat32Array, validateDType, validateShape, warmupKernels };
+export { AMEVAForgeDTypeError, AMEVAForgeDeviceError, AMEVAForgeDeviceLostError, AMEVAForgeDisposedError, AMEVAForgeError, AMEVAForgeInternalGPUError, AMEVAForgeOutOfMemoryError, AMEVAForgeQuotaExceededError, AMEVAForgeSecurityError, AMEVAForgeShapeError, AMEVAForgeStaleHandleError, AMEVAForgeUnsupportedOpError, AMEVAForgeValidationError, AMEVAForgeWebGPUUnavailableError, KERNEL_REGISTRY, QuotaManager, __testing, add, assertAllowedKernelName, assertAllowedShaderConstant, assertSafeShaderIdentifier, assertStaticShaderSourceOnly, assertWasmRange, clearStagingPool, clearStepLossHistory, cloneToFloat32Array, computeBroadcastParams, computeDispatch2D, configureRuntime, dispose, embedding, embedding_backward, ensureFloat32Array, executeGraph, flashAttention, flushGC, getAllowedKernelNames, getQuotaSnapshot, getRuntimeConfig, getTensorInfo, gpuCore, init, initWebGPU, isAvailable, mapBufferAsync, matmul, matmulTiled, mountInspector, mul, random, read, readMappedInto, recordStepLoss, registerKernelNames, registerPyodideBridge, relu, relu_backward, resetRuntimeMemory, rmsNorm, rope, swiglu, transpose, unmountInspector, unpackQuant, uploadFloat32Array, validateDType, validateShape, warmupKernels };
 //# sourceMappingURL=index.esm.js.map

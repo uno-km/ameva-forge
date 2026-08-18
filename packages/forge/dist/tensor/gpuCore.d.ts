@@ -141,6 +141,12 @@ export declare function unpackQuant(handlePacked: TensorHandle, handleScales: Te
  * HOW: embedding.wgsl 컴퓨트 셰이더를 2D 그리드로 디스패치하여 대상 버퍼에 복사합니다.
  */
 export declare function embedding(handleWeight: TensorHandle, handleIndex: TensorHandle): TensorHandle;
+/**
+ * WHAT: 임베딩 출력 기울기(gradOutput)와 토큰 인덱스(index)를 받아 가중치 기울기(gradWeight)를 WebGPU 상에서 계산합니다.
+ * WHY: 트랜스포머 언어 모델의 임베딩 계층을 GPU 상에서 atomic 없이 완전 Lock-Free로 역전파 학습하기 위함입니다.
+ * HOW: embedding_backward.wgsl 컴퓨트 셰이더를 2D 그리드로 디스패치하여 [Vocab, D] 크기의 gradWeight를 생성합니다.
+ */
+export declare function embedding_backward(handleGradOutput: TensorHandle, handleIndex: TensorHandle, vocabSize: number, embeddingDim: number): TensorHandle;
 export declare const gpuCore: {
     add: typeof add;
     mul: typeof mul;
@@ -152,6 +158,7 @@ export declare const gpuCore: {
     swiglu: typeof swiglu;
     unpackQuant: typeof unpackQuant;
     embedding: typeof embedding;
+    embedding_backward: typeof embedding_backward;
     relu: typeof relu;
     relu_backward: typeof relu_backward;
     transpose: typeof transpose;

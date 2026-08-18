@@ -79,6 +79,7 @@ import { RMSNORM_WGSL } from "./kernels/rmsnorm.wgsl";
 import { SWIGLU_WGSL } from "./kernels/swiglu.wgsl";
 import { UNPACK_QUANT_WGSL } from "./kernels/unpack_quant.wgsl";
 import { EMBEDDING_WGSL } from "./kernels/embedding.wgsl";
+import { EMBEDDING_BACKWARD_WGSL } from "./kernels/embedding_backward.wgsl";
 
 // WebGPU Buffer Usage bitmasks with Node.js environment fallback
 const BUFFER_USAGE_STORAGE_SRC = typeof GPUBufferUsage !== 'undefined'
@@ -109,6 +110,7 @@ export const KERNEL_REGISTRY: ReadonlyMap<string, string> = new Map([
   ['swiglu', SWIGLU_WGSL],
   ['unpack_quant', UNPACK_QUANT_WGSL],
   ['embedding', EMBEDDING_WGSL],
+  ['embedding_backward', EMBEDDING_BACKWARD_WGSL],
   ['relu', RELU_WGSL],
   ['add', ADD_WGSL],
   ['mul', MUL_WGSL],
@@ -1163,6 +1165,59 @@ export function embedding(handleWeight: TensorHandle, handleIndex: TensorHandle)
   return _globalRegistry.register({ buffer: outBuffer, token, shape: outShape, dtype: "float32", byteLength });
 }
 
+/**
+ * WHAT: 임베딩 출력 기울기(gradOutput)와 토큰 인덱스(index)를 받아 가중치 기울기(gradWeight)를 WebGPU 상에서 계산합니다.
+ * WHY: 트랜스포머 언어 모델의 임베딩 계층을 GPU 상에서 atomic 없이 완전 Lock-Free로 역전파 학습하기 위함입니다.
+ * HOW: embedding_backward.wgsl 컴퓨트 셰이더를 2D 그리드로 디스패치하여 [Vocab, D] 크기의 gradWeight를 생성합니다.
+ */
+export function embedding_backward(
+  handleGradOutput: TensorHandle,
+  handleIndex: TensorHandle,
+  vocabSize: number,
+  embeddingDim: number
+): TensorHandle {
+  const gradOut = _globalRegistry.get(handleGradOutput);
+  const index = _globalRegistry.get(handleIndex);
+
+  const numTokens = index.shape.reduce((a, b) => a * b, 1);
+  const totalWeightElements = vocabSize * embeddingDim;
+  const byteLength = totalWeightElements * 4;
+
+  const { buffer: outBuffer, token } = allocateBuffer(
+    byteLength,
+    BUFFER_USAGE_STORAGE_SRC,
+    'tensor',
+    'gpuCore_embedding_backward'
+  );
+
+  const paramsArray = new Uint32Array([
+    numTokens,
+    embeddingDim,
+    vocabSize,
+    totalWeightElements,
+  ]);
+
+  const { dispatchX, dispatchY } = computeDispatch2D(Math.ceil(totalWeightElements / 64));
+
+  dispatchKernel({
+    opKey: 'embedding_backward',
+    wgslCode: EMBEDDING_BACKWARD_WGSL,
+    paramsData: paramsArray,
+    inputBuffers: [gradOut.buffer, index.buffer],
+    outBuffer,
+    dispatchX,
+    dispatchY,
+  });
+
+  return _globalRegistry.register({
+    buffer: outBuffer,
+    token,
+    shape: [vocabSize, embeddingDim],
+    dtype: "float32",
+    byteLength,
+  });
+}
+
 export const gpuCore = {
   add,
   mul,
@@ -1174,10 +1229,12 @@ export const gpuCore = {
   swiglu,
   unpackQuant,
   embedding,
+  embedding_backward,
   relu,
   relu_backward,
   transpose,
 };
+
 
 
 

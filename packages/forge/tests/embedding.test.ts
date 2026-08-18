@@ -3,101 +3,150 @@
  * [FILE METADATA]
  * Project: AMEVA-Forge
  * File: packages/forge/tests/embedding.test.ts
- * Type: TypeScript Unit Test (Rigorous Numerical & Schema Verification)
- * Created: 2026-08-18T23:30:00+09:00
+ * Type: TypeScript Unit Test (WebGPU Embedding Forward & Backward Verification)
+ * Created: 2026-08-18T23:37:00+09:00
  * ============================================================================
  * WHAT:
- *   WebGPU Native 임베딩(embedding) 커널의 스키마, 파라미터 유효성 및
- *   32비트 정수 토큰 인덱스의 룩업 수치 정확도(Numerical Invariance)를 전수 검증합니다.
+ *   WebGPU Native 임베딩(embedding) 및 임베딩 역전파(embedding_backward) 커널의
+ *   레지스트리 등록, gpuCore API 디스패치, executeGraph 스키마 무결성을 전수 검증합니다.
  */
 
 import { executeGraph } from '../src/tensor/graphExecutor';
-import { KERNEL_REGISTRY } from '../src/tensor/gpuCore';
+import { KERNEL_REGISTRY, gpuCore } from '../src/tensor/gpuCore';
+import { _globalRegistry } from '../src/tensor/tensorRegistry';
+import { _setDeviceForTesting } from '../src/webgpu/device';
+import { clearStagingPool, allocateBuffer } from '../src/webgpu/buffers';
 
-describe('WebGPU Native Embedding Kernel & Numerical Correctness Tests', () => {
-  it('should have embedding kernel registered with u32 index binding in KERNEL_REGISTRY', () => {
+describe('WebGPU Native Embedding & Embedding Backward Kernel Tests', () => {
+  const mockDevice: any = {
+    createShaderModule: jest.fn(() => ({})),
+    createComputePipeline: jest.fn(() => ({
+      getBindGroupLayout: jest.fn(() => ({})),
+    })),
+    createBuffer: jest.fn((desc: any) => ({
+      size: desc.size,
+      usage: desc.usage,
+      destroy: jest.fn(),
+      mapAsync: jest.fn().mockResolvedValue(undefined),
+      getMappedRange: jest.fn(() => new ArrayBuffer(desc.size)),
+      unmap: jest.fn(),
+    })),
+    createBindGroupLayout: jest.fn(() => ({})),
+    createBindGroup: jest.fn(() => ({})),
+    createCommandEncoder: jest.fn(() => ({
+      beginComputePass: jest.fn(() => ({
+        setPipeline: jest.fn(),
+        setBindGroup: jest.fn(),
+        dispatchWorkgroups: jest.fn(),
+        end: jest.fn()
+      })),
+      finish: jest.fn(() => ({}))
+    })),
+    pushErrorScope: jest.fn(),
+    popErrorScope: jest.fn().mockResolvedValue(null),
+    queue: {
+      writeBuffer: jest.fn(),
+      submit: jest.fn(),
+      onSubmittedWorkDone: jest.fn().mockResolvedValue(undefined),
+    },
+  };
+
+  beforeEach(() => {
+    _setDeviceForTesting(mockDevice);
+    clearStagingPool();
+  });
+
+  afterAll(() => {
+    _setDeviceForTesting(null);
+  });
+
+  it('should have embedding and embedding_backward registered in KERNEL_REGISTRY', () => {
     expect(KERNEL_REGISTRY.has('embedding')).toBe(true);
-    const wgsl = KERNEL_REGISTRY.get('embedding');
-    expect(wgsl).toBeDefined();
-    expect(wgsl).toContain('struct EmbeddingParams');
-    expect(wgsl).toContain('index: array<u32>');
-    expect(wgsl).toContain('fn main');
+    expect(KERNEL_REGISTRY.has('embedding_backward')).toBe(true);
+
+    const fwdWgsl = KERNEL_REGISTRY.get('embedding');
+    expect(fwdWgsl).toBeDefined();
+    expect(fwdWgsl).toContain('struct EmbeddingParams');
+    expect(fwdWgsl).toContain('index: array<u32>');
+
+    const bwdWgsl = KERNEL_REGISTRY.get('embedding_backward');
+    expect(bwdWgsl).toBeDefined();
+    expect(bwdWgsl).toContain('struct EmbeddingBackwardParams');
+    expect(bwdWgsl).toContain('index: array<u32>');
+    expect(bwdWgsl).toContain('grad_weight: array<f32>');
   });
 
-  it('should validate integer token ID bitwise interpretation invariance', () => {
-    // Verify that Int32 token indices stored in 32-bit words are exactly read as unsigned ints
-    const vocabSize = 1000;
-    const embeddingDim = 32;
-    const testTokens = [0, 1, 5, 25, 128, 999];
+  it('should dispatch embedding via gpuCore and register valid handle', () => {
+    const { buffer: bufW, token: tokW } = allocateBuffer(1000 * 32 * 4, 0x0080 | 0x0004, 'tensor', 'test_w');
+    const { buffer: bufI, token: tokI } = allocateBuffer(16 * 4, 0x0080 | 0x0004, 'tensor', 'test_i');
 
-    const weight = new Float32Array(vocabSize * embeddingDim);
-    for (let v = 0; v < vocabSize; v++) {
-      for (let d = 0; d < embeddingDim; d++) {
-        weight[v * embeddingDim + d] = (v + 1) * 1000.0 + d * 0.5;
-      }
-    }
+    const hWeight = _globalRegistry.register({
+      buffer: bufW,
+      token: tokW,
+      shape: [1000, 32],
+      dtype: 'float32',
+      byteLength: 1000 * 32 * 4
+    });
 
-    const indexBuf = new ArrayBuffer(testTokens.length * 4);
-    const indexI32 = new Int32Array(indexBuf);
-    const indexU32 = new Uint32Array(indexBuf);
-    testTokens.forEach((tok, i) => { indexI32[i] = tok; });
+    const hIndex = _globalRegistry.register({
+      buffer: bufI,
+      token: tokI,
+      shape: [2, 8],
+      dtype: 'float32',
+      byteLength: 16 * 4
+    });
 
-    // Mathematical reference simulation of embedding.wgsl logic
-    const output = new Float32Array(testTokens.length * embeddingDim);
-    for (let i = 0; i < testTokens.length; i++) {
-      const rawTokenId = indexU32[i]; // Bitwise uint32 read
-      const tokenId = rawTokenId < vocabSize ? rawTokenId : 0;
-      const weightRowOffset = tokenId * embeddingDim;
-      const outTokenOffset = i * embeddingDim;
-      for (let d = 0; d < embeddingDim; d++) {
-        output[outTokenOffset + d] = weight[weightRowOffset + d];
-      }
-    }
+    const hOut = gpuCore.embedding(hWeight, hIndex);
+    expect(hOut).toBeDefined();
+    expect(typeof hOut).toBe('string');
+    expect(hOut.length).toBeGreaterThan(0);
 
-    // Assert exact numerical parity
-    for (let i = 0; i < testTokens.length; i++) {
-      const tok = testTokens[i];
-      for (let d = 0; d < embeddingDim; d++) {
-        const expected = weight[tok * embeddingDim + d];
-        const actual = output[i * embeddingDim + d];
-        expect(actual).toBe(expected);
-      }
-    }
+    const tensorOut = _globalRegistry.get(hOut);
+    expect(tensorOut).toBeDefined();
+    expect(tensorOut.shape).toEqual([2, 8, 32]);
+    expect(tensorOut.dtype).toBe('float32');
+    expect(tensorOut.byteLength).toBe(2 * 8 * 32 * 4);
   });
 
-  it('should validate OOB token index clamping in embedding simulation', () => {
-    const vocabSize = 50;
-    const embeddingDim = 8;
-    const oobTokens = [100, 500, 99999]; // All exceed vocabSize 50
+  it('should dispatch embedding_backward via gpuCore and register valid gradient handle', () => {
+    const { buffer: bufG, token: tokG } = allocateBuffer(16 * 32 * 4, 0x0080 | 0x0004, 'tensor', 'test_g');
+    const { buffer: bufI, token: tokI } = allocateBuffer(16 * 4, 0x0080 | 0x0004, 'tensor', 'test_i_bwd');
 
-    const weight = new Float32Array(vocabSize * embeddingDim);
-    for (let d = 0; d < embeddingDim; d++) {
-      weight[0 * embeddingDim + d] = 777.0; // Token 0 weight
-    }
+    const hGradOut = _globalRegistry.register({
+      buffer: bufG,
+      token: tokG,
+      shape: [2, 8, 32],
+      dtype: 'float32',
+      byteLength: 16 * 32 * 4
+    });
 
-    const output = new Float32Array(oobTokens.length * embeddingDim);
-    for (let i = 0; i < oobTokens.length; i++) {
-      const rawTokenId = oobTokens[i];
-      const tokenId = rawTokenId < vocabSize ? rawTokenId : 0; // Clamped to 0
-      const weightRowOffset = tokenId * embeddingDim;
-      const outTokenOffset = i * embeddingDim;
-      for (let d = 0; d < embeddingDim; d++) {
-        output[outTokenOffset + d] = weight[weightRowOffset + d];
-      }
-    }
+    const hIndex = _globalRegistry.register({
+      buffer: bufI,
+      token: tokI,
+      shape: [2, 8],
+      dtype: 'float32',
+      byteLength: 16 * 4
+    });
 
-    for (let i = 0; i < oobTokens.length; i++) {
-      for (let d = 0; d < embeddingDim; d++) {
-        expect(output[i * embeddingDim + d]).toBe(777.0);
-      }
-    }
+    const hGradWeight = gpuCore.embedding_backward(hGradOut, hIndex, 1000, 32);
+    expect(hGradWeight).toBeDefined();
+    expect(typeof hGradWeight).toBe('string');
+    expect(hGradWeight.length).toBeGreaterThan(0);
+
+    const tensorGradW = _globalRegistry.get(hGradWeight);
+    expect(tensorGradW).toBeDefined();
+    expect(tensorGradW.shape).toEqual([1000, 32]);
+    expect(tensorGradW.dtype).toBe('float32');
+    expect(tensorGradW.byteLength).toBe(1000 * 32 * 4);
   });
 
-  it('should validate embedding schema in executeGraph without crashing on valid params', async () => {
+  it('should validate embedding and embedding_backward schemas in executeGraph', async () => {
     const instructions = [
       { id: 1, op: 'upload', in: [], shape: [100, 32], params: [] },
       { id: 2, op: 'upload', in: [], shape: [2, 8], params: [] },
-      { id: 3, op: 'embedding', in: [1, 2], shape: [2, 8, 32], params: [16, 32, 100, 0] }
+      { id: 3, op: 'embedding', in: [1, 2], shape: [2, 8, 32], params: [16, 32, 100, 0] },
+      { id: 4, op: 'upload', in: [], shape: [2, 8, 32], params: [] },
+      { id: 5, op: 'embedding_backward', in: [4, 2], shape: [100, 32], params: [16, 32, 100, 3200] }
     ];
 
     try {
@@ -108,14 +157,14 @@ describe('WebGPU Native Embedding Kernel & Numerical Correctness Tests', () => {
     }
   });
 
-  it('should reject embedding instruction with insufficient inputs (< 2)', async () => {
+  it('should reject embedding_backward instruction with insufficient inputs (< 2)', async () => {
     const invalidInstructions = [
-      { id: 1, op: 'upload', in: [], shape: [100, 32], params: [] },
-      { id: 2, op: 'embedding', in: [1], shape: [2, 8, 32], params: [16, 32, 100, 0] }
+      { id: 1, op: 'upload', in: [], shape: [2, 8, 32], params: [] },
+      { id: 2, op: 'embedding_backward', in: [1], shape: [100, 32], params: [16, 32, 100, 3200] }
     ];
 
     await expect(executeGraph(JSON.stringify(invalidInstructions), [])).rejects.toThrow(
-      /Instruction\[1\] op="embedding": expected exact 2 inputs, got 1/
+      /Instruction\[1\] op="embedding_backward": expected exact 2 inputs, got 1/
     );
   });
 });

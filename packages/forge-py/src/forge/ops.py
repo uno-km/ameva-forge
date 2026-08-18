@@ -2270,10 +2270,14 @@ class EmbeddingFunction(Function):
     def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, type(None)]:
         weight, index = ctx.saved_tensors
         if grad_output.device == "gpu" or weight.device == "gpu":
-            raise AMEVAForgeUnsupportedOperationError(
-                "GPU Embedding backward is not supported in Release 1/2 without atomic accumulation. "
-                "Transfer model to CPU before calling backward() on embedding layers."
-            )
+            num_tokens = math.prod(index.shape)
+            embedding_dim = weight.shape[-1]
+            vocab_size = weight.shape[0]
+            op_params = [num_tokens, embedding_dim, vocab_size, vocab_size * embedding_dim]
+            grad_w = Tensor(shape=weight.shape, dtype="float32", device="gpu",
+                            op="embedding_backward", parents=(grad_output, index),
+                            op_params=op_params)
+            return (grad_w, None)
         data_i = _require_cpu_data(index, "index").astype(int)
         data_g = _require_cpu_data(grad_output, "grad_output")
         

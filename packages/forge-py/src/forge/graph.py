@@ -151,6 +151,32 @@ class GraphBuilder:
         self.nodes.append(node)
         return node_id
 
+    def add_tensor(self, root: Any) -> int:
+        """
+        무엇을: Lazy Tensor의 DAG를 탐색하여 위상 정렬 순서대로 GraphBuilder에 노드를 추가한다.
+        왜: 파이썬 텐서 객체로부터 WebGPU 연산 그래프를 한 번에 빌드하기 위함이다.
+        어떻게: build_lazy_topo를 호출하고 각 노드를 add_upload/add_load/add_op로 변환한다.
+        """
+        from .tensor import build_lazy_topo
+        topo = build_lazy_topo(root)
+        node_id_map = {}
+        for v in topo:
+            if getattr(v, '_handle', None) is not None:
+                node_id_map[id(v)] = self.add_load(v.shape, v._handle)
+            elif getattr(v, '_lazy_op', None) == 'upload' or getattr(v, '_lazy_op', None) is None:
+                data = getattr(v, '_data', None)
+                node_id_map[id(v)] = self.add_upload(v.shape, data)
+            else:
+                in_ids = [node_id_map[id(p)] for p in getattr(v, '_parents', ())]
+                node_id_map[id(v)] = self.add_op(v._lazy_op, v.shape, in_ids, getattr(v, '_lazy_params', None))
+        return node_id_map[id(root)]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        무엇을: 그래프 노드와 입력 데이터를 딕셔너리로 반환한다.
+        """
+        return {"instructions": self.nodes, "inputs": self.inputs}
+
     def compile(self) -> Tuple[str, List[Any]]:
         """
         무엇을: 현재까지 모인 노드 정보를 JSON 문자열과 입력 데이터 리스트로 묶어 반환한다.
@@ -158,3 +184,4 @@ class GraphBuilder:
         어떻게: 내장 json 모듈을 이용해 nodes 리스트를 직렬화(dumps)하고, 입력 데이터(inputs)와 함께 튜플로 리턴한다.
         """
         return json.dumps(self.nodes), self.inputs
+

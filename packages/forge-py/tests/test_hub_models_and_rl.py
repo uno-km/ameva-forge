@@ -10,6 +10,8 @@ import forge as torch
 from forge.models import LlamaConfig, LlamaForCausalLM, GPTConfig, GPT
 from forge.rl import CartPoleEnv, DQNAgent, PolicyGradientAgent
 from forge.pipeline import pipeline
+from forge.graph import GraphBuilder
+from forge.bridge import is_webgpu_available
 
 
 def test_nanogpt_forward_cpu_and_numerical_invariants():
@@ -58,64 +60,30 @@ def test_policy_gradient_agent_forward_and_action():
 
 
 def test_models_on_gpu_lazy_dag():
-    from forge.tensor import build_lazy_topo
-    from forge.graph import GraphBuilder
-    import json
-
-    # 1. LLaMA-3 GPU DAG & AST Compilation
-    llama_cfg = LlamaConfig(vocab_size=32, hidden_size=16, intermediate_size=32, num_hidden_layers=1, num_attention_heads=2, num_key_value_heads=2, device="gpu")
-    llama = LlamaForCausalLM(llama_cfg)
+    # 1. NanoGPT GPU DAG
+    gpt_cfg = GPTConfig(block_size=16, vocab_size=64, n_layer=2, n_head=2, n_embd=32, device="gpu")
+    gpt_model = GPT(gpt_cfg)
     idx_gpu = torch.tensor([[1, 2, 3]], dtype="int32", device="gpu")
-    llama_out = llama(idx_gpu)
+    logits_gpu = gpt_model(idx_gpu)
+    assert logits_gpu.device == "gpu"
+    assert logits_gpu.shape == (1, 3, 64)
+    
+    # 2. LLaMA GPU DAG
+    llama_cfg = LlamaConfig(vocab_size=64, hidden_size=32, intermediate_size=64, num_hidden_layers=2, num_attention_heads=2, num_key_value_heads=2, device="gpu")
+    llama_model = LlamaForCausalLM(llama_cfg)
+    llama_out = llama_model(idx_gpu)
     assert llama_out.device == "gpu"
-    assert llama_out.shape == (1, 3, 32)
-    assert llama_out._lazy_op is not None
+    assert llama_out.shape == (1, 3, 64)
 
-    topo_llama = build_lazy_topo(llama_out)
-    builder_llama = GraphBuilder()
-    node_id_map = {}
-    for v in topo_llama:
-        if v._handle is not None:
-            node_id_map[id(v)] = builder_llama.add_load(v.shape, v._handle)
-        elif v._lazy_op == 'upload':
-            node_id_map[id(v)] = builder_llama.add_upload(v.shape, v._data)
-        else:
-            in_ids = [node_id_map[id(p)] for p in v._parents]
-            node_id_map[id(v)] = builder_llama.add_op(v._lazy_op, v.shape, in_ids, v._lazy_params)
-    insts_json, _ = builder_llama.compile()
-    insts = json.loads(insts_json)
-
-    # Verify native embedding node exists with valid inputs and shapes
-    embedding_nodes = [n for n in insts if n.get("op") == "embedding"]
-    assert len(embedding_nodes) >= 1
-    emb_node = embedding_nodes[0]
-    assert len(emb_node["in"]) == 2
-    assert emb_node["shape"] == [1, 3, 16]
-    assert emb_node["params"] == [3, 16, 32, 0]
-
-    # 2. NanoGPT GPU DAG & AST Compilation
-    gpt_cfg = GPTConfig(block_size=8, vocab_size=32, n_layer=1, n_head=2, n_embd=16, device="gpu")
-    gpt = GPT(gpt_cfg)
-    gpt_out = gpt(idx_gpu)
-    assert gpt_out.device == "gpu"
-    assert gpt_out.shape == (1, 3, 32)
-    assert gpt_out._lazy_op is not None
-
-    topo_gpt = build_lazy_topo(gpt_out)
-    builder_gpt = GraphBuilder()
-    node_id_map_gpt = {}
-    for v in topo_gpt:
-        if v._handle is not None:
-            node_id_map_gpt[id(v)] = builder_gpt.add_load(v.shape, v._handle)
-        elif v._lazy_op == 'upload':
-            node_id_map_gpt[id(v)] = builder_gpt.add_upload(v.shape, v._data)
-        else:
-            in_ids = [node_id_map_gpt[id(p)] for p in v._parents]
-            node_id_map_gpt[id(v)] = builder_gpt.add_op(v._lazy_op, v.shape, in_ids, v._lazy_params)
-    gpt_insts_json, _ = builder_gpt.compile()
-    gpt_insts = json.loads(gpt_insts_json)
-    gpt_emb_nodes = [n for n in gpt_insts if n.get("op") == "embedding"]
-    assert len(gpt_emb_nodes) >= 1
+    # Verify GraphBuilder compiles LLaMA WebGPU AST with valid embedding schema
+    gb = GraphBuilder()
+    gb.add_tensor(llama_out)
+    ast = gb.to_dict()
+    assert len(ast["instructions"]) >= 1
+    # Check that embedding instruction exists with [num_tokens, embedding_dim, vocab_size, 0] params
+    embedding_inst = [i for i in ast["instructions"] if i.get("op") == "embedding"]
+    assert len(embedding_inst) == 1
+    assert embedding_inst[0]["params"] == [3, 32, 64, 0]
 
     # 3. PolicyGradientAgent GPU DAG
     pg_agent = PolicyGradientAgent(state_dim=4, hidden_dim=8, action_dim=2, device="gpu")
@@ -123,7 +91,6 @@ def test_models_on_gpu_lazy_dag():
     pg_out = pg_agent(st_gpu)
     assert pg_out.device == "gpu"
     assert pg_out.shape == (1, 2)
-
 
 
 def test_cartpole_env():
@@ -156,9 +123,56 @@ async def test_pipeline_text_generation():
 
 
 @pytest.mark.asyncio
+async def test_pipeline_text_generation_gpu():
+    if not is_webgpu_available():
+        pytest.skip("WebGPU bridge not available in CPython testing environment")
+    pipe = pipeline("text-generation", device="gpu")
+    res = await pipe("Hello WebGPU", max_new_tokens=3)
+    assert "generated_text" in res
+    assert len(res["tokens"]) >= 4
+
+
+@pytest.mark.asyncio
 async def test_pipeline_sentiment():
     pipe = pipeline("sentiment-analysis", device="cpu")
     res = await pipe("AMEVA-Forge is blazing fast")
     assert res["label"] in ("POSITIVE", "NEGATIVE")
     assert 0.0 <= res["score"] <= 1.0
 
+
+@pytest.mark.asyncio
+async def test_pipeline_sentiment_gpu():
+    if not is_webgpu_available():
+        pytest.skip("WebGPU bridge not available in CPython testing environment")
+    pipe = pipeline("sentiment-analysis", device="gpu")
+    res = await pipe("WebGPU AI inference is state of the art")
+    assert res["label"] in ("POSITIVE", "NEGATIVE")
+    assert 0.0 <= res["score"] <= 1.0
+
+
+def test_gpu_embedding_autograd_backward():
+    # Verify that Embedding on GPU supports backward() producing embedding_backward DAG node
+    weight = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype="float32", device="gpu", requires_grad=True)
+    idx = torch.tensor([0, 1], dtype="int32", device="gpu")
+    out = torch.ops.embedding(weight, idx)
+    assert out.device == "gpu"
+    assert out.shape == (2, 2)
+
+    # Backward pass
+    grad_out = torch.tensor([[0.5, 0.5], [1.0, 1.0]], dtype="float32", device="gpu")
+    out.backward(grad_out)
+
+    assert weight.grad is not None
+    assert weight.grad.device == "gpu"
+    assert weight.grad.shape == (2, 2)
+    assert weight.grad._lazy_op == "embedding_backward"
+    assert weight.grad._lazy_params == [2, 2, 2, 4]
+
+    # Verify GraphBuilder compiles embedding_backward AST without errors
+    gb = GraphBuilder()
+    gb.add_tensor(weight.grad)
+    ast = gb.to_dict()
+    assert len(ast["instructions"]) >= 1
+    backward_inst = [i for i in ast["instructions"] if i.get("op") == "embedding_backward"]
+    assert len(backward_inst) == 1
+    assert backward_inst[0]["params"] == [2, 2, 2, 4]

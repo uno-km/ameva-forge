@@ -72,6 +72,7 @@ import { RMSNORM_WGSL } from "./kernels/rmsnorm.wgsl";
 import { SWIGLU_WGSL } from "./kernels/swiglu.wgsl";
 import { UNPACK_QUANT_WGSL } from "./kernels/unpack_quant.wgsl";
 import { EMBEDDING_WGSL } from "./kernels/embedding.wgsl";
+import { EMBEDDING_BACKWARD_WGSL } from "./kernels/embedding_backward.wgsl";
 
 /** 
  * WHAT: 그래프 실행기가 처리할 수 있는 모든 허용된 오퍼레이션(op)의 집합입니다.
@@ -83,7 +84,7 @@ const ALLOWED_OPS = new Set([
   'sub', 'neg', 'div', 'exp', 'log', 'sigmoid', 'tanh', 'sigmoid_backward', 'tanh_backward',
   'fill', 'sum', 'max', 'sum_axis', 'max_axis', 'max_axis_backward', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
   'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape',
-  'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant', 'embedding'
+  'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant', 'embedding', 'embedding_backward'
 ]);
 
 export type ForgeRuntimeConfig = {
@@ -356,6 +357,7 @@ function validateInstruction(inst: unknown, idx: number): GraphInstruction {
     'batched_matmul': { minIn: 2, exactIn: true, minParams: 4, exactParams: false },
     'where': { minIn: 3, exactIn: true, minParams: 0, exactParams: false },
     'embedding': { minIn: 2, exactIn: true, minParams: 0, exactParams: false },
+    'embedding_backward': { minIn: 2, exactIn: true, minParams: 0, exactParams: false },
     'cat': { minIn: 2, exactIn: false, minParams: 1, exactParams: false } // 가변 개수 입력, params는 axis 등
   };
 
@@ -1188,6 +1190,18 @@ async function _executeGraphCore(
         const vocabSize = inst.params?.[2] ?? 1000000;
         const p = new Uint32Array([numTokens, embeddingDim, vocabSize, 0]);
         const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numTokens);
+        dispatchX = dx;
+        dispatchY = dy;
+        dispatchZ = 1;
+        device.queue.writeBuffer(paramsBuffer, 0, p);
+      } else if (inst.op === 'embedding_backward') {
+        wgslCode = EMBEDDING_BACKWARD_WGSL;
+        const vocabSize = inst.shape[0];
+        const embeddingDim = inst.shape[1];
+        const numTokens = inst.params?.[0] ?? 1;
+        const totalWeightElements = vocabSize * embeddingDim;
+        const p = new Uint32Array([numTokens, embeddingDim, vocabSize, totalWeightElements]);
+        const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(Math.ceil(totalWeightElements / 64));
         dispatchX = dx;
         dispatchY = dy;
         dispatchZ = 1;
