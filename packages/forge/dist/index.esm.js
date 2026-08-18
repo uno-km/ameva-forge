@@ -3018,7 +3018,7 @@ struct Params {
 
 @group(0) @binding(0) var<uniform> params: Params; // 메타데이터 및 형태 정보가 담긴 유니폼 데이터입니다.
 @group(0) @binding(1) var<storage, read> input: array<f32>; // 수집 대상이 되는 원본 데이터 배열입니다.
-@group(0) @binding(2) var<storage, read> index: array<f32>; // 수집할 인덱스를 지정하는 배열입니다.
+@group(0) @binding(2) var<storage, read> index: array<u32>; // 수집할 인덱스를 지정하는 정수 배열입니다.
 @group(0) @binding(3) var<storage, read_write> output: array<f32>; // 수집된 데이터가 쓰여질 결과 배열입니다.
 
 /**
@@ -3043,9 +3043,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // 현재 차원이 수집 대상 차원(dim)인 경우, 계산된 좌표 대신 index 배열에서 값을 읽어옵니다.
     if (i == params.dim) {
-      let raw_idx = index[idx];
+      let raw_bits = index[idx];
       let dim_size = i32(params.x_shape[i]);
-      var signed_idx = i32(raw_idx);
+      var signed_idx = bitcast<i32>(raw_bits);
       if (signed_idx < 0) {
         signed_idx = signed_idx + dim_size;
       }
@@ -3101,8 +3101,8 @@ struct Params {
 @group(0) @binding(0) var<uniform> params: Params;
 
 // 변수: index
-// 역할: 흩뿌릴 위치 정보를 가지고 있는 인덱스 배열(읽기 전용 스토리지 버퍼)
-@group(0) @binding(1) var<storage, read> index: array<f32>;
+// 역할: 흩뿌릴 위치 정보를 가지고 있는 인덱스 배열(읽기 전용 정수 스토리지 버퍼)
+@group(0) @binding(1) var<storage, read> index: array<u32>;
 
 // 변수: src
 // 역할: 출력 배열에 복사할 원본 값을 가지고 있는 소스 배열(읽기 전용 스토리지 버퍼)
@@ -3149,14 +3149,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // 조건문: 타겟 차원(dim) 여부 검사
     // 역할: 현재 처리 중인 차원이 인덱스 값으로 대체할 타겟 차원인지 판단합니다.
     if (i == params.dim) {
-      let raw_idx = index[idx];
+      let raw_bits = index[idx];
       let dim_size = i32(params.x_shape[i]);
-      var signed_idx = i32(raw_idx);
+      var signed_idx = bitcast<i32>(raw_bits);
       if (signed_idx < 0) {
         signed_idx = signed_idx + dim_size;
       }
-      // OOB or NaN check: skip execution if index is out of bounds or NaN to prevent data corruption
-      if (signed_idx < 0 || signed_idx >= dim_size || raw_idx != raw_idx) {
+      // OOB check: skip execution if index is out of bounds
+      if (signed_idx < 0 || signed_idx >= dim_size) {
         return;
       }
       let valid_idx = u32(signed_idx);
@@ -4713,7 +4713,7 @@ struct EmbeddingParams {
 
 @group(0) @binding(0) var<uniform> params: EmbeddingParams;
 @group(0) @binding(1) var<storage, read> weight: array<f32>;
-@group(0) @binding(2) var<storage, read> index: array<f32>;
+@group(0) @binding(2) var<storage, read> index: array<u32>;
 @group(0) @binding(3) var<storage, read_write> out: array<f32>;
 
 @compute @workgroup_size(64, 1, 1)
@@ -4728,14 +4728,14 @@ fn main(
     return;
   }
 
-  // Float32Array 형태로 전달된 정수 인덱스 읽기 (안전한 정수 캐스팅)
-  let raw_idx = index[flat_token_idx];
+  // 32비트 정수 토큰 ID를 직접 u32로 읽어 비트 오독 및 Float32 축퇴를 원천 차단
+  let raw_token_id = index[flat_token_idx];
   var token_id: u32 = 0u;
 
-  if (raw_idx >= 0.0 && raw_idx < f32(params.vocab_size)) {
-    token_id = u32(raw_idx);
+  if (raw_token_id < params.vocab_size) {
+    token_id = raw_token_id;
   } else {
-    // Vocab 범위를 벗어난 OOB 인덱스는 0으로 클램프하거나 0 벡터 출력
+    // Vocab 범위를 벗어난 OOB 인덱스는 0으로 안전하게 클램프
     token_id = 0u;
   }
 

@@ -27,7 +27,7 @@ struct EmbeddingParams {
 
 @group(0) @binding(0) var<uniform> params: EmbeddingParams;
 @group(0) @binding(1) var<storage, read> weight: array<f32>;
-@group(0) @binding(2) var<storage, read> index: array<f32>;
+@group(0) @binding(2) var<storage, read> index: array<u32>;
 @group(0) @binding(3) var<storage, read_write> out: array<f32>;
 
 @compute @workgroup_size(64, 1, 1)
@@ -42,14 +42,14 @@ fn main(
     return;
   }
 
-  // Float32Array 형태로 전달된 정수 인덱스 읽기 (안전한 정수 캐스팅)
-  let raw_idx = index[flat_token_idx];
+  // 32비트 정수 토큰 ID를 직접 u32로 읽어 비트 오독 및 Float32 축퇴를 원천 차단
+  let raw_token_id = index[flat_token_idx];
   var token_id: u32 = 0u;
 
-  if (raw_idx >= 0.0 && raw_idx < f32(params.vocab_size)) {
-    token_id = u32(raw_idx);
+  if (raw_token_id < params.vocab_size) {
+    token_id = raw_token_id;
   } else {
-    // Vocab 범위를 벗어난 OOB 인덱스는 0으로 클램프하거나 0 벡터 출력
+    // Vocab 범위를 벗어난 OOB 인덱스는 0으로 안전하게 클램프
     token_id = 0u;
   }
 

@@ -37,8 +37,8 @@ struct Params {
 @group(0) @binding(0) var<uniform> params: Params;
 
 // 변수: index
-// 역할: 흩뿌릴 위치 정보를 가지고 있는 인덱스 배열(읽기 전용 스토리지 버퍼)
-@group(0) @binding(1) var<storage, read> index: array<f32>;
+// 역할: 흩뿌릴 위치 정보를 가지고 있는 인덱스 배열(읽기 전용 정수 스토리지 버퍼)
+@group(0) @binding(1) var<storage, read> index: array<u32>;
 
 // 변수: src
 // 역할: 출력 배열에 복사할 원본 값을 가지고 있는 소스 배열(읽기 전용 스토리지 버퍼)
@@ -85,14 +85,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // 조건문: 타겟 차원(dim) 여부 검사
     // 역할: 현재 처리 중인 차원이 인덱스 값으로 대체할 타겟 차원인지 판단합니다.
     if (i == params.dim) {
-      let raw_idx = index[idx];
+      let raw_bits = index[idx];
       let dim_size = i32(params.x_shape[i]);
-      var signed_idx = i32(raw_idx);
+      var signed_idx = bitcast<i32>(raw_bits);
       if (signed_idx < 0) {
         signed_idx = signed_idx + dim_size;
       }
-      // OOB or NaN check: skip execution if index is out of bounds or NaN to prevent data corruption
-      if (signed_idx < 0 || signed_idx >= dim_size || raw_idx != raw_idx) {
+      // OOB check: skip execution if index is out of bounds
+      if (signed_idx < 0 || signed_idx >= dim_size) {
         return;
       }
       let valid_idx = u32(signed_idx);

@@ -20,7 +20,7 @@ struct Params {
 
 @group(0) @binding(0) var<uniform> params: Params; // 메타데이터 및 형태 정보가 담긴 유니폼 데이터입니다.
 @group(0) @binding(1) var<storage, read> input: array<f32>; // 수집 대상이 되는 원본 데이터 배열입니다.
-@group(0) @binding(2) var<storage, read> index: array<f32>; // 수집할 인덱스를 지정하는 배열입니다.
+@group(0) @binding(2) var<storage, read> index: array<u32>; // 수집할 인덱스를 지정하는 정수 배열입니다.
 @group(0) @binding(3) var<storage, read_write> output: array<f32>; // 수집된 데이터가 쓰여질 결과 배열입니다.
 
 /**
@@ -45,9 +45,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // 현재 차원이 수집 대상 차원(dim)인 경우, 계산된 좌표 대신 index 배열에서 값을 읽어옵니다.
     if (i == params.dim) {
-      let raw_idx = index[idx];
+      let raw_bits = index[idx];
       let dim_size = i32(params.x_shape[i]);
-      var signed_idx = i32(raw_idx);
+      var signed_idx = bitcast<i32>(raw_bits);
       if (signed_idx < 0) {
         signed_idx = signed_idx + dim_size;
       }
