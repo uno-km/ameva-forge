@@ -147,6 +147,16 @@ export declare function embedding(handleWeight: TensorHandle, handleIndex: Tenso
  * HOW: embedding_backward.wgsl 컴퓨트 셰이더를 2D 그리드로 디스패치하여 [Vocab, D] 크기의 gradWeight를 생성합니다.
  */
 export declare function embedding_backward(handleGradOutput: TensorHandle, handleIndex: TensorHandle, vocabSize: number, embeddingDim: number): TensorHandle;
+/**
+ * WHAT: GPU 상에서 Adam Optimizer의 1-Pass 융합 파라미터 업데이트를 수행합니다.
+ * WHY: VRAM 내에서 param, grad, m, v를 단일 커널로 인플레이스 갱신하여 초고속 파인튜닝을 지원하기 위함입니다.
+ */
+export declare function adam_step(handleParam: TensorHandle, handleGrad: TensorHandle, handleM: TensorHandle, handleV: TensorHandle, lr: number, beta1: number, beta2: number, eps: number, t: number): void;
+/**
+ * WHAT: GPU 상에서 Momentum SGD의 1-Pass 융합 파라미터 업데이트를 수행합니다.
+ * WHY: VRAM 내에서 velocity와 param을 단일 커널로 인플레이스 갱신하기 위함입니다.
+ */
+export declare function sgd_momentum_step(handleParam: TensorHandle, handleGrad: TensorHandle, handleVelocity: TensorHandle, lr: number, momentum: number): void;
 export declare const gpuCore: {
     add: typeof add;
     mul: typeof mul;
@@ -159,6 +169,8 @@ export declare const gpuCore: {
     unpackQuant: typeof unpackQuant;
     embedding: typeof embedding;
     embedding_backward: typeof embedding_backward;
+    adam_step: typeof adam_step;
+    sgd_momentum_step: typeof sgd_momentum_step;
     relu: typeof relu;
     relu_backward: typeof relu_backward;
     transpose: typeof transpose;

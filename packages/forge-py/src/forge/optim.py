@@ -158,15 +158,6 @@ class SGD(Optimizer):
                 "Mixed CPU/GPU parameters in one SGD step are not supported in Release 1. "
                 "Use one optimizer per device."
             )
-
-        if self.momentum > 0.0 and any(
-            p.grad is not None and p.device == "gpu" for p in self.params
-        ):
-            raise AMEVAForgeDeviceError(
-                "GPU momentum SGD is outside Release 1. "
-                "Use momentum=0.0 or implement a GPU velocity tensor."
-            )
-
         from .graph import GraphBuilder
         from .bridge import js_execute_graph
 
@@ -224,17 +215,35 @@ class SGD(Optimizer):
                     f"GPU SGD does not support empty parameter: shape={p.shape}"
                 )
 
-            grad_id = builder.add_load(p.grad.shape, p.grad._handle)
             param_id = builder.add_load(p.shape, p._handle)
-            param_entries.append((p, num_elements, grad_id, param_id))
+            grad_id = builder.add_load(p.grad.shape, p.grad._handle)
 
-        for p, num_elements, grad_id, param_id in param_entries:
-            out_id = builder.add_op(
-                "axpy",
-                p.shape,
-                [grad_id, param_id],
-                [num_elements, float(self.lr)],
-            )
+            if self.momentum > 0.0:
+                if self.velocity[i] is None or not isinstance(self.velocity[i], Tensor) or self.velocity[i].device != "gpu":
+                    self.velocity[i] = Tensor(shape=p.shape, dtype="float32", device="gpu", data=np.zeros(p.shape, dtype=np.float32))
+                await self.velocity[i].realize()
+                vel_id = builder.add_load(self.velocity[i].shape, self.velocity[i]._handle)
+                param_entries.append((p, num_elements, grad_id, param_id, vel_id))
+            else:
+                param_entries.append((p, num_elements, grad_id, param_id, None))
+
+        for entry in param_entries:
+            if self.momentum > 0.0:
+                p, num_elements, grad_id, param_id, vel_id = entry
+                out_id = builder.add_op(
+                    "sgd_momentum_step",
+                    p.shape,
+                    [param_id, grad_id, vel_id],
+                    [float(self.lr), float(self.momentum)],
+                )
+            else:
+                p, num_elements, grad_id, param_id, _ = entry
+                out_id = builder.add_op(
+                    "axpy",
+                    p.shape,
+                    [grad_id, param_id],
+                    [num_elements, float(self.lr)],
+                )
             param_out_map.append((p, out_id))
 
         # CPU 계산은 검증이 끝난 뒤 원자적으로 반영한다.
@@ -251,10 +260,10 @@ class SGD(Optimizer):
             for p, out_id in param_out_map:
                 returned_handle = result.get(str(out_id)) or result.get(out_id)
 
-                # axpy는 in-place 계약이므로 같은 parameter handle을 반환해야 한다.
+                # in-place 계약이므로 같은 parameter handle을 반환해야 한다.
                 if returned_handle != p._handle:
                     raise AMEVAForgeDeviceError(
-                        "AXPY contract violation: optimizer returned a different handle."
+                        "Optimizer contract violation: optimizer returned a different handle."
                     )
 
                 p._version += 1
@@ -357,13 +366,90 @@ class Adam(Optimizer):
             p.grad = None
 
     async def step_async(self):
-        for p in self.params:
-            if p.device == "gpu":
-                raise AMEVAForgeUnsupportedOperationError(
-                    "Adam async GPU step is not supported in Release 1. "
-                    "Use SGD for GPU training or move parameters to CPU."
+        """
+        CPU와 GPU parameter를 모두 지원하는 공식 비동기 Adam step.
+        GPU parameter는 1-Pass 융합 adam_step WGSL 커널을 통해 in-place 갱신된다.
+        """
+        has_gpu = any(p.grad is not None and p.device == "gpu" for p in self.params)
+        if not has_gpu:
+            self.step()
+            return
+
+        self.t += 1
+        active_devices = self._active_devices()
+        if len(active_devices) > 1:
+            raise AMEVAForgeDeviceError(
+                "Mixed CPU/GPU parameters in one Adam step are not supported. "
+                "Use one optimizer per device."
+            )
+
+        from .graph import GraphBuilder
+        from .bridge import js_execute_graph
+
+        builder = GraphBuilder()
+        param_out_map = []
+        param_entries = []
+
+        for i, p in enumerate(self.params):
+            if p.grad is None:
+                continue
+
+            self._validate_param_grad_pair(p)
+
+            await p.realize()
+            await p.grad.realize()
+
+            if p._handle is None or p.grad._handle is None:
+                raise AMEVAForgeDeviceError(
+                    "GPU Adam requires realized parameter and gradient handles."
                 )
-        self.step()
+
+            if self.m[i] is None or not isinstance(self.m[i], Tensor) or self.m[i].device != "gpu":
+                self.m[i] = Tensor(shape=p.shape, dtype="float32", device="gpu", data=np.zeros(p.shape, dtype=np.float32))
+            if self.v[i] is None or not isinstance(self.v[i], Tensor) or self.v[i].device != "gpu":
+                self.v[i] = Tensor(shape=p.shape, dtype="float32", device="gpu", data=np.zeros(p.shape, dtype=np.float32))
+
+            await self.m[i].realize()
+            await self.v[i].realize()
+
+            param_id = builder.add_load(p.shape, p._handle)
+            grad_id = builder.add_load(p.grad.shape, p.grad._handle)
+            m_id = builder.add_load(self.m[i].shape, self.m[i]._handle)
+            v_id = builder.add_load(self.v[i].shape, self.v[i]._handle)
+
+            param_entries.append((p, param_id, grad_id, m_id, v_id))
+
+        beta1_power = float(self.beta1 ** self.t)
+        beta2_power = float(self.beta2 ** self.t)
+
+        for p, param_id, grad_id, m_id, v_id in param_entries:
+            out_id = builder.add_op(
+                "adam_step",
+                p.shape,
+                [param_id, grad_id, m_id, v_id],
+                [
+                    float(self.lr),
+                    float(self.beta1),
+                    float(self.beta2),
+                    float(self.eps),
+                    beta1_power,
+                    beta2_power,
+                ],
+            )
+            param_out_map.append((p, out_id))
+
+        if param_out_map:
+            instructions, inputs = builder.compile()
+            result = await js_execute_graph(instructions, inputs)
+
+            for p, out_id in param_out_map:
+                returned_handle = result.get(str(out_id)) or result.get(out_id)
+                if returned_handle != p._handle:
+                    raise AMEVAForgeDeviceError(
+                        "Adam contract violation: optimizer returned a different handle."
+                    )
+                p._version += 1
+                p.grad = None
 
 
 # WHAT: 파라미터들의 그래디언트 글로벌 L2 노름(Norm)을 제한(Clip)하는 함수입니다.

@@ -4810,6 +4810,106 @@ fn main(
 `;
 
 /**
+ * 파일 생성일: 2026-08-19
+ * AMEVA-Forge Release 2.0 / SCRUM-241: Fused WebGPU Native Adam Step Kernel
+ *
+ * WHAT: Adam Optimizer의 1차 모멘트(m), 2차 모멘트(v), 편향 보정 및 파라미터 업데이트를 단일 패스로 수행하는 융합 WGSL 커널입니다.
+ * WHY: VRAM 왕복 및 CPU readback 없이 GPU 상에서 거대 모델의 Adam 파인튜닝을 100% 네이티브로 가속하기 위함입니다.
+ * HOW: m = beta1*m + (1-beta1)*g, v = beta2*v + (1-beta2)*g^2, m_hat = m / (1-beta1^t), v_hat = v / (1-beta2^t),
+ *      param = param - lr * m_hat / (sqrt(v_hat) + eps)
+ */
+const ADAM_STEP_WGSL = /* wgsl */ `
+struct AdamParams {
+  num_elements: u32,
+  lr: f32,
+  beta1: f32,
+  beta2: f32,
+  eps: f32,
+  beta1_power: f32,
+  beta2_power: f32,
+  workgroupsX: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: AdamParams;
+@group(0) @binding(1) var<storage, read> grad: array<f32>;
+@group(0) @binding(2) var<storage, read_write> m: array<f32>;
+@group(0) @binding(3) var<storage, read_write> v: array<f32>;
+@group(0) @binding(4) var<storage, read_write> param: array<f32>;
+
+@compute @workgroup_size(64, 1, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let thread_id = local_id.x;
+  let idx = (workgroup_id.x + workgroup_id.y * params.workgroupsX) * 64u + thread_id;
+
+  if (idx >= params.num_elements) {
+    return;
+  }
+
+  let g = grad[idx];
+  let m_prev = m[idx];
+  let v_prev = v[idx];
+
+  let m_curr = params.beta1 * m_prev + (1.0 - params.beta1) * g;
+  let v_curr = params.beta2 * v_prev + (1.0 - params.beta2) * g * g;
+
+  m[idx] = m_curr;
+  v[idx] = v_curr;
+
+  let m_hat = m_curr / (1.0 - params.beta1_power);
+  let v_hat = v_curr / (1.0 - params.beta2_power);
+
+  let step_update = params.lr * m_hat / (sqrt(v_hat) + params.eps);
+  param[idx] = param[idx] - step_update;
+}
+`;
+
+/**
+ * 파일 생성일: 2026-08-19
+ * AMEVA-Forge Release 2.0 / SCRUM-242: Fused WebGPU Native Momentum SGD Step Kernel
+ *
+ * WHAT: Momentum SGD의 velocity 갱신 및 파라미터 업데이트를 단일 패스로 수행하는 융합 WGSL 커널입니다.
+ * WHY: GPU 상에서 가속된 모멘텀 기울기 하강을 VRAM 인플레이스로 직접 수행하기 위함입니다.
+ * HOW: v = momentum * v + grad, param = param - lr * v
+ */
+const SGD_MOMENTUM_STEP_WGSL = /* wgsl */ `
+struct MomentumParams {
+  num_elements: u32,
+  lr: f32,
+  momentum: f32,
+  workgroupsX: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: MomentumParams;
+@group(0) @binding(1) var<storage, read> grad: array<f32>;
+@group(0) @binding(2) var<storage, read_write> velocity: array<f32>;
+@group(0) @binding(3) var<storage, read_write> param: array<f32>;
+
+@compute @workgroup_size(64, 1, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let thread_id = local_id.x;
+  let idx = (workgroup_id.x + workgroup_id.y * params.workgroupsX) * 64u + thread_id;
+
+  if (idx >= params.num_elements) {
+    return;
+  }
+
+  let g = grad[idx];
+  let v_prev = velocity[idx];
+
+  let v_curr = params.momentum * v_prev + g;
+  velocity[idx] = v_curr;
+
+  param[idx] = param[idx] - params.lr * v_curr;
+}
+`;
+
+/**
  * Created: 2026-08-12T12:14:52+09:00
  * Modified:
  *   - 2026-08-12T12:59:35+09:00: Feat: Introduce v3.0 features (CNN, Pooling, Dropout, Serialization)
@@ -4852,6 +4952,8 @@ const KERNEL_REGISTRY = new Map([
     ['unpack_quant', UNPACK_QUANT_WGSL],
     ['embedding', EMBEDDING_WGSL],
     ['embedding_backward', EMBEDDING_BACKWARD_WGSL],
+    ['adam_step', ADAM_STEP_WGSL],
+    ['sgd_momentum_step', SGD_MOMENTUM_STEP_WGSL],
     ['relu', RELU_WGSL],
     ['add', ADD_WGSL],
     ['mul', MUL_WGSL],
@@ -5242,14 +5344,24 @@ function dispatchKernel(opts) {
     passEncoder.end();
     device.queue.submit([commandEncoder.finish()]);
     // params 버퍼는 GPU 제출 완료 후 중앙 allocator를 통해 해제
-    void device.queue.onSubmittedWorkDone().then(() => {
+    if (typeof device.queue.onSubmittedWorkDone === 'function') {
+        void device.queue.onSubmittedWorkDone().then(() => {
+            try {
+                freeBuffer(paramsBuffer, paramsToken);
+            }
+            catch (e) {
+                _safeLog$1(`[gpuCore] Failed to free params buffer: ${e}`);
+            }
+        });
+    }
+    else {
         try {
             freeBuffer(paramsBuffer, paramsToken);
         }
         catch (e) {
             _safeLog$1(`[gpuCore] Failed to free params buffer: ${e}`);
         }
-    });
+    }
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // 개별 op 함수들 (내부 사용, pyodideBridge에서는 executeGraph를 통해서만 접근)
@@ -5802,6 +5914,67 @@ function embedding_backward(handleGradOutput, handleIndex, vocabSize, embeddingD
         byteLength,
     });
 }
+/**
+ * WHAT: GPU 상에서 Adam Optimizer의 1-Pass 융합 파라미터 업데이트를 수행합니다.
+ * WHY: VRAM 내에서 param, grad, m, v를 단일 커널로 인플레이스 갱신하여 초고속 파인튜닝을 지원하기 위함입니다.
+ */
+function adam_step(handleParam, handleGrad, handleM, handleV, lr, beta1, beta2, eps, t) {
+    const param = _globalRegistry.get(handleParam);
+    const grad = _globalRegistry.get(handleGrad);
+    const m = _globalRegistry.get(handleM);
+    const v = _globalRegistry.get(handleV);
+    const numElements = param.shape.reduce((a, b) => a * b, 1);
+    const beta1_power = Math.pow(beta1, t);
+    const beta2_power = Math.pow(beta2, t);
+    const { dispatchX, dispatchY } = computeDispatch2D(numElements, 64);
+    const paramsArray = new ArrayBuffer(32);
+    const u32View = new Uint32Array(paramsArray);
+    const f32View = new Float32Array(paramsArray);
+    u32View[0] = numElements;
+    f32View[1] = lr;
+    f32View[2] = beta1;
+    f32View[3] = beta2;
+    f32View[4] = eps;
+    f32View[5] = beta1_power;
+    f32View[6] = beta2_power;
+    u32View[7] = dispatchX;
+    dispatchKernel({
+        opKey: 'adam_step',
+        wgslCode: ADAM_STEP_WGSL,
+        paramsData: u32View,
+        inputBuffers: [grad.buffer, m.buffer, v.buffer],
+        outBuffer: param.buffer,
+        dispatchX,
+        dispatchY,
+    });
+}
+/**
+ * WHAT: GPU 상에서 Momentum SGD의 1-Pass 융합 파라미터 업데이트를 수행합니다.
+ * WHY: VRAM 내에서 velocity와 param을 단일 커널로 인플레이스 갱신하기 위함입니다.
+ */
+function sgd_momentum_step(handleParam, handleGrad, handleVelocity, lr, momentum) {
+    const param = _globalRegistry.get(handleParam);
+    const grad = _globalRegistry.get(handleGrad);
+    const vel = _globalRegistry.get(handleVelocity);
+    const numElements = param.shape.reduce((a, b) => a * b, 1);
+    const { dispatchX, dispatchY } = computeDispatch2D(numElements, 64);
+    const paramsArray = new ArrayBuffer(16);
+    const u32View = new Uint32Array(paramsArray);
+    const f32View = new Float32Array(paramsArray);
+    u32View[0] = numElements;
+    f32View[1] = lr;
+    f32View[2] = momentum;
+    u32View[3] = dispatchX;
+    dispatchKernel({
+        opKey: 'sgd_momentum_step',
+        wgslCode: SGD_MOMENTUM_STEP_WGSL,
+        paramsData: u32View,
+        inputBuffers: [grad.buffer, vel.buffer],
+        outBuffer: param.buffer,
+        dispatchX,
+        dispatchY,
+    });
+}
 const gpuCore = {
     add,
     mul,
@@ -5814,6 +5987,8 @@ const gpuCore = {
     unpackQuant,
     embedding,
     embedding_backward,
+    adam_step,
+    sgd_momentum_step,
     relu,
     relu_backward,
     transpose,
@@ -5845,7 +6020,8 @@ const ALLOWED_OPS = new Set([
     'sub', 'neg', 'div', 'exp', 'log', 'sigmoid', 'tanh', 'sigmoid_backward', 'tanh_backward',
     'fill', 'sum', 'max', 'sum_axis', 'max_axis', 'max_axis_backward', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
     'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape',
-    'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant', 'embedding', 'embedding_backward'
+    'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant', 'embedding', 'embedding_backward',
+    'adam_step', 'sgd_momentum_step'
 ]);
 const DEFAULT_RUNTIME_CONFIG = {
     workloadBudgetElements: 100_000_000,
@@ -6054,6 +6230,8 @@ function validateInstruction(inst, idx) {
         'where': { minIn: 3, exactIn: true, minParams: 0, exactParams: false },
         'embedding': { minIn: 2, exactIn: true, minParams: 0, exactParams: false },
         'embedding_backward': { minIn: 2, exactIn: true, minParams: 0, exactParams: false },
+        'adam_step': { minIn: 4, exactIn: true, minParams: 6, exactParams: false }, // param, grad, m, v
+        'sgd_momentum_step': { minIn: 3, exactIn: true, minParams: 2, exactParams: false }, // param, grad, velocity
         'cat': { minIn: 2, exactIn: false, minParams: 1, exactParams: false } // 가변 개수 입력, params는 axis 등
     };
     const opStr = i.op;
@@ -6740,6 +6918,9 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
             else if (inst.op === 'flash_attention') {
                 wgslCode = FLASH_ATTENTION_WGSL;
                 const [B, H, N, d] = inst.shape;
+                if (d > 256) {
+                    throw new AMEVAForgeShapeError(`HeadDim ${d} exceeds max supported dimension 256 in FlashAttention`);
+                }
                 const H_kv = inst.params?.[0] ?? H;
                 const scale = inst.params?.[1] ?? (1.0 / Math.sqrt(d));
                 const isCausal = (inst.params?.[2] ?? 0) === 1 ? 1 : 0;
@@ -6753,15 +6934,15 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 u32view[0] = B;
                 u32view[1] = H;
                 u32view[2] = H_kv;
-                u32view[3] = N;
-                u32view[4] = d;
-                f32view[5] = scale;
-                u32view[6] = isCausal;
-                u32view[7] = strideQ;
-                u32view[8] = strideK;
-                u32view[9] = strideV;
-                u32view[10] = strideO;
-                u32view[11] = 0;
+                u32view[3] = N; // N_q
+                u32view[4] = N; // N_kv
+                u32view[5] = d;
+                f32view[6] = scale;
+                u32view[7] = isCausal;
+                u32view[8] = strideQ;
+                u32view[9] = strideK;
+                u32view[10] = strideV;
+                u32view[11] = strideO;
                 dispatchX = N;
                 dispatchY = H;
                 dispatchZ = B;
@@ -6858,6 +7039,50 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 dispatchY = dy;
                 dispatchZ = 1;
                 device.queue.writeBuffer(paramsBuffer, 0, p);
+            }
+            else if (inst.op === 'adam_step') {
+                wgslCode = ADAM_STEP_WGSL;
+                const numElements = inst.shape.reduce((a, b) => a * b, 1);
+                const lr = inst.params?.[0] ?? 0.001;
+                const beta1 = inst.params?.[1] ?? 0.9;
+                const beta2 = inst.params?.[2] ?? 0.999;
+                const eps = inst.params?.[3] ?? 1e-8;
+                const beta1_power = inst.params?.[4] ?? beta1;
+                const beta2_power = inst.params?.[5] ?? beta2;
+                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numElements, 64);
+                dispatchX = dx;
+                dispatchY = dy;
+                dispatchZ = 1;
+                const buf = new ArrayBuffer(32);
+                const u32view = new Uint32Array(buf);
+                const f32view = new Float32Array(buf);
+                u32view[0] = numElements;
+                f32view[1] = lr;
+                f32view[2] = beta1;
+                f32view[3] = beta2;
+                f32view[4] = eps;
+                f32view[5] = beta1_power;
+                f32view[6] = beta2_power;
+                u32view[7] = dispatchX;
+                device.queue.writeBuffer(paramsBuffer, 0, u32view);
+            }
+            else if (inst.op === 'sgd_momentum_step') {
+                wgslCode = SGD_MOMENTUM_STEP_WGSL;
+                const numElements = inst.shape.reduce((a, b) => a * b, 1);
+                const lr = inst.params?.[0] ?? 0.01;
+                const momentum = inst.params?.[1] ?? 0.9;
+                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numElements, 64);
+                dispatchX = dx;
+                dispatchY = dy;
+                dispatchZ = 1;
+                const buf = new ArrayBuffer(16);
+                const u32view = new Uint32Array(buf);
+                const f32view = new Float32Array(buf);
+                u32view[0] = numElements;
+                f32view[1] = lr;
+                f32view[2] = momentum;
+                u32view[3] = dispatchX;
+                device.queue.writeBuffer(paramsBuffer, 0, u32view);
             }
             else if (inst.op === 'sum' || inst.op === 'max') {
                 // Handled entirely dynamically below, but we need to bypass normal flow
@@ -7030,6 +7255,23 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                     { binding: 2, resource: { buffer: idToBuffer[inst.in[1]] } },
                     { binding: 3, resource: { buffer: idToBuffer[inst.in[2]] } },
                     { binding: 4, resource: { buffer: outBuffer } },
+                ];
+            }
+            else if (inst.op === 'adam_step') {
+                bindGroupEntries = [
+                    { binding: 0, resource: { buffer: paramsBuffer } },
+                    { binding: 1, resource: { buffer: idToBuffer[inst.in[1]] } }, // grad (read)
+                    { binding: 2, resource: { buffer: idToBuffer[inst.in[2]] } }, // m (read_write)
+                    { binding: 3, resource: { buffer: idToBuffer[inst.in[3]] } }, // v (read_write)
+                    { binding: 4, resource: { buffer: outBuffer } }, // param (read_write)
+                ];
+            }
+            else if (inst.op === 'sgd_momentum_step') {
+                bindGroupEntries = [
+                    { binding: 0, resource: { buffer: paramsBuffer } },
+                    { binding: 1, resource: { buffer: idToBuffer[inst.in[1]] } }, // grad (read)
+                    { binding: 2, resource: { buffer: idToBuffer[inst.in[2]] } }, // velocity (read_write)
+                    { binding: 3, resource: { buffer: outBuffer } }, // param (read_write)
                 ];
             }
             else if (inst.op === 'gather' || inst.op === 'scatter') {
@@ -7624,5 +7866,5 @@ const __testing = ((typeof process !== 'undefined' && process.env && process.env
     getDeviceInternal: getDevice,
 }) : undefined;
 
-export { AMEVAForgeDTypeError, AMEVAForgeDeviceError, AMEVAForgeDeviceLostError, AMEVAForgeDisposedError, AMEVAForgeError, AMEVAForgeInternalGPUError, AMEVAForgeOutOfMemoryError, AMEVAForgeQuotaExceededError, AMEVAForgeSecurityError, AMEVAForgeShapeError, AMEVAForgeStaleHandleError, AMEVAForgeUnsupportedOpError, AMEVAForgeValidationError, AMEVAForgeWebGPUUnavailableError, KERNEL_REGISTRY, QuotaManager, __testing, add, assertAllowedKernelName, assertAllowedShaderConstant, assertSafeShaderIdentifier, assertStaticShaderSourceOnly, assertWasmRange, clearStagingPool, clearStepLossHistory, cloneToFloat32Array, computeBroadcastParams, computeDispatch2D, configureRuntime, dispose, embedding, embedding_backward, ensureFloat32Array, executeGraph, flashAttention, flushGC, getAllowedKernelNames, getQuotaSnapshot, getRuntimeConfig, getTensorInfo, gpuCore, init, initWebGPU, isAvailable, mapBufferAsync, matmul, matmulTiled, mountInspector, mul, random, read, readMappedInto, recordStepLoss, registerKernelNames, registerPyodideBridge, relu, relu_backward, resetRuntimeMemory, rmsNorm, rope, swiglu, transpose, unmountInspector, unpackQuant, uploadFloat32Array, validateDType, validateShape, warmupKernels };
+export { AMEVAForgeDTypeError, AMEVAForgeDeviceError, AMEVAForgeDeviceLostError, AMEVAForgeDisposedError, AMEVAForgeError, AMEVAForgeInternalGPUError, AMEVAForgeOutOfMemoryError, AMEVAForgeQuotaExceededError, AMEVAForgeSecurityError, AMEVAForgeShapeError, AMEVAForgeStaleHandleError, AMEVAForgeUnsupportedOpError, AMEVAForgeValidationError, AMEVAForgeWebGPUUnavailableError, KERNEL_REGISTRY, QuotaManager, __testing, adam_step, add, assertAllowedKernelName, assertAllowedShaderConstant, assertSafeShaderIdentifier, assertStaticShaderSourceOnly, assertWasmRange, clearStagingPool, clearStepLossHistory, cloneToFloat32Array, computeBroadcastParams, computeDispatch2D, configureRuntime, dispose, embedding, embedding_backward, ensureFloat32Array, executeGraph, flashAttention, flushGC, getAllowedKernelNames, getQuotaSnapshot, getRuntimeConfig, getTensorInfo, gpuCore, init, initWebGPU, isAvailable, mapBufferAsync, matmul, matmulTiled, mountInspector, mul, random, read, readMappedInto, recordStepLoss, registerKernelNames, registerPyodideBridge, relu, relu_backward, resetRuntimeMemory, rmsNorm, rope, sgd_momentum_step, swiglu, transpose, unmountInspector, unpackQuant, uploadFloat32Array, validateDType, validateShape, warmupKernels };
 //# sourceMappingURL=index.esm.js.map

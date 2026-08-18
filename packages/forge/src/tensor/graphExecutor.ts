@@ -73,6 +73,8 @@ import { SWIGLU_WGSL } from "./kernels/swiglu.wgsl";
 import { UNPACK_QUANT_WGSL } from "./kernels/unpack_quant.wgsl";
 import { EMBEDDING_WGSL } from "./kernels/embedding.wgsl";
 import { EMBEDDING_BACKWARD_WGSL } from "./kernels/embedding_backward.wgsl";
+import { ADAM_STEP_WGSL } from "./kernels/adam_step.wgsl";
+import { SGD_MOMENTUM_STEP_WGSL } from "./kernels/sgd_momentum_step.wgsl";
 
 /** 
  * WHAT: 그래프 실행기가 처리할 수 있는 모든 허용된 오퍼레이션(op)의 집합입니다.
@@ -84,7 +86,8 @@ const ALLOWED_OPS = new Set([
   'sub', 'neg', 'div', 'exp', 'log', 'sigmoid', 'tanh', 'sigmoid_backward', 'tanh_backward',
   'fill', 'sum', 'max', 'sum_axis', 'max_axis', 'max_axis_backward', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
   'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape',
-  'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant', 'embedding', 'embedding_backward'
+  'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant', 'embedding', 'embedding_backward',
+  'adam_step', 'sgd_momentum_step'
 ]);
 
 export type ForgeRuntimeConfig = {
@@ -358,6 +361,8 @@ function validateInstruction(inst: unknown, idx: number): GraphInstruction {
     'where': { minIn: 3, exactIn: true, minParams: 0, exactParams: false },
     'embedding': { minIn: 2, exactIn: true, minParams: 0, exactParams: false },
     'embedding_backward': { minIn: 2, exactIn: true, minParams: 0, exactParams: false },
+    'adam_step': { minIn: 4, exactIn: true, minParams: 6, exactParams: false }, // param, grad, m, v
+    'sgd_momentum_step': { minIn: 3, exactIn: true, minParams: 2, exactParams: false }, // param, grad, velocity
     'cat': { minIn: 2, exactIn: false, minParams: 1, exactParams: false } // 가변 개수 입력, params는 axis 등
   };
 
@@ -1090,6 +1095,9 @@ async function _executeGraphCore(
       } else if (inst.op === 'flash_attention') {
         wgslCode = FLASH_ATTENTION_WGSL;
         const [B, H, N, d] = inst.shape;
+        if (d > 256) {
+          throw new AMEVAForgeShapeError(`HeadDim ${d} exceeds max supported dimension 256 in FlashAttention`);
+        }
         const H_kv = inst.params?.[0] ?? H;
         const scale = inst.params?.[1] ?? (1.0 / Math.sqrt(d));
         const isCausal = (inst.params?.[2] ?? 0) === 1 ? 1 : 0;
@@ -1105,15 +1113,15 @@ async function _executeGraphCore(
         u32view[0] = B;
         u32view[1] = H;
         u32view[2] = H_kv;
-        u32view[3] = N;
-        u32view[4] = d;
-        f32view[5] = scale;
-        u32view[6] = isCausal;
-        u32view[7] = strideQ;
-        u32view[8] = strideK;
-        u32view[9] = strideV;
-        u32view[10] = strideO;
-        u32view[11] = 0;
+        u32view[3] = N; // N_q
+        u32view[4] = N; // N_kv
+        u32view[5] = d;
+        f32view[6] = scale;
+        u32view[7] = isCausal;
+        u32view[8] = strideQ;
+        u32view[9] = strideK;
+        u32view[10] = strideV;
+        u32view[11] = strideO;
 
         dispatchX = N;
         dispatchY = H;
@@ -1209,6 +1217,52 @@ async function _executeGraphCore(
         dispatchY = dy;
         dispatchZ = 1;
         device.queue.writeBuffer(paramsBuffer, 0, p);
+      } else if (inst.op === 'adam_step') {
+        wgslCode = ADAM_STEP_WGSL;
+        const numElements = inst.shape.reduce((a, b) => a * b, 1);
+        const lr = inst.params?.[0] ?? 0.001;
+        const beta1 = inst.params?.[1] ?? 0.9;
+        const beta2 = inst.params?.[2] ?? 0.999;
+        const eps = inst.params?.[3] ?? 1e-8;
+        const beta1_power = inst.params?.[4] ?? beta1;
+        const beta2_power = inst.params?.[5] ?? beta2;
+
+        const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numElements, 64);
+        dispatchX = dx;
+        dispatchY = dy;
+        dispatchZ = 1;
+
+        const buf = new ArrayBuffer(32);
+        const u32view = new Uint32Array(buf);
+        const f32view = new Float32Array(buf);
+        u32view[0] = numElements;
+        f32view[1] = lr;
+        f32view[2] = beta1;
+        f32view[3] = beta2;
+        f32view[4] = eps;
+        f32view[5] = beta1_power;
+        f32view[6] = beta2_power;
+        u32view[7] = dispatchX;
+        device.queue.writeBuffer(paramsBuffer, 0, u32view);
+      } else if (inst.op === 'sgd_momentum_step') {
+        wgslCode = SGD_MOMENTUM_STEP_WGSL;
+        const numElements = inst.shape.reduce((a, b) => a * b, 1);
+        const lr = inst.params?.[0] ?? 0.01;
+        const momentum = inst.params?.[1] ?? 0.9;
+
+        const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numElements, 64);
+        dispatchX = dx;
+        dispatchY = dy;
+        dispatchZ = 1;
+
+        const buf = new ArrayBuffer(16);
+        const u32view = new Uint32Array(buf);
+        const f32view = new Float32Array(buf);
+        u32view[0] = numElements;
+        f32view[1] = lr;
+        f32view[2] = momentum;
+        u32view[3] = dispatchX;
+        device.queue.writeBuffer(paramsBuffer, 0, u32view);
       } else if (inst.op === 'sum' || inst.op === 'max') {
         // Handled entirely dynamically below, but we need to bypass normal flow
         wgslCode = inst.op === 'sum' ? SUM_WGSL : MAX_WGSL;
@@ -1395,6 +1449,21 @@ async function _executeGraphCore(
           { binding: 2, resource: { buffer: idToBuffer[inst.in![1]] } },
           { binding: 3, resource: { buffer: idToBuffer[inst.in![2]] } },
           { binding: 4, resource: { buffer: outBuffer } },
+        ];
+      } else if (inst.op === 'adam_step') {
+        bindGroupEntries = [
+          { binding: 0, resource: { buffer: paramsBuffer } },
+          { binding: 1, resource: { buffer: idToBuffer[inst.in![1]] } }, // grad (read)
+          { binding: 2, resource: { buffer: idToBuffer[inst.in![2]] } }, // m (read_write)
+          { binding: 3, resource: { buffer: idToBuffer[inst.in![3]] } }, // v (read_write)
+          { binding: 4, resource: { buffer: outBuffer } },               // param (read_write)
+        ];
+      } else if (inst.op === 'sgd_momentum_step') {
+        bindGroupEntries = [
+          { binding: 0, resource: { buffer: paramsBuffer } },
+          { binding: 1, resource: { buffer: idToBuffer[inst.in![1]] } }, // grad (read)
+          { binding: 2, resource: { buffer: idToBuffer[inst.in![2]] } }, // velocity (read_write)
+          { binding: 3, resource: { buffer: outBuffer } },               // param (read_write)
         ];
       } else if (inst.op === 'gather' || inst.op === 'scatter') {
         bindGroupEntries = [

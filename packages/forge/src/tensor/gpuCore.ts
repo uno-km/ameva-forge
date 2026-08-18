@@ -80,6 +80,8 @@ import { SWIGLU_WGSL } from "./kernels/swiglu.wgsl";
 import { UNPACK_QUANT_WGSL } from "./kernels/unpack_quant.wgsl";
 import { EMBEDDING_WGSL } from "./kernels/embedding.wgsl";
 import { EMBEDDING_BACKWARD_WGSL } from "./kernels/embedding_backward.wgsl";
+import { ADAM_STEP_WGSL } from "./kernels/adam_step.wgsl";
+import { SGD_MOMENTUM_STEP_WGSL } from "./kernels/sgd_momentum_step.wgsl";
 
 // WebGPU Buffer Usage bitmasks with Node.js environment fallback
 const BUFFER_USAGE_STORAGE_SRC = typeof GPUBufferUsage !== 'undefined'
@@ -111,6 +113,8 @@ export const KERNEL_REGISTRY: ReadonlyMap<string, string> = new Map([
   ['unpack_quant', UNPACK_QUANT_WGSL],
   ['embedding', EMBEDDING_WGSL],
   ['embedding_backward', EMBEDDING_BACKWARD_WGSL],
+  ['adam_step', ADAM_STEP_WGSL],
+  ['sgd_momentum_step', SGD_MOMENTUM_STEP_WGSL],
   ['relu', RELU_WGSL],
   ['add', ADD_WGSL],
   ['mul', MUL_WGSL],
@@ -559,9 +563,13 @@ function dispatchKernel(opts: KernelDispatchOptions): void {
   device.queue.submit([commandEncoder.finish()]);
 
   // params 버퍼는 GPU 제출 완료 후 중앙 allocator를 통해 해제
-  void device.queue.onSubmittedWorkDone().then(() => {
+  if (typeof device.queue.onSubmittedWorkDone === 'function') {
+    void device.queue.onSubmittedWorkDone().then(() => {
+      try { freeBuffer(paramsBuffer, paramsToken); } catch (e) { _safeLog(`[gpuCore] Failed to free params buffer: ${e}`); }
+    });
+  } else {
     try { freeBuffer(paramsBuffer, paramsToken); } catch (e) { _safeLog(`[gpuCore] Failed to free params buffer: ${e}`); }
-  });
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1222,6 +1230,92 @@ export function embedding_backward(
   });
 }
 
+/**
+ * WHAT: GPU 상에서 Adam Optimizer의 1-Pass 융합 파라미터 업데이트를 수행합니다.
+ * WHY: VRAM 내에서 param, grad, m, v를 단일 커널로 인플레이스 갱신하여 초고속 파인튜닝을 지원하기 위함입니다.
+ */
+export function adam_step(
+  handleParam: TensorHandle,
+  handleGrad: TensorHandle,
+  handleM: TensorHandle,
+  handleV: TensorHandle,
+  lr: number,
+  beta1: number,
+  beta2: number,
+  eps: number,
+  t: number
+): void {
+  const param = _globalRegistry.get(handleParam);
+  const grad = _globalRegistry.get(handleGrad);
+  const m = _globalRegistry.get(handleM);
+  const v = _globalRegistry.get(handleV);
+
+  const numElements = param.shape.reduce((a, b) => a * b, 1);
+  const beta1_power = Math.pow(beta1, t);
+  const beta2_power = Math.pow(beta2, t);
+
+  const { dispatchX, dispatchY } = computeDispatch2D(numElements, 64);
+
+  const paramsArray = new ArrayBuffer(32);
+  const u32View = new Uint32Array(paramsArray);
+  const f32View = new Float32Array(paramsArray);
+  u32View[0] = numElements;
+  f32View[1] = lr;
+  f32View[2] = beta1;
+  f32View[3] = beta2;
+  f32View[4] = eps;
+  f32View[5] = beta1_power;
+  f32View[6] = beta2_power;
+  u32View[7] = dispatchX;
+
+  dispatchKernel({
+    opKey: 'adam_step',
+    wgslCode: ADAM_STEP_WGSL,
+    paramsData: u32View,
+    inputBuffers: [grad.buffer, m.buffer, v.buffer],
+    outBuffer: param.buffer,
+    dispatchX,
+    dispatchY,
+  });
+}
+
+/**
+ * WHAT: GPU 상에서 Momentum SGD의 1-Pass 융합 파라미터 업데이트를 수행합니다.
+ * WHY: VRAM 내에서 velocity와 param을 단일 커널로 인플레이스 갱신하기 위함입니다.
+ */
+export function sgd_momentum_step(
+  handleParam: TensorHandle,
+  handleGrad: TensorHandle,
+  handleVelocity: TensorHandle,
+  lr: number,
+  momentum: number
+): void {
+  const param = _globalRegistry.get(handleParam);
+  const grad = _globalRegistry.get(handleGrad);
+  const vel = _globalRegistry.get(handleVelocity);
+
+  const numElements = param.shape.reduce((a, b) => a * b, 1);
+  const { dispatchX, dispatchY } = computeDispatch2D(numElements, 64);
+
+  const paramsArray = new ArrayBuffer(16);
+  const u32View = new Uint32Array(paramsArray);
+  const f32View = new Float32Array(paramsArray);
+  u32View[0] = numElements;
+  f32View[1] = lr;
+  f32View[2] = momentum;
+  u32View[3] = dispatchX;
+
+  dispatchKernel({
+    opKey: 'sgd_momentum_step',
+    wgslCode: SGD_MOMENTUM_STEP_WGSL,
+    paramsData: u32View,
+    inputBuffers: [grad.buffer, vel.buffer],
+    outBuffer: param.buffer,
+    dispatchX,
+    dispatchY,
+  });
+}
+
 export const gpuCore = {
   add,
   mul,
@@ -1234,10 +1328,13 @@ export const gpuCore = {
   unpackQuant,
   embedding,
   embedding_backward,
+  adam_step,
+  sgd_momentum_step,
   relu,
   relu_backward,
   transpose,
 };
+
 
 
 
