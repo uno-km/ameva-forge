@@ -114,19 +114,18 @@ fn main(
     s_dot[thread_id] = part_dot;
     workgroupBarrier();
 
-    // 2단 병렬 리덕션 (32 -> 1)
-    if (thread_id < 32u) {
-      s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 32u];
-    }
+    // 6단계 완전 병렬 트리 리덕션 (64 -> 32 -> 16 -> 8 -> 4 -> 2 -> 1)
+    if (thread_id < 32u) { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 32u]; }
     workgroupBarrier();
-
-    if (thread_id == 0u) {
-      var total_dot: f32 = 0.0;
-      for (var r: u32 = 0u; r < 32u; r = r + 1u) {
-        total_dot = total_dot + s_dot[r];
-      }
-      s_dot[0] = total_dot;
-    }
+    if (thread_id < 16u) { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 16u]; }
+    workgroupBarrier();
+    if (thread_id < 8u) { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 8u]; }
+    workgroupBarrier();
+    if (thread_id < 4u) { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 4u]; }
+    workgroupBarrier();
+    if (thread_id < 2u) { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 2u]; }
+    workgroupBarrier();
+    if (thread_id < 1u) { s_dot[0] = s_dot[0] + s_dot[1]; }
     workgroupBarrier();
 
     let score = s_dot[0] * params.scale;

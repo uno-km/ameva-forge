@@ -58,7 +58,11 @@ def test_policy_gradient_agent_forward_and_action():
 
 
 def test_models_on_gpu_lazy_dag():
-    # LLaMA-3 GPU DAG
+    from forge.tensor import build_lazy_topo
+    from forge.graph import GraphBuilder
+    import json
+
+    # 1. LLaMA-3 GPU DAG & AST Compilation
     llama_cfg = LlamaConfig(vocab_size=32, hidden_size=16, intermediate_size=32, num_hidden_layers=1, num_attention_heads=2, num_key_value_heads=2, device="gpu")
     llama = LlamaForCausalLM(llama_cfg)
     idx_gpu = torch.tensor([[1, 2, 3]], dtype="int32", device="gpu")
@@ -67,7 +71,29 @@ def test_models_on_gpu_lazy_dag():
     assert llama_out.shape == (1, 3, 32)
     assert llama_out._lazy_op is not None
 
-    # NanoGPT GPU DAG
+    topo_llama = build_lazy_topo(llama_out)
+    builder_llama = GraphBuilder()
+    node_id_map = {}
+    for v in topo_llama:
+        if v._handle is not None:
+            node_id_map[id(v)] = builder_llama.add_load(v.shape, v._handle)
+        elif v._lazy_op == 'upload':
+            node_id_map[id(v)] = builder_llama.add_upload(v.shape, v._data)
+        else:
+            in_ids = [node_id_map[id(p)] for p in v._parents]
+            node_id_map[id(v)] = builder_llama.add_op(v._lazy_op, v.shape, in_ids, v._lazy_params)
+    insts_json, _ = builder_llama.compile()
+    insts = json.loads(insts_json)
+
+    # Verify native embedding node exists with valid inputs and shapes
+    embedding_nodes = [n for n in insts if n.get("op") == "embedding"]
+    assert len(embedding_nodes) >= 1
+    emb_node = embedding_nodes[0]
+    assert len(emb_node["in"]) == 2
+    assert emb_node["shape"] == [1, 3, 16]
+    assert emb_node["params"] == [3, 16, 32, 0]
+
+    # 2. NanoGPT GPU DAG & AST Compilation
     gpt_cfg = GPTConfig(block_size=8, vocab_size=32, n_layer=1, n_head=2, n_embd=16, device="gpu")
     gpt = GPT(gpt_cfg)
     gpt_out = gpt(idx_gpu)
@@ -75,12 +101,29 @@ def test_models_on_gpu_lazy_dag():
     assert gpt_out.shape == (1, 3, 32)
     assert gpt_out._lazy_op is not None
 
-    # PolicyGradientAgent GPU DAG
+    topo_gpt = build_lazy_topo(gpt_out)
+    builder_gpt = GraphBuilder()
+    node_id_map_gpt = {}
+    for v in topo_gpt:
+        if v._handle is not None:
+            node_id_map_gpt[id(v)] = builder_gpt.add_load(v.shape, v._handle)
+        elif v._lazy_op == 'upload':
+            node_id_map_gpt[id(v)] = builder_gpt.add_upload(v.shape, v._data)
+        else:
+            in_ids = [node_id_map_gpt[id(p)] for p in v._parents]
+            node_id_map_gpt[id(v)] = builder_gpt.add_op(v._lazy_op, v.shape, in_ids, v._lazy_params)
+    gpt_insts_json, _ = builder_gpt.compile()
+    gpt_insts = json.loads(gpt_insts_json)
+    gpt_emb_nodes = [n for n in gpt_insts if n.get("op") == "embedding"]
+    assert len(gpt_emb_nodes) >= 1
+
+    # 3. PolicyGradientAgent GPU DAG
     pg_agent = PolicyGradientAgent(state_dim=4, hidden_dim=8, action_dim=2, device="gpu")
     st_gpu = torch.tensor([[0.1, 0.2, 0.3, 0.4]], dtype="float32", device="gpu")
     pg_out = pg_agent(st_gpu)
     assert pg_out.device == "gpu"
     assert pg_out.shape == (1, 2)
+
 
 
 def test_cartpole_env():

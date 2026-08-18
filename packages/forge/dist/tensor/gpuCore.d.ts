@@ -135,6 +135,12 @@ export declare function rmsNorm(handleX: TensorHandle, handleGamma?: TensorHandl
 export declare function rope(handleX: TensorHandle, baseFreq?: number, offsetPos?: number): TensorHandle;
 export declare function swiglu(handleGate: TensorHandle, handleUp: TensorHandle): TensorHandle;
 export declare function unpackQuant(handlePacked: TensorHandle, handleScales: TensorHandle, handleZeros: TensorHandle, bits: number | undefined, groupSize: number | undefined, numElements: number): TensorHandle;
+/**
+ * WHAT: 단어/토큰 인덱스 텐서와 가중치 행렬을 받아 WebGPU 상에서 임베딩 룩업을 수행합니다.
+ * WHY: 트랜스포머 언어 모델의 첫 번째 계층인 토큰 임베딩을 브라우저 GPU 상에서 일괄 가속하기 위함입니다.
+ * HOW: embedding.wgsl 컴퓨트 셰이더를 2D 그리드로 디스패치하여 대상 버퍼에 복사합니다.
+ */
+export declare function embedding(handleWeight: TensorHandle, handleIndex: TensorHandle): TensorHandle;
 export declare const gpuCore: {
     add: typeof add;
     mul: typeof mul;
@@ -145,6 +151,7 @@ export declare const gpuCore: {
     rope: typeof rope;
     swiglu: typeof swiglu;
     unpackQuant: typeof unpackQuant;
+    embedding: typeof embedding;
     relu: typeof relu;
     relu_backward: typeof relu_backward;
     transpose: typeof transpose;

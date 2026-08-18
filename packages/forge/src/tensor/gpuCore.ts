@@ -78,6 +78,7 @@ import { ROPE_WGSL } from "./kernels/rope.wgsl";
 import { RMSNORM_WGSL } from "./kernels/rmsnorm.wgsl";
 import { SWIGLU_WGSL } from "./kernels/swiglu.wgsl";
 import { UNPACK_QUANT_WGSL } from "./kernels/unpack_quant.wgsl";
+import { EMBEDDING_WGSL } from "./kernels/embedding.wgsl";
 
 // WebGPU Buffer Usage bitmasks with Node.js environment fallback
 const BUFFER_USAGE_STORAGE_SRC = typeof GPUBufferUsage !== 'undefined'
@@ -107,6 +108,7 @@ export const KERNEL_REGISTRY: ReadonlyMap<string, string> = new Map([
   ['rmsnorm', RMSNORM_WGSL],
   ['swiglu', SWIGLU_WGSL],
   ['unpack_quant', UNPACK_QUANT_WGSL],
+  ['embedding', EMBEDDING_WGSL],
   ['relu', RELU_WGSL],
   ['add', ADD_WGSL],
   ['mul', MUL_WGSL],
@@ -1110,6 +1112,57 @@ export function unpackQuant(
   return _globalRegistry.register({ buffer: outBuffer, token, shape: [numElements], dtype: "float32", byteLength });
 }
 
+/**
+ * WHAT: 단어/토큰 인덱스 텐서와 가중치 행렬을 받아 WebGPU 상에서 임베딩 룩업을 수행합니다.
+ * WHY: 트랜스포머 언어 모델의 첫 번째 계층인 토큰 임베딩을 브라우저 GPU 상에서 일괄 가속하기 위함입니다.
+ * HOW: embedding.wgsl 컴퓨트 셰이더를 2D 그리드로 디스패치하여 대상 버퍼에 복사합니다.
+ */
+export function embedding(handleWeight: TensorHandle, handleIndex: TensorHandle): TensorHandle {
+  const weight = _globalRegistry.get(handleWeight);
+  const index = _globalRegistry.get(handleIndex);
+
+  if (weight.shape.length !== 2) {
+    throw new AMEVAForgeShapeError(
+      `[AMEVA Forge] embedding: weight must be 2D [vocab_size, embedding_dim], got shape [${weight.shape.join(", ")}]`
+    );
+  }
+
+  const vocabSize = weight.shape[0];
+  const embeddingDim = weight.shape[1];
+  const numTokens = index.shape.reduce((a, b) => a * b, 1);
+  const outShape = [...index.shape, embeddingDim];
+  const totalElements = numTokens * embeddingDim;
+  const byteLength = totalElements * 4;
+
+  const { buffer: outBuffer, token } = allocateBuffer(
+    byteLength,
+    BUFFER_USAGE_STORAGE_SRC,
+    'tensor',
+    'gpuCore_embedding'
+  );
+
+  const paramsArray = new Uint32Array([
+    numTokens,
+    embeddingDim,
+    vocabSize,
+    0, // 16-byte alignment pad
+  ]);
+
+  const { dispatchX, dispatchY } = computeDispatch2D(numTokens);
+
+  dispatchKernel({
+    opKey: 'embedding',
+    wgslCode: EMBEDDING_WGSL,
+    paramsData: paramsArray,
+    inputBuffers: [weight.buffer, index.buffer],
+    outBuffer,
+    dispatchX,
+    dispatchY,
+  });
+
+  return _globalRegistry.register({ buffer: outBuffer, token, shape: outShape, dtype: "float32", byteLength });
+}
+
 export const gpuCore = {
   add,
   mul,
@@ -1120,9 +1173,11 @@ export const gpuCore = {
   rope,
   swiglu,
   unpackQuant,
+  embedding,
   relu,
   relu_backward,
   transpose,
 };
+
 
 

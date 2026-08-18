@@ -4396,19 +4396,18 @@ fn main(
     s_dot[thread_id] = part_dot;
     workgroupBarrier();
 
-    // 2단 병렬 리덕션 (32 -> 1)
-    if (thread_id < 32u) {
-      s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 32u];
-    }
+    // 6단계 완전 병렬 트리 리덕션 (64 -> 32 -> 16 -> 8 -> 4 -> 2 -> 1)
+    if (thread_id < 32u) { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 32u]; }
     workgroupBarrier();
-
-    if (thread_id == 0u) {
-      var total_dot: f32 = 0.0;
-      for (var r: u32 = 0u; r < 32u; r = r + 1u) {
-        total_dot = total_dot + s_dot[r];
-      }
-      s_dot[0] = total_dot;
-    }
+    if (thread_id < 16u) { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 16u]; }
+    workgroupBarrier();
+    if (thread_id < 8u) { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 8u]; }
+    workgroupBarrier();
+    if (thread_id < 4u) { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 4u]; }
+    workgroupBarrier();
+    if (thread_id < 2u) { s_dot[thread_id] = s_dot[thread_id] + s_dot[thread_id + 2u]; }
+    workgroupBarrier();
+    if (thread_id < 1u) { s_dot[0] = s_dot[0] + s_dot[1]; }
     workgroupBarrier();
 
     let score = s_dot[0] * params.scale;
@@ -4693,6 +4692,70 @@ fn main(
 `;
 
     /**
+     * ============================================================================
+     * [FILE METADATA]
+     * Project: AMEVA-Forge
+     * File: packages/forge/src/tensor/kernels/embedding.wgsl.ts
+     * Type: WebGPU WGSL Compute Kernel (Native Embedding Lookup)
+     * Created: 2026-08-18T23:18:00+09:00
+     * ============================================================================
+     * WHAT:
+     *   단어/토큰 인덱스 텐서([B, L])를 입력받아 임베딩 가중치 행렬([Vocab, D])에서
+     *   해당 행 벡터를 추출하여 [B, L, D] 텐서를 생성하는 WebGPU Native 임베딩 룩업 커널입니다.
+     * WHY:
+     *   다차원 gather 커널을 오용할 때 발생하는 스키마 불일치 및 인덱스 OOB 읽기 오류를
+     *   원천 차단하고, 2D 그리드 디스패치를 통해 수백만 토큰까지 안전하고 빠르게 룩업하기 위함입니다.
+     * HOW:
+     *   워크그룹당 1개의 토큰 인덱스를 처리하며, 64개 워크그룹 스레드가 협력하여
+     *   embedding_dim 차원의 부동소수점 데이터를 고속 복사합니다.
+     */
+    const EMBEDDING_WGSL = /* wgsl */ `
+struct EmbeddingParams {
+  num_tokens: u32,
+  embedding_dim: u32,
+  vocab_size: u32,
+  pad: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: EmbeddingParams;
+@group(0) @binding(1) var<storage, read> weight: array<f32>;
+@group(0) @binding(2) var<storage, read> index: array<f32>;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+
+@compute @workgroup_size(64, 1, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let thread_id = local_id.x;
+  let flat_token_idx = workgroup_id.x + workgroup_id.y * 65535u;
+
+  if (flat_token_idx >= params.num_tokens) {
+    return;
+  }
+
+  // Float32Array 형태로 전달된 정수 인덱스 읽기 (안전한 정수 캐스팅)
+  let raw_idx = index[flat_token_idx];
+  var token_id: u32 = 0u;
+
+  if (raw_idx >= 0.0 && raw_idx < f32(params.vocab_size)) {
+    token_id = u32(raw_idx);
+  } else {
+    // Vocab 범위를 벗어난 OOB 인덱스는 0으로 클램프하거나 0 벡터 출력
+    token_id = 0u;
+  }
+
+  let weight_row_offset = token_id * params.embedding_dim;
+  let out_token_offset = flat_token_idx * params.embedding_dim;
+
+  // 64개 스레드가 embedding_dim 차원을 협력 복사
+  for (var d: u32 = thread_id; d < params.embedding_dim; d = d + 64u) {
+    out[out_token_offset + d] = weight[weight_row_offset + d];
+  }
+}
+`;
+
+    /**
      * Created: 2026-08-12T12:14:52+09:00
      * Modified:
      *   - 2026-08-12T12:59:35+09:00: Feat: Introduce v3.0 features (CNN, Pooling, Dropout, Serialization)
@@ -4733,6 +4796,7 @@ fn main(
         ['rmsnorm', RMSNORM_WGSL],
         ['swiglu', SWIGLU_WGSL],
         ['unpack_quant', UNPACK_QUANT_WGSL],
+        ['embedding', EMBEDDING_WGSL],
         ['relu', RELU_WGSL],
         ['add', ADD_WGSL],
         ['mul', MUL_WGSL],
@@ -5607,6 +5671,42 @@ fn main(
         });
         return _globalRegistry.register({ buffer: outBuffer, token, shape: [numElements], dtype: "float32", byteLength });
     }
+    /**
+     * WHAT: 단어/토큰 인덱스 텐서와 가중치 행렬을 받아 WebGPU 상에서 임베딩 룩업을 수행합니다.
+     * WHY: 트랜스포머 언어 모델의 첫 번째 계층인 토큰 임베딩을 브라우저 GPU 상에서 일괄 가속하기 위함입니다.
+     * HOW: embedding.wgsl 컴퓨트 셰이더를 2D 그리드로 디스패치하여 대상 버퍼에 복사합니다.
+     */
+    function embedding(handleWeight, handleIndex) {
+        const weight = _globalRegistry.get(handleWeight);
+        const index = _globalRegistry.get(handleIndex);
+        if (weight.shape.length !== 2) {
+            throw new AMEVAForgeShapeError(`[AMEVA Forge] embedding: weight must be 2D [vocab_size, embedding_dim], got shape [${weight.shape.join(", ")}]`);
+        }
+        const vocabSize = weight.shape[0];
+        const embeddingDim = weight.shape[1];
+        const numTokens = index.shape.reduce((a, b) => a * b, 1);
+        const outShape = [...index.shape, embeddingDim];
+        const totalElements = numTokens * embeddingDim;
+        const byteLength = totalElements * 4;
+        const { buffer: outBuffer, token } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_SRC$1, 'tensor', 'gpuCore_embedding');
+        const paramsArray = new Uint32Array([
+            numTokens,
+            embeddingDim,
+            vocabSize,
+            0, // 16-byte alignment pad
+        ]);
+        const { dispatchX, dispatchY } = computeDispatch2D(numTokens);
+        dispatchKernel({
+            opKey: 'embedding',
+            wgslCode: EMBEDDING_WGSL,
+            paramsData: paramsArray,
+            inputBuffers: [weight.buffer, index.buffer],
+            outBuffer,
+            dispatchX,
+            dispatchY,
+        });
+        return _globalRegistry.register({ buffer: outBuffer, token, shape: outShape, dtype: "float32", byteLength });
+    }
     const gpuCore = {
         add,
         mul,
@@ -5617,6 +5717,7 @@ fn main(
         rope,
         swiglu,
         unpackQuant,
+        embedding,
         relu,
         relu_backward,
         transpose,
@@ -5648,7 +5749,7 @@ fn main(
         'sub', 'neg', 'div', 'exp', 'log', 'sigmoid', 'tanh', 'sigmoid_backward', 'tanh_backward',
         'fill', 'sum', 'max', 'sum_axis', 'max_axis', 'max_axis_backward', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
         'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape',
-        'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant'
+        'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant', 'embedding'
     ]);
     const DEFAULT_RUNTIME_CONFIG = {
         workloadBudgetElements: 100_000_000,
@@ -5855,6 +5956,7 @@ fn main(
             'matmul_bias_relu': { minIn: 3, exactIn: true, minParams: 3, exactParams: true },
             'batched_matmul': { minIn: 2, exactIn: true, minParams: 4, exactParams: false },
             'where': { minIn: 3, exactIn: true, minParams: 0, exactParams: false },
+            'embedding': { minIn: 2, exactIn: true, minParams: 0, exactParams: false },
             'cat': { minIn: 2, exactIn: false, minParams: 1, exactParams: false } // 가변 개수 입력, params는 axis 등
         };
         const opStr = i.op;
@@ -6627,6 +6729,18 @@ fn main(
                     const groupSize = inst.params?.[1] ?? 128;
                     const p = new Uint32Array([numElements, bits, groupSize, 0]);
                     const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(Math.ceil(numElements / 64));
+                    dispatchX = dx;
+                    dispatchY = dy;
+                    dispatchZ = 1;
+                    device.queue.writeBuffer(paramsBuffer, 0, p);
+                }
+                else if (inst.op === 'embedding') {
+                    wgslCode = EMBEDDING_WGSL;
+                    const embeddingDim = inst.shape[inst.shape.length - 1];
+                    const numTokens = inst.shape.slice(0, -1).reduce((a, b) => a * b, 1);
+                    const vocabSize = inst.params?.[2] ?? 1000000;
+                    const p = new Uint32Array([numTokens, embeddingDim, vocabSize, 0]);
+                    const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numTokens);
                     dispatchX = dx;
                     dispatchY = dy;
                     dispatchZ = 1;
@@ -7427,6 +7541,7 @@ fn main(
     exports.computeDispatch2D = computeDispatch2D;
     exports.configureRuntime = configureRuntime;
     exports.dispose = dispose;
+    exports.embedding = embedding;
     exports.ensureFloat32Array = ensureFloat32Array;
     exports.executeGraph = executeGraph;
     exports.flashAttention = flashAttention;

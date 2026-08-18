@@ -71,6 +71,7 @@ import { ROPE_WGSL } from "./kernels/rope.wgsl";
 import { RMSNORM_WGSL } from "./kernels/rmsnorm.wgsl";
 import { SWIGLU_WGSL } from "./kernels/swiglu.wgsl";
 import { UNPACK_QUANT_WGSL } from "./kernels/unpack_quant.wgsl";
+import { EMBEDDING_WGSL } from "./kernels/embedding.wgsl";
 
 /** 
  * WHAT: 그래프 실행기가 처리할 수 있는 모든 허용된 오퍼레이션(op)의 집합입니다.
@@ -82,7 +83,7 @@ const ALLOWED_OPS = new Set([
   'sub', 'neg', 'div', 'exp', 'log', 'sigmoid', 'tanh', 'sigmoid_backward', 'tanh_backward',
   'fill', 'sum', 'max', 'sum_axis', 'max_axis', 'max_axis_backward', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
   'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape',
-  'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant'
+  'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant', 'embedding'
 ]);
 
 export type ForgeRuntimeConfig = {
@@ -354,6 +355,7 @@ function validateInstruction(inst: unknown, idx: number): GraphInstruction {
     'matmul_bias_relu': { minIn: 3, exactIn: true, minParams: 3, exactParams: true },
     'batched_matmul': { minIn: 2, exactIn: true, minParams: 4, exactParams: false },
     'where': { minIn: 3, exactIn: true, minParams: 0, exactParams: false },
+    'embedding': { minIn: 2, exactIn: true, minParams: 0, exactParams: false },
     'cat': { minIn: 2, exactIn: false, minParams: 1, exactParams: false } // 가변 개수 입력, params는 axis 등
   };
 
@@ -1175,6 +1177,17 @@ async function _executeGraphCore(
         const groupSize = inst.params?.[1] ?? 128;
         const p = new Uint32Array([numElements, bits, groupSize, 0]);
         const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(Math.ceil(numElements / 64));
+        dispatchX = dx;
+        dispatchY = dy;
+        dispatchZ = 1;
+        device.queue.writeBuffer(paramsBuffer, 0, p);
+      } else if (inst.op === 'embedding') {
+        wgslCode = EMBEDDING_WGSL;
+        const embeddingDim = inst.shape[inst.shape.length - 1];
+        const numTokens = inst.shape.slice(0, -1).reduce((a, b) => a * b, 1);
+        const vocabSize = inst.params?.[2] ?? 1000000;
+        const p = new Uint32Array([numTokens, embeddingDim, vocabSize, 0]);
+        const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numTokens);
         dispatchX = dx;
         dispatchY = dy;
         dispatchZ = 1;

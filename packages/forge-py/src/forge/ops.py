@@ -20,6 +20,7 @@ NL-05 Fix: ones_like를 공개 API로 노출.
 # WHAT: numpy 라이브러리를 임포트합니다.
 # WHY: 다차원 배열 연산 및 수학 함수 기능을 고속으로 처리하기 위함입니다.
 # HOW: np라는 별칭으로 사용하여 텐서의 내부 데이터(_data)를 다룹니다.
+import math
 import numpy as np
 
 # WHAT: typing 모듈에서 타입 힌팅을 위한 요소들을 임포트합니다.
@@ -2248,8 +2249,13 @@ class EmbeddingFunction(Function):
         ctx.save_for_backward(weight, index)
         out_shape = index.shape + (weight.shape[-1],)
         if weight.device == "gpu" and index.device == "gpu":
+            num_tokens = math.prod(index.shape)
+            embedding_dim = weight.shape[-1]
+            vocab_size = weight.shape[0]
+            op_params = [num_tokens, embedding_dim, vocab_size, 0]
             return Tensor(shape=out_shape, dtype="float32", device="gpu",
-                          op="gather", parents=(weight, index),
+                          op="embedding", parents=(weight, index),
+                          op_params=op_params,
                           requires_grad=weight.requires_grad)
         data_w = _require_cpu_data(weight, "weight")
         data_i = _require_cpu_data(index, "index").astype(int)
