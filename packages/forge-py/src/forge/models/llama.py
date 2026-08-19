@@ -200,9 +200,8 @@ class LlamaForCausalLM(nn.Module):
             for _ in range(max_new_tokens):
                 inp = tensor([generated], dtype="int32", device=device)
                 logits = self.forward(inp)  # [1, L, vocab_size]
-                last_token_logits = logits[0, -1, :]
-                np_logits = await last_token_logits.numpy_async()
-                next_token = int(np_logits.argmax())
+                np_logits = await logits.numpy_async()
+                next_token = int(np_logits[0, -1, :].argmax())
                 generated.append(next_token)
             return generated
 
@@ -210,9 +209,8 @@ class LlamaForCausalLM(nn.Module):
         # 1. Prefill Step (Process initial prompt)
         inp = tensor([prompt_tokens], dtype="int32", device=device)
         logits, past_kvs = self.forward(inp, use_cache=True, offset_pos=0)
-        last_token_logits = logits[0, -1, :]
-        np_logits = await last_token_logits.numpy_async()
-        next_token = int(np_logits.argmax())
+        np_logits = await logits.numpy_async()
+        next_token = int(np_logits[0, -1, :].argmax())
         generated.append(next_token)
 
         # 2. Decode Steps (Single token forward per step)
@@ -220,9 +218,8 @@ class LlamaForCausalLM(nn.Module):
             inp = tensor([[next_token]], dtype="int32", device=device)
             offset = len(prompt_tokens) + step - 1
             logits, past_kvs = self.forward(inp, past_key_values=past_kvs, offset_pos=offset, use_cache=True)
-            last_token_logits = logits[0, -1, :]
-            np_logits = await last_token_logits.numpy_async()
-            next_token = int(np_logits.argmax())
+            np_logits = await logits.numpy_async()
+            next_token = int(np_logits[0, -1, :].argmax())
             generated.append(next_token)
 
         return generated

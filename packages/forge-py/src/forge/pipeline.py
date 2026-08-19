@@ -54,11 +54,11 @@ class TextGenerationPipeline:
             for _ in range(max_new_tokens):
                 inp = tensor([curr], dtype="int32", device=self.device)
                 logits = self.model(inp)
-                last_logits = logits[0, -1, :]
-                np_logits = await last_logits.numpy_async()
+                np_logits = await logits.numpy_async()
+                last_logits = np_logits[0, -1, :]
                 
                 # Scaled temperature sampling
-                probs = np.exp(np_logits / max(temperature, 1e-4))
+                probs = np.exp(last_logits / max(temperature, 1e-4))
                 probs = probs / np.sum(probs)
                 next_token = int(np.random.choice(len(probs), p=probs))
                 curr.append(next_token)
