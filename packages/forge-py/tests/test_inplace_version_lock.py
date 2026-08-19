@@ -195,6 +195,16 @@ class TestInplaceVersionLock(unittest.TestCase):
         self.assertEqual(x_zero.grad.numpy()[0], 0.0) # Masked 0.0
         self.assertAlmostEqual(x_zero.grad.numpy()[1], 0.25) # 0.5 * 4^(-0.5) = 0.25
 
+        # 3. GPU Power AST decomposition verification
+        from forge.graph import GraphBuilder
+        x_gpu = tensor([2.0, 4.0], device="gpu")
+        y_gpu = x_gpu ** 3.0
+        gb = GraphBuilder()
+        gb.add_tensor(y_gpu)
+        insts_json, inputs = gb.compile()
+        self.assertIn("log", insts_json)
+        self.assertIn("exp", insts_json)
+
     def test_cross_entropy_soft_targets(self):
         """Tests that functional.cross_entropy accurately handles 2D soft probability targets."""
         from forge.functional import cross_entropy
@@ -207,6 +217,14 @@ class TestInplaceVersionLock(unittest.TestCase):
         loss.backward()
         self.assertIsNotNone(preds.grad)
         self.assertEqual(preds.grad.shape, (2, 3))
+
+    def test_tensor_setitem_cpu(self):
+        """Tests that __setitem__ mutates CPU tensor and increments version."""
+        x = tensor([10.0, 20.0, 30.0])
+        self.assertEqual(x._version, 0)
+        x[1] = 99.0
+        self.assertEqual(x._version, 1)
+        np.testing.assert_allclose(x.numpy(), [10.0, 99.0, 30.0])
 
 
 if __name__ == '__main__':

@@ -1289,6 +1289,22 @@ class Tensor:
         from .ops import slice_op
         return slice_op(self, key)
 
+    def __setitem__(self, key, value):
+        """
+        WHAT: 인덱싱 문법(예: tensor[0] = 5.0)을 사용하여 텐서의 특정 위치 값을 변경합니다.
+        WHY: 배열 슬라이스 갱신 및 마스킹 처리를 수행하기 위함입니다.
+        HOW: CPU 텐서인 경우 내부 버퍼를 수정하고 버전을 증가시키며, GPU 텐서인 경우 scatter 또는 CPU 전이를 안내합니다.
+        """
+        self._check_disposed()
+        if self.device == 'cpu' and self._data is not None:
+            if isinstance(value, Tensor):
+                self._data[key] = value.numpy()
+            else:
+                self._data[key] = value
+            self._version += 1
+        else:
+            raise NotImplementedError("Direct in-place item assignment on GPU tensors is not supported. Transfer to CPU or use functional scatter.")
+
     def __repr__(self) -> str:
         """
         WHAT: 텐서 객체를 문자열로 표현(출력)합니다.

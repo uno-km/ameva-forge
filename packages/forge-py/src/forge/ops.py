@@ -2577,9 +2577,17 @@ class PowFunction(Function):
             data = _require_cpu_data(x, 'x') ** exponent
             return Tensor(shape=x.shape, dtype=x.dtype, device='cpu', data=data)
         else:
-            if exponent == 2.0:
+            if exponent == 0.0:
+                return full(x.shape, 1.0, dtype=x.dtype, device='gpu')
+            elif exponent == 1.0:
+                return clone(x)
+            elif exponent == 2.0:
                 return mul(x, x)
-            return Tensor(shape=x.shape, dtype=x.dtype, device='gpu', op='pow', parents=(x,), op_params=[float(exponent)])
+            elif exponent == 0.5:
+                return sqrt(x)
+            else:
+                p_t = full(x.shape, float(exponent), dtype=x.dtype, device='gpu')
+                return exp_op(mul(log_op(x), p_t))
 
     @staticmethod
     def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, None]:
