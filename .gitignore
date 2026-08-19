@@ -53,7 +53,10 @@ packages/forge/test-artifacts/
 packages/forge-py/tests/test_results.json
 
 # Large model weights
-mnist_weights.json
+!docs/experimental/playgrounds/mnist-weights.js
+!docs/experimental/playgrounds/mnist/mnist-weights.js
+!docs/experimental/playgrounds/mnist_weights.json
+!docs/experimental/playgrounds/mnist/mnist_weights.json
 
 # Python
 __pycache__/

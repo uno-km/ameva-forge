@@ -6,6 +6,7 @@
     <title data-i18n="playgrounds.mnistTitle">AMEVA-Forge: MNIST Inference</title>
     <link rel="icon" type="image/svg+xml" href="../../../favicon.svg">
     <link rel="stylesheet" href="../../../style.css">
+    <script src="./mnist-weights.js"></script>
     <script src="../../../dist/index.js"></script>
     <script src="../../../dist/forge-py-bundle.js"></script>
     <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
@@ -350,14 +351,18 @@
                     }
                 }
                 
-                let weightsData = null;
-                try {
-                    const wRes = await fetch('../mnist_weights.json').catch(() => null) || await fetch('../../mnist_weights.json').catch(() => null);
-                    if (wRes && wRes.ok) {
-                        weightsData = await wRes.json();
+                let weightsData = window.__FORGE_MNIST_WEIGHTS__ || null;
+                if (!weightsData) {
+                    try {
+                        const wRes = await fetch('./mnist-weights.js').catch(() => null) || await fetch('../mnist-weights.js').catch(() => null);
+                        if (wRes && wRes.ok) {
+                            const txt = await wRes.text();
+                            const jsonStr = txt.split('=', 1)[1].trim().replace(/;$/, '');
+                            weightsData = JSON.parse(jsonStr);
+                        }
+                    } catch (e) {
+                        console.warn("Could not fetch mnist-weights.js:", e);
                     }
-                } catch (e) {
-                    console.warn("Could not fetch mnist_weights.json:", e);
                 }
 
                 if (weightsData) {
@@ -429,21 +434,49 @@ import json
 
 raw = np.array(input_data, dtype=np.float32).reshape(280, 280)
 
+# Check if canvas is empty
 if np.max(raw) < 0.05:
     res = {"empty": True}
 else:
-    raw_tensor = fg.tensor(raw.reshape(1, 1, 280, 280))
-    pool = nn.AvgPool2d(10, 10)
-    x = pool(raw_tensor).reshape(1, 784)
-    x_np = x.numpy()
-    max_v = np.max(x_np)
-    if max_v > 0:
-        x_norm = fg.tensor(x_np / max_v)
-    else:
-        x_norm = x
+    # 1. Bounding box cropping
+    rows = np.any(raw > 0.05, axis=1)
+    cols = np.any(raw > 0.05, axis=0)
+    rmin, rmax = np.where(rows)[0][[0, -1]]
+    cmin, cmax = np.where(cols)[0][[0, -1]]
     
-    out = model(x_norm)
-    logits = out.numpy()[0]
+    h = rmax - rmin + 1
+    w = cmax - cmin + 1
+    crop = raw[rmin:rmax+1, cmin:cmax+1]
+    
+    # 2. Scale preserving aspect ratio to fit inside 20x20
+    if h > w:
+        new_h = 20
+        new_w = max(1, int(round(w * 20.0 / h)))
+    else:
+        new_w = 20
+        new_h = max(1, int(round(h * 20.0 / w)))
+        
+    resized = np.zeros((new_h, new_w), dtype=np.float32)
+    for i in range(new_h):
+        for j in range(new_w):
+            r0 = int(i * (h / new_h))
+            c0 = int(j * (w / new_w))
+            resized[i, j] = crop[min(r0, h-1), min(c0, w-1)]
+            
+    # 3. Center into 28x28
+    out_28 = np.zeros((28, 28), dtype=np.float32)
+    pad_top = (28 - new_h) // 2
+    pad_left = (28 - new_w) // 2
+    out_28[pad_top:pad_top+new_h, pad_left:pad_left+new_w] = resized
+    
+    # Normalize peak intensity
+    max_v = np.max(out_28)
+    if max_v > 0:
+        out_28 /= max_v
+        
+    x_tensor = fg.tensor(out_28.flatten().reshape(1, 784))
+    logits = model(x_tensor).numpy()[0]
+    
     exp_l = np.exp(logits - np.max(logits))
     probs = exp_l / np.sum(exp_l)
     pred_digit = int(np.argmax(probs))
