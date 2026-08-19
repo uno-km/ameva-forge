@@ -16,7 +16,7 @@ struct Params {
   d: u32,             // 헤드 차원 (반드시 짝수, 예: 64, 128)
   base_freq: f32,     // 기본 주파수 (예: 10000.0 또는 500000.0)
   offset_pos: u32,    // KV 캐시 오프셋 위치 (Prefill / Decode 단계별 시작 토큰 인덱스)
-  pad1: u32,
+  workgroupsX: u32,   // 2D 디스패치 X축 워크그룹 수
   pad2: u32,
 };
 
@@ -30,7 +30,7 @@ fn main(
   @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
   let thread_id = local_id.x;
-  let flat_token_idx = workgroup_id.x + workgroup_id.y * 65535u;
+  let flat_token_idx = workgroup_id.x + workgroup_id.y * params.workgroupsX;
   let total_tokens = params.B * params.H * params.N;
 
   if (flat_token_idx >= total_tokens) {

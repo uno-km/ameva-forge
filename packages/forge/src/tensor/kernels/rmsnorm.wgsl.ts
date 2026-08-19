@@ -13,6 +13,10 @@ struct Params {
   dim: u32,         // 은닉 차원 (Hidden Dim, 예: 2048, 4096)
   eps: f32,         // 수치 안정화 epsilon (예: 1e-5, 1e-6)
   has_gamma: u32,   // 1: gamma 스케일 적용, 0: 생략
+  workgroupsX: u32, // 2D 디스패치 X축 워크그룹 수
+  pad1: u32,
+  pad2: u32,
+  pad3: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -28,7 +32,7 @@ fn main(
   @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
   let thread_id = local_id.x;
-  let token_idx = workgroup_id.x + workgroup_id.y * 65535u;
+  let token_idx = workgroup_id.x + workgroup_id.y * params.workgroupsX;
 
   if (token_idx >= params.num_tokens) {
     return;

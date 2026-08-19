@@ -56,8 +56,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let h_start = i32(oh * params.sH) - i32(params.pH);
     let w_start = i32(ow * params.sW) - i32(params.pW);
     
-    // 최댓값 비교를 위한 초기값을 부동소수점 표현 가능한 가장 작은 값으로 설정합니다.
+    // 최댓값 비교를 위한 초기값을 설정합니다.
     var max_val = -3.402823466e+38; // -FLT_MAX
+    var has_valid = false;
     
     // 커널의 높이(kH)와 너비(kW) 영역을 순회하며 최댓값을 찾기 위한 이중 루프입니다.
     for (var kh = 0u; kh < params.kH; kh++) {
@@ -73,14 +74,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let val = input[in_idx]; // 입력값을 읽어옵니다.
                 
                 // 기존의 max_val과 비교하여 더 큰 값이면 갱신합니다.
-                if (val > max_val) {
+                if (!has_valid || val > max_val) {
                     max_val = val;
+                    has_valid = true;
                 }
             }
         }
     }
     
-    // 커널 영역 전체에서 발견한 최댓값을 출력 텐서의 현재 인덱스에 저장합니다.
-    output[idx] = max_val;
+    // 커널 영역 전체에서 발견한 최댓값을 출력 텐서의 현재 인덱스에 저장합니다 (유효 픽셀이 없으면 0.0 기록).
+    output[idx] = select(0.0, max_val, has_valid);
 }
 `;

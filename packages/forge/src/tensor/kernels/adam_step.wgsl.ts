@@ -17,7 +17,11 @@ struct AdamParams {
   eps: f32,
   beta1_power: f32,
   beta2_power: f32,
+  weight_decay: f32,
   workgroupsX: u32,
+  pad0: u32,
+  pad1: u32,
+  pad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: AdamParams;
@@ -48,10 +52,17 @@ fn main(
   m[idx] = m_curr;
   v[idx] = v_curr;
 
-  let m_hat = m_curr / (1.0 - params.beta1_power);
-  let v_hat = v_curr / (1.0 - params.beta2_power);
+  let denom1 = max(1.0 - params.beta1_power, 1e-12);
+  let denom2 = max(1.0 - params.beta2_power, 1e-12);
+  let m_hat = m_curr / denom1;
+  let v_hat = v_curr / denom2;
 
-  let step_update = params.lr * m_hat / (sqrt(v_hat) + params.eps);
-  param[idx] = param[idx] - step_update;
+  let step_update = params.lr * m_hat / (sqrt(max(v_hat, 0.0)) + max(params.eps, 1e-12));
+  
+  var p_val = param[idx];
+  if (params.weight_decay > 0.0) {
+    p_val = p_val * (1.0 - params.lr * params.weight_decay);
+  }
+  param[idx] = p_val - step_update;
 }
 `;

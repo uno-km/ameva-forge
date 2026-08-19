@@ -24,6 +24,36 @@ import { getDevice } from "../webgpu/device";
 export class TensorRegistry {
   private records: Map<TensorHandle, TensorRecord> = new Map();
   private nextId: number = 1;
+  private pendingDisposals: TensorRecord[] = [];
+  private flushScheduled: boolean = false;
+
+  private scheduleFlush(): void {
+    if (this.flushScheduled) return;
+    this.flushScheduled = true;
+    queueMicrotask(() => {
+      this.flushScheduled = false;
+      const batch = this.pendingDisposals;
+      this.pendingDisposals = [];
+      if (batch.length === 0) return;
+
+      try {
+        const device = getDevice();
+        device.queue.onSubmittedWorkDone().then(() => {
+          for (const rec of batch) {
+            freeBuffer(rec.buffer, rec.token);
+          }
+        }).catch(() => {
+          for (const rec of batch) {
+            _safeDestroyBuffer(rec);
+          }
+        });
+      } catch {
+        for (const rec of batch) {
+          _safeDestroyBuffer(rec);
+        }
+      }
+    });
+  }
 
   snapshotHandles(): string[] {
     const list: string[] = [];
@@ -53,27 +83,12 @@ export class TensorRegistry {
     recordOmitHandle: Omit<TensorRecord, 'handle' | 'disposed' | 'createdAt'>
   ): TensorHandle {
     // F-015 Fix: 예측 가능한 핸들 생성을 막기 위해 암호학적 난수 기반 식별자 사용
-    /**
-     * WHAT: 암호학적으로 안전한 무작위 식별자(UUID) 문자열입니다.
-     * WHY: 악의적인 사용자가 다른 텐서의 핸들을 추측하여 접근하는 것을 방지하기 위해 생성됩니다.
-     * HOW: crypto.randomUUID가 사용 가능하면 이를 호출하고, 그렇지 않으면 Math.random()을 기반으로 임시 문자열을 생성합니다.
-     */
     const uuid = typeof crypto !== 'undefined' && crypto.randomUUID 
       ? crypto.randomUUID() 
       : Math.random().toString(36).substring(2, 15);
     
-    /**
-     * WHAT: 텐서를 고유하게 식별하기 위한 최종 핸들 문자열입니다.
-     * WHY: 외부에서 텐서를 참조할 때 이 문자열을 사용하여 안전하게 접근할 수 있도록 제공됩니다.
-     * HOW: "tensor_" 접두사와 위에서 생성한 uuid 문자열을 결합하여 생성됩니다.
-     */
     const handle = `tensor_${uuid}`;
     
-    /**
-     * WHAT: 레지스트리에 저장될 텐서의 모든 메타데이터를 포함하는 레코드 객체입니다.
-     * WHY: WebGPU 버퍼, 모양(shape), 데이터 타입, 생성 순서 등을 한 곳에서 관리하기 위함입니다.
-     * HOW: 전달된 recordOmitHandle 객체에 handle, disposed=false, createdAt(단조증가 ID)을 병합하여 생성합니다.
-     */
     const record: TensorRecord = {
       ...recordOmitHandle,
       handle,
@@ -92,11 +107,6 @@ export class TensorRegistry {
    * HOW: 내부 records 맵에서 핸들을 키로 조회하며, 존재하지 않거나 이미 폐기된 경우 에러를 발생시킵니다.
    */
   get(handle: TensorHandle): TensorRecord {
-    /**
-     * WHAT: 레지스트리에서 핸들로 조회한 텐서 레코드입니다.
-     * WHY: 텐서가 실제로 존재하는지 검증하고 접근하기 위해 임시 변수에 저장합니다.
-     * HOW: this.records.get(handle)을 통해 값을 가져옵니다.
-     */
     const record = this.records.get(handle);
     
     if (!record) {
@@ -114,11 +124,6 @@ export class TensorRegistry {
    * HOW: 핸들로 레코드를 조회하여 undefined가 아니고 disposed 상태가 아닌지(boolean)를 반환합니다.
    */
   has(handle: TensorHandle): boolean {
-    /**
-     * WHAT: 조회된 텐서 레코드 변수입니다.
-     * WHY: 존재 여부 및 disposed 상태를 판별하기 위해 사용합니다.
-     * HOW: records 맵에서 핸들로 가져옵니다.
-     */
     const record = this.records.get(handle);
     return record !== undefined && !record.disposed;
   }
@@ -126,7 +131,7 @@ export class TensorRegistry {
   /**
    * WHAT: 지정된 핸들의 텐서를 폐기하고 GPU 메모리를 해제하는 함수입니다.
    * WHY: 사용이 끝난 텐서의 메모리를 반환하여 OOM(Out of Memory)을 방지하고 자원 누수를 막기 위함입니다.
-   * HOW: 레코드를 disposed로 표시하고 맵에서 제거한 뒤, QuotaManager와 WebGPU 큐를 통해 버퍼를 해제합니다.
+   * HOW: 레코드를 disposed로 표시하고 맵에서 제거한 뒤, 마이크로태스크 배치 큐를 통해 GPU 큐 완료 시 해제합니다.
    */
   dispose(handle: TensorHandle): void {
     if (!this.records.has(handle)) {
@@ -142,24 +147,8 @@ export class TensorRegistry {
     // C-06 Fix: 즉시 "해제 예약" 표시
     _globalQuotaManager.markPendingRelease(record.token);
 
-    // NC-07 Fix: 정적 import된 getDevice() 사용 (dynamic import 제거)
-    try {
-      /**
-       * WHAT: 현재 활성화된 WebGPU 디바이스 인스턴스입니다.
-       * WHY: GPU에 제출된 모든 명령이 끝난 후 안전하게 버퍼를 파괴하기 위해 필요합니다.
-       * HOW: getDevice() 유틸리티 함수를 호출하여 가져옵니다.
-       */
-      const device = getDevice();
-      device.queue.onSubmittedWorkDone().then(() => {
-        freeBuffer(record.buffer, record.token);
-      }).catch(() => {
-        // GPU 큐 실패 → 즉시 소각
-        _safeDestroyBuffer(record);
-      });
-    } catch {
-      // device가 없거나 lost → 즉시 quota 해제 + buffer 소각
-      _safeDestroyBuffer(record);
-    }
+    this.pendingDisposals.push(record);
+    this.scheduleFlush();
   }
 
   // F-016 Fix: 비동기 에러 발생 시 해당 핸들에 에러를 마킹
@@ -183,6 +172,14 @@ export class TensorRegistry {
      */
     const recordsToFree = Array.from(this.records.values()).filter(r => !r.disposed);
     this.records.clear();
+    const pendingBatch = this.pendingDisposals;
+    this.pendingDisposals = [];
+    this.flushScheduled = false;
+    for (const p of pendingBatch) {
+      if (!recordsToFree.some(r => r.handle === p.handle)) {
+        recordsToFree.push(p);
+      }
+    }
 
     if (recordsToFree.length === 0) return;
 

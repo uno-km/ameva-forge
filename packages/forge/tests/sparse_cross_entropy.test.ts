@@ -70,10 +70,11 @@ describe('WebGPU Native Fused Sparse Cross-Entropy Tests', () => {
 
     const fwdWgsl = KERNEL_REGISTRY.get('sparse_cross_entropy');
     expect(fwdWgsl).toContain('struct Params');
-    expect(fwdWgsl).toContain('targets: array<u32>');
+    expect(fwdWgsl).toContain('targets: array<f32>');
     expect(fwdWgsl).toContain('loss: array<f32>');
 
     const bwdWgsl = KERNEL_REGISTRY.get('sparse_cross_entropy_backward');
+    expect(bwdWgsl).toContain('targets: array<f32>');
     expect(bwdWgsl).toContain('grad_logits: array<f32>');
     expect(bwdWgsl).toContain('reduction_scale: f32');
   });

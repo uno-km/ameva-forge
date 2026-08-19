@@ -36,7 +36,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     return;
   }
 
-  let inner_stride = params.inner_stride;
+  let inner_stride = max(params.inner_stride, 1u);
   let reduction_size = params.reduction_size;
   let outer_idx = out_idx / inner_stride;
   let inner_idx = out_idx % inner_stride;

@@ -43,6 +43,7 @@ export declare function getQueue(): GPUQueue;
  * HOW: 내부에 저장된 `device` 변수가 null이 아닌지 불리언(Boolean) 값으로 평가하여 반환합니다.
  */
 export declare function isAvailable(): boolean;
+export declare function isDeviceLost(): boolean;
 export declare function _resetDeviceForTesting(): void;
 /**
  * WHAT: GPU 디바이스 연결이 끊어졌을 때(device lost) 호출될 콜백 함수를 등록합니다.

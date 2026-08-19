@@ -51,7 +51,16 @@ export function writeFloat32Array(buffer: GPUBuffer, data: Float32Array): void {
   getQueue().writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength);
 }
 
-import { _globalUniformPool } from "./uniformPool";
+type PoolCleaner = () => void;
+type PoolRetirer = (device: GPUDevice) => Promise<void>;
+
+const _transientPoolCleaners: PoolCleaner[] = [];
+const _transientPoolRetirers: PoolRetirer[] = [];
+
+export function registerTransientPool(cleaner: PoolCleaner, retirer?: PoolRetirer): void {
+  _transientPoolCleaners.push(cleaner);
+  if (retirer) _transientPoolRetirers.push(retirer);
+}
 
 interface StagingPoolEntry {
   buffer: GPUBuffer;
@@ -68,32 +77,42 @@ export function clearStagingPool(): void {
     }
   }
   _stagingPool.clear();
-  try { _globalUniformPool.clear(); } catch {}
+  for (const cleaner of _transientPoolCleaners) {
+    try { cleaner(); } catch {}
+  }
 }
 
 export async function flushGC(): Promise<void> {
   try {
     const device = getDevice();
     await device.queue.onSubmittedWorkDone();
-    await _globalUniformPool.retireSubmitted(device);
+    for (const retirer of _transientPoolRetirers) {
+      try { await retirer(device); } catch {}
+    }
   } catch {}
   clearStagingPool();
-  try { _globalUniformPool.clear(); } catch {}
 }
 
-export function acquireStagingBuffer(byteLength: number): { buffer: GPUBuffer, token: AllocationToken } {
-  const pool = _stagingPool.get(byteLength);
+export function getStagingBucketSize(byteLength: number): number {
+  if (byteLength <= 64) return 64;
+  return Math.pow(2, Math.ceil(Math.log2(byteLength)));
+}
+
+export function acquireStagingBuffer(byteLength: number): { buffer: GPUBuffer, token: AllocationToken, bucketSize: number } {
+  const bucketSize = getStagingBucketSize(byteLength);
+  const pool = _stagingPool.get(bucketSize);
   if (pool && pool.length > 0) {
-    return pool.pop()!;
+    const entry = pool.pop()!;
+    return { buffer: entry.buffer, token: entry.token, bucketSize };
   }
   const usage = typeof GPUBufferUsage !== 'undefined' ? (GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST) : (0x0001 | 0x0008);
   const { buffer, token } = allocateBuffer(
-    byteLength,
+    bucketSize,
     usage,
     'staging',
     'StagingPool'
   );
-  return { buffer, token };
+  return { buffer, token, bucketSize };
 }
 
 export function releaseStagingBuffer(
@@ -110,10 +129,11 @@ export function releaseStagingBuffer(
     return;
   }
 
-  const pool = _stagingPool.get(byteLength) ?? [];
+  const bucketSize = getStagingBucketSize(byteLength);
+  const pool = _stagingPool.get(bucketSize) ?? [];
   if (pool.length < STAGING_POOL_MAX_PER_SIZE) {
     pool.push({ buffer, token });
-    _stagingPool.set(byteLength, pool);
+    _stagingPool.set(bucketSize, pool);
   } else {
     try { freeBuffer(buffer, token); } catch {}
   }
@@ -133,7 +153,7 @@ export async function readBufferToFloat32Array(
   byteLength: number
 ): Promise<Float32Array> {
   const device = getDevice();
-  const { buffer: stagingBuffer, token } = acquireStagingBuffer(byteLength);
+  const { buffer: stagingBuffer, token, bucketSize } = acquireStagingBuffer(byteLength);
   let isCorrupted = false;
 
   try {
@@ -143,7 +163,7 @@ export async function readBufferToFloat32Array(
     await stagingBuffer.mapAsync(GPUMapMode.READ);
 
     try {
-      const arrayBuffer = stagingBuffer.getMappedRange();
+      const arrayBuffer = stagingBuffer.getMappedRange(0, byteLength);
       return new Float32Array(arrayBuffer.slice(0));
     } finally {
       stagingBuffer.unmap();
@@ -152,7 +172,7 @@ export async function readBufferToFloat32Array(
     isCorrupted = true;
     throw err;
   } finally {
-    releaseStagingBuffer(stagingBuffer, token, byteLength, isCorrupted);
+    releaseStagingBuffer(stagingBuffer, token, bucketSize, isCorrupted);
   }
 }
 
@@ -166,7 +186,7 @@ export async function mapBufferAsync(
   byteLength: number
 ): Promise<{ stagingBuffer: GPUBuffer, token: AllocationToken, byteLength: number }> {
   const device = getDevice();
-  const { buffer: stagingBuffer, token } = acquireStagingBuffer(byteLength);
+  const { buffer: stagingBuffer, token, bucketSize } = acquireStagingBuffer(byteLength);
 
   try {
     const commandEncoder = device.createCommandEncoder();
@@ -176,7 +196,7 @@ export async function mapBufferAsync(
     await stagingBuffer.mapAsync(GPUMapMode.READ);
     return { stagingBuffer, token, byteLength };
   } catch (e) {
-    releaseStagingBuffer(stagingBuffer, token, byteLength, true);
+    releaseStagingBuffer(stagingBuffer, token, bucketSize, true);
     throw e;
   }
 }
@@ -194,14 +214,16 @@ export function readMappedInto(
   const byteLength = outArray.byteLength;
   let isCorrupted = false;
   try {
-    const arrayBuffer = stagingBuffer.getMappedRange();
+    const arrayBuffer = stagingBuffer.getMappedRange(0, byteLength);
     const mapped = new Float32Array(arrayBuffer);
     if (outArray.length !== mapped.length) {
       throw new RangeError(`readMappedInto destination length mismatch: expected ${mapped.length}, got ${outArray.length}`);
     }
     outArray.set(mapped);
   } catch (err) {
-    isCorrupted = true;
+    if (!(err instanceof RangeError)) {
+      isCorrupted = true;
+    }
     throw err;
   } finally {
     try { stagingBuffer.unmap(); } catch {}

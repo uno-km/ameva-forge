@@ -407,8 +407,6 @@
      * HOW: 현재 실행 환경이 개발 모드(NODE_ENV, AMEVA_DEBUG, __DEV__, Vite env 등)인지 확인하고 조건을 만족할 때만 `globalThis.log`를 통해 메시지를 출력합니다. 예외가 발생해도 시스템이 멈추지 않도록 try-catch로 감쌉니다.
      */
     let _isLogging = false;
-    let _consecutiveLoggingErrors = 0;
-    let _lastSelfHealTimestamp = 0;
     function _safeLog$2(msg) {
         if (_isLogging)
             return;
@@ -424,19 +422,6 @@
             }
         }
         catch (err) {
-            _consecutiveLoggingErrors++;
-            const now = Date.now();
-            // 자가 치유(Self-Healing): 3회 연속 에러 시 쿼터 상태 자동 정합 및 치료
-            if (_consecutiveLoggingErrors >= 3 && now - _lastSelfHealTimestamp > 5000) {
-                _lastSelfHealTimestamp = now;
-                _consecutiveLoggingErrors = 0;
-                try {
-                    _globalQuotaManager.sanitizePendingBytes();
-                }
-                catch (sanitizeErr) {
-                    // Safe fallback
-                }
-            }
             if (typeof console !== 'undefined' && typeof console.debug === 'function') {
                 console.debug('[AMEVA-SafeLog-Fallback]', msg, err);
             }
@@ -555,6 +540,9 @@
     function isAvailable() {
         return device !== null;
     }
+    function isDeviceLost() {
+        return device === null;
+    }
     function _resetDeviceForTesting() {
         device = null;
         adapter = null;
@@ -599,101 +587,6 @@
         }
     }
 
-    const UNIFORM_BUCKETS = [16, 32, 64, 112, 144, 256, 512, 1024];
-    class UniformBufferPool {
-        pools = new Map();
-        inFlight = [];
-        fenceCounter = 0;
-        acquire(byteLength) {
-            const bucket = this.bucket(byteLength);
-            const pool = this.pools.get(bucket) ?? [];
-            const reusable = pool.pop();
-            if (reusable) {
-                reusable.inFlight = true;
-                reusable.fenceId = this.fenceCounter;
-                return reusable;
-            }
-            const usage = typeof GPUBufferUsage !== 'undefined'
-                ? (GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST)
-                : (0x0040 | 0x0008);
-            const { buffer, token } = allocateBuffer(bucket, usage, 'uniform', 'UniformBufferPool');
-            return {
-                buffer,
-                token,
-                byteLength: bucket,
-                inFlight: true,
-                fenceId: this.fenceCounter,
-            };
-        }
-        releaseAfterSubmit(entry) {
-            this.inFlight.push(entry);
-        }
-        releaseSync(entry) {
-            entry.inFlight = false;
-            try {
-                freeBuffer(entry.buffer, entry.token);
-            }
-            catch { }
-        }
-        inFlightBytes() {
-            return this.inFlight.reduce((acc, e) => acc + e.byteLength, 0);
-        }
-        async retireSubmitted(device) {
-            const currentFence = ++this.fenceCounter;
-            try {
-                await device.queue.onSubmittedWorkDone();
-            }
-            catch { }
-            const stillInFlight = [];
-            for (const entry of this.inFlight) {
-                if (entry.fenceId < currentFence) {
-                    entry.inFlight = false;
-                    const pool = this.pools.get(entry.byteLength) ?? [];
-                    if (pool.length < 256) {
-                        pool.push(entry);
-                        this.pools.set(entry.byteLength, pool);
-                    }
-                    else {
-                        try {
-                            freeBuffer(entry.buffer, entry.token);
-                        }
-                        catch { }
-                    }
-                }
-                else {
-                    stillInFlight.push(entry);
-                }
-            }
-            this.inFlight = stillInFlight;
-        }
-        clear() {
-            for (const entries of this.pools.values()) {
-                for (const entry of entries) {
-                    try {
-                        freeBuffer(entry.buffer, entry.token);
-                    }
-                    catch { }
-                }
-            }
-            this.pools.clear();
-            for (const entry of this.inFlight) {
-                try {
-                    freeBuffer(entry.buffer, entry.token);
-                }
-                catch { }
-            }
-            this.inFlight = [];
-        }
-        bucket(n) {
-            for (const b of UNIFORM_BUCKETS) {
-                if (n <= b)
-                    return b;
-            }
-            return Math.ceil(n / 256) * 256;
-        }
-    }
-    const _globalUniformPool = new UniformBufferPool();
-
     /**
      * Created: 2026-08-12 12:14:52 +0900
      * Modified:
@@ -734,6 +627,13 @@
         }
         getQueue().writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength);
     }
+    const _transientPoolCleaners = [];
+    const _transientPoolRetirers = [];
+    function registerTransientPool(cleaner, retirer) {
+        _transientPoolCleaners.push(cleaner);
+        if (retirer)
+            _transientPoolRetirers.push(retirer);
+    }
     const _stagingPool = new Map();
     const STAGING_POOL_MAX_PER_SIZE = 4;
     function clearStagingPool() {
@@ -746,32 +646,42 @@
             }
         }
         _stagingPool.clear();
-        try {
-            _globalUniformPool.clear();
+        for (const cleaner of _transientPoolCleaners) {
+            try {
+                cleaner();
+            }
+            catch { }
         }
-        catch { }
     }
     async function flushGC() {
         try {
             const device = getDevice();
             await device.queue.onSubmittedWorkDone();
-            await _globalUniformPool.retireSubmitted(device);
+            for (const retirer of _transientPoolRetirers) {
+                try {
+                    await retirer(device);
+                }
+                catch { }
+            }
         }
         catch { }
         clearStagingPool();
-        try {
-            _globalUniformPool.clear();
-        }
-        catch { }
+    }
+    function getStagingBucketSize(byteLength) {
+        if (byteLength <= 64)
+            return 64;
+        return Math.pow(2, Math.ceil(Math.log2(byteLength)));
     }
     function acquireStagingBuffer(byteLength) {
-        const pool = _stagingPool.get(byteLength);
+        const bucketSize = getStagingBucketSize(byteLength);
+        const pool = _stagingPool.get(bucketSize);
         if (pool && pool.length > 0) {
-            return pool.pop();
+            const entry = pool.pop();
+            return { buffer: entry.buffer, token: entry.token, bucketSize };
         }
         const usage = typeof GPUBufferUsage !== 'undefined' ? (GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST) : (0x0001 | 0x0008);
-        const { buffer, token } = allocateBuffer(byteLength, usage, 'staging', 'StagingPool');
-        return { buffer, token };
+        const { buffer, token } = allocateBuffer(bucketSize, usage, 'staging', 'StagingPool');
+        return { buffer, token, bucketSize };
     }
     function releaseStagingBuffer(buffer, token, byteLength, isCorrupted = false) {
         if (isCorrupted) {
@@ -787,10 +697,11 @@
             }
             return;
         }
-        const pool = _stagingPool.get(byteLength) ?? [];
+        const bucketSize = getStagingBucketSize(byteLength);
+        const pool = _stagingPool.get(bucketSize) ?? [];
         if (pool.length < STAGING_POOL_MAX_PER_SIZE) {
             pool.push({ buffer, token });
-            _stagingPool.set(byteLength, pool);
+            _stagingPool.set(bucketSize, pool);
         }
         else {
             try {
@@ -810,7 +721,7 @@
      */
     async function readBufferToFloat32Array(buffer, byteLength) {
         const device = getDevice();
-        const { buffer: stagingBuffer, token } = acquireStagingBuffer(byteLength);
+        const { buffer: stagingBuffer, token, bucketSize } = acquireStagingBuffer(byteLength);
         let isCorrupted = false;
         try {
             const commandEncoder = device.createCommandEncoder();
@@ -818,7 +729,7 @@
             device.queue.submit([commandEncoder.finish()]);
             await stagingBuffer.mapAsync(GPUMapMode.READ);
             try {
-                const arrayBuffer = stagingBuffer.getMappedRange();
+                const arrayBuffer = stagingBuffer.getMappedRange(0, byteLength);
                 return new Float32Array(arrayBuffer.slice(0));
             }
             finally {
@@ -830,7 +741,7 @@
             throw err;
         }
         finally {
-            releaseStagingBuffer(stagingBuffer, token, byteLength, isCorrupted);
+            releaseStagingBuffer(stagingBuffer, token, bucketSize, isCorrupted);
         }
     }
     /**
@@ -840,7 +751,7 @@
      */
     async function mapBufferAsync$1(buffer, byteLength) {
         const device = getDevice();
-        const { buffer: stagingBuffer, token } = acquireStagingBuffer(byteLength);
+        const { buffer: stagingBuffer, token, bucketSize } = acquireStagingBuffer(byteLength);
         try {
             const commandEncoder = device.createCommandEncoder();
             commandEncoder.copyBufferToBuffer(buffer, 0, stagingBuffer, 0, byteLength);
@@ -849,7 +760,7 @@
             return { stagingBuffer, token, byteLength };
         }
         catch (e) {
-            releaseStagingBuffer(stagingBuffer, token, byteLength, true);
+            releaseStagingBuffer(stagingBuffer, token, bucketSize, true);
             throw e;
         }
     }
@@ -862,7 +773,7 @@
         const byteLength = outArray.byteLength;
         let isCorrupted = false;
         try {
-            const arrayBuffer = stagingBuffer.getMappedRange();
+            const arrayBuffer = stagingBuffer.getMappedRange(0, byteLength);
             const mapped = new Float32Array(arrayBuffer);
             if (outArray.length !== mapped.length) {
                 throw new RangeError(`readMappedInto destination length mismatch: expected ${mapped.length}, got ${outArray.length}`);
@@ -870,7 +781,9 @@
             outArray.set(mapped);
         }
         catch (err) {
-            isCorrupted = true;
+            if (!(err instanceof RangeError)) {
+                isCorrupted = true;
+            }
             throw err;
         }
         finally {
@@ -1193,6 +1106,40 @@
         const effSB = dB.map((d, i) => d === 1 ? 0 : baseSB[i]);
         return { dOut, effSA, effSB };
     }
+    /**
+     * WHAT: 세 텐서(조건, x, y)의 형태를 8차원으로 좌측 패딩하고 각 텐서의 유효 브로드캐스팅 스트라이드를 계산합니다.
+     * WHY: where 연산이 스칼라뿐만 아니라 (3, 1) to (3, 5) 등의 임의의 다차원 브로드캐스팅을 VRAM OOB 없이 안전하게 수행하기 위함입니다.
+     * HOW: 8차원 정규화 후 각 차원별 스트라이드를 계산하고, 크기가 1인 차원은 스트라이드를 0으로 매핑합니다.
+     */
+    function computeBroadcastParams3(outShape, shapeCond, shapeA, shapeB) {
+        const pad8 = (s) => {
+            const res = [1, 1, 1, 1, 1, 1, 1, 1];
+            const diff = 8 - s.length;
+            for (let i = 0; i < s.length; i++) {
+                res[diff + i] = s[i];
+            }
+            return res;
+        };
+        const dOut = pad8(outShape);
+        const dCond = pad8(shapeCond);
+        const dA = pad8(shapeA);
+        const dB = pad8(shapeB);
+        const calcStrides = (dims) => {
+            const st = [1, 1, 1, 1, 1, 1, 1, 1];
+            st[7] = 1;
+            for (let i = 6; i >= 0; i--) {
+                st[i] = st[i + 1] * dims[i + 1];
+            }
+            return st;
+        };
+        const baseSCond = calcStrides(dCond);
+        const baseSA = calcStrides(dA);
+        const baseSB = calcStrides(dB);
+        const effSCond = dCond.map((d, i) => d === 1 ? 0 : baseSCond[i]);
+        const effSA = dA.map((d, i) => d === 1 ? 0 : baseSA[i]);
+        const effSB = dB.map((d, i) => d === 1 ? 0 : baseSB[i]);
+        return { dOut, effSCond, effSA, effSB };
+    }
 
     /**
      * Created: 2026-08-12T12:14:52+09:00
@@ -1213,6 +1160,37 @@
     class TensorRegistry {
         records = new Map();
         nextId = 1;
+        pendingDisposals = [];
+        flushScheduled = false;
+        scheduleFlush() {
+            if (this.flushScheduled)
+                return;
+            this.flushScheduled = true;
+            queueMicrotask(() => {
+                this.flushScheduled = false;
+                const batch = this.pendingDisposals;
+                this.pendingDisposals = [];
+                if (batch.length === 0)
+                    return;
+                try {
+                    const device = getDevice();
+                    device.queue.onSubmittedWorkDone().then(() => {
+                        for (const rec of batch) {
+                            freeBuffer(rec.buffer, rec.token);
+                        }
+                    }).catch(() => {
+                        for (const rec of batch) {
+                            _safeDestroyBuffer(rec);
+                        }
+                    });
+                }
+                catch {
+                    for (const rec of batch) {
+                        _safeDestroyBuffer(rec);
+                    }
+                }
+            });
+        }
         snapshotHandles() {
             const list = [];
             for (const [handle, record] of this.records.entries()) {
@@ -1238,25 +1216,10 @@
          */
         register(recordOmitHandle) {
             // F-015 Fix: 예측 가능한 핸들 생성을 막기 위해 암호학적 난수 기반 식별자 사용
-            /**
-             * WHAT: 암호학적으로 안전한 무작위 식별자(UUID) 문자열입니다.
-             * WHY: 악의적인 사용자가 다른 텐서의 핸들을 추측하여 접근하는 것을 방지하기 위해 생성됩니다.
-             * HOW: crypto.randomUUID가 사용 가능하면 이를 호출하고, 그렇지 않으면 Math.random()을 기반으로 임시 문자열을 생성합니다.
-             */
             const uuid = typeof crypto !== 'undefined' && crypto.randomUUID
                 ? crypto.randomUUID()
                 : Math.random().toString(36).substring(2, 15);
-            /**
-             * WHAT: 텐서를 고유하게 식별하기 위한 최종 핸들 문자열입니다.
-             * WHY: 외부에서 텐서를 참조할 때 이 문자열을 사용하여 안전하게 접근할 수 있도록 제공됩니다.
-             * HOW: "tensor_" 접두사와 위에서 생성한 uuid 문자열을 결합하여 생성됩니다.
-             */
             const handle = `tensor_${uuid}`;
-            /**
-             * WHAT: 레지스트리에 저장될 텐서의 모든 메타데이터를 포함하는 레코드 객체입니다.
-             * WHY: WebGPU 버퍼, 모양(shape), 데이터 타입, 생성 순서 등을 한 곳에서 관리하기 위함입니다.
-             * HOW: 전달된 recordOmitHandle 객체에 handle, disposed=false, createdAt(단조증가 ID)을 병합하여 생성합니다.
-             */
             const record = {
                 ...recordOmitHandle,
                 handle,
@@ -1273,11 +1236,6 @@
          * HOW: 내부 records 맵에서 핸들을 키로 조회하며, 존재하지 않거나 이미 폐기된 경우 에러를 발생시킵니다.
          */
         get(handle) {
-            /**
-             * WHAT: 레지스트리에서 핸들로 조회한 텐서 레코드입니다.
-             * WHY: 텐서가 실제로 존재하는지 검증하고 접근하기 위해 임시 변수에 저장합니다.
-             * HOW: this.records.get(handle)을 통해 값을 가져옵니다.
-             */
             const record = this.records.get(handle);
             if (!record) {
                 throw new AMEVAForgeDisposedError(`Tensor not found: ${handle}`);
@@ -1293,18 +1251,13 @@
          * HOW: 핸들로 레코드를 조회하여 undefined가 아니고 disposed 상태가 아닌지(boolean)를 반환합니다.
          */
         has(handle) {
-            /**
-             * WHAT: 조회된 텐서 레코드 변수입니다.
-             * WHY: 존재 여부 및 disposed 상태를 판별하기 위해 사용합니다.
-             * HOW: records 맵에서 핸들로 가져옵니다.
-             */
             const record = this.records.get(handle);
             return record !== undefined && !record.disposed;
         }
         /**
          * WHAT: 지정된 핸들의 텐서를 폐기하고 GPU 메모리를 해제하는 함수입니다.
          * WHY: 사용이 끝난 텐서의 메모리를 반환하여 OOM(Out of Memory)을 방지하고 자원 누수를 막기 위함입니다.
-         * HOW: 레코드를 disposed로 표시하고 맵에서 제거한 뒤, QuotaManager와 WebGPU 큐를 통해 버퍼를 해제합니다.
+         * HOW: 레코드를 disposed로 표시하고 맵에서 제거한 뒤, 마이크로태스크 배치 큐를 통해 GPU 큐 완료 시 해제합니다.
          */
         dispose(handle) {
             if (!this.records.has(handle)) {
@@ -1317,25 +1270,8 @@
             this.records.delete(handle);
             // C-06 Fix: 즉시 "해제 예약" 표시
             _globalQuotaManager.markPendingRelease(record.token);
-            // NC-07 Fix: 정적 import된 getDevice() 사용 (dynamic import 제거)
-            try {
-                /**
-                 * WHAT: 현재 활성화된 WebGPU 디바이스 인스턴스입니다.
-                 * WHY: GPU에 제출된 모든 명령이 끝난 후 안전하게 버퍼를 파괴하기 위해 필요합니다.
-                 * HOW: getDevice() 유틸리티 함수를 호출하여 가져옵니다.
-                 */
-                const device = getDevice();
-                device.queue.onSubmittedWorkDone().then(() => {
-                    freeBuffer(record.buffer, record.token);
-                }).catch(() => {
-                    // GPU 큐 실패 → 즉시 소각
-                    _safeDestroyBuffer(record);
-                });
-            }
-            catch {
-                // device가 없거나 lost → 즉시 quota 해제 + buffer 소각
-                _safeDestroyBuffer(record);
-            }
+            this.pendingDisposals.push(record);
+            this.scheduleFlush();
         }
         // F-016 Fix: 비동기 에러 발생 시 해당 핸들에 에러를 마킹
         markFailed(handle, errorMsg) {
@@ -1357,6 +1293,14 @@
              */
             const recordsToFree = Array.from(this.records.values()).filter(r => !r.disposed);
             this.records.clear();
+            const pendingBatch = this.pendingDisposals;
+            this.pendingDisposals = [];
+            this.flushScheduled = false;
+            for (const p of pendingBatch) {
+                if (!recordsToFree.some(r => r.handle === p.handle)) {
+                    recordsToFree.push(p);
+                }
+            }
             if (recordsToFree.length === 0)
                 return;
             /**
@@ -2728,7 +2672,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     return;
   }
 
-  let inner_stride = params.inner_stride;
+  let inner_stride = max(params.inner_stride, 1u);
   let reduction_size = params.reduction_size;
   let outer_idx = out_idx / inner_stride;
   let inner_idx = out_idx % inner_stride;
@@ -2773,7 +2717,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     return;
   }
 
-  let inner_stride = params.inner_stride;
+  let inner_stride = max(params.inner_stride, 1u);
   let reduction_size = params.reduction_size;
   let outer_idx = out_idx / inner_stride;
   let inner_idx = out_idx % inner_stride;
@@ -2783,8 +2727,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   var max_val = -3.402823e+38;
   for (var r = 0u; r < reduction_size; r = r + 1u) {
     let val = input[base_offset + r * inner_stride];
-    if (val > max_val) {
+    if (val > max_val || val != val) {
       max_val = val;
+      if (val != val) {
+        break;
+      }
     }
   }
   output[out_idx] = max_val;
@@ -2820,16 +2767,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     return;
   }
 
-  let inner = linear % params.inner_stride;
-  let tmp = linear / params.inner_stride;
-  let r = tmp % params.reduction_size;
-  let outer = tmp / params.reduction_size;
+  let inner_stride = max(params.inner_stride, 1u);
+  let reduction_size = max(params.reduction_size, 1u);
+  let inner = linear % inner_stride;
+  let tmp = linear / inner_stride;
+  let r = tmp % reduction_size;
+  let outer = tmp / reduction_size;
 
-  let reduced_idx = outer * params.inner_stride + inner;
+  let reduced_idx = outer * inner_stride + inner;
 
   var max_val = -3.402823e+38;
-  for (var j: u32 = 0u; j < params.reduction_size; j = j + 1u) {
-    let idx = outer * params.reduction_size * params.inner_stride + j * params.inner_stride + inner;
+  for (var j: u32 = 0u; j < reduction_size; j = j + 1u) {
+    let idx = outer * reduction_size * inner_stride + j * inner_stride + inner;
     max_val = max(max_val, x[idx]);
   }
 
@@ -2964,11 +2913,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   for (var i = 0u; i < params.rank; i = i + 1u) {
     // 변수: coord
     // 역할: 출력 텐서의 i번째 차원에 대한 구체적 좌표(인덱스)
-    let coord = temp / params.out_strides[i];
+    let out_stride = max(params.out_strides[i], 1u);
+    let coord = temp / out_stride;
     
     // 변수: temp 갱신
     // 역할: 다음 하위 차원 계산을 위해 남은 나머지 값을 임시 변수에 대입합니다.
-    temp = temp % params.out_strides[i];
+    temp = temp % out_stride;
     
     // 조건문: 원본 영역 이탈 확인
     // 역할: 계산된 해당 차원의 좌표가 패딩 영역(원본 데이터가 없는 곳)인지 판단합니다.
@@ -3024,7 +2974,7 @@ struct Params {
 
 @group(0) @binding(0) var<uniform> params: Params; // 메타데이터 및 형태 정보가 담긴 유니폼 데이터입니다.
 @group(0) @binding(1) var<storage, read> input: array<f32>; // 수집 대상이 되는 원본 데이터 배열입니다.
-@group(0) @binding(2) var<storage, read> index: array<u32>; // 수집할 인덱스를 지정하는 정수 배열입니다.
+@group(0) @binding(2) var<storage, read> index: array<f32>; // 수집할 인덱스를 지정하는 부동소수점 배열입니다.
 @group(0) @binding(3) var<storage, read_write> output: array<f32>; // 수집된 데이터가 쓰여질 결과 배열입니다.
 
 /**
@@ -3044,19 +2994,28 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   // 출력 텐서의 각 차원(0부터 rank-1까지)에 대해 루프를 돕니다.
   // 이 루프는 출력 텐서의 1D 인덱스(idx)를 다차원 좌표로 변환하고, 이를 다시 입력 텐서의 1D 인덱스(in_idx)로 매핑합니다.
   for (var i = 0u; i < params.rank; i = i + 1u) {
-    let coord = temp / params.out_strides[i]; // 현재 차원 i에서의 다차원 좌표 값입니다.
-    temp = temp % params.out_strides[i]; // 다음 하위 차원 좌표 계산을 위해 나머지를 구합니다.
+    let out_stride = max(params.out_strides[i], 1u);
+    let coord = temp / out_stride; // 현재 차원 i에서의 다차원 좌표 값입니다.
+    temp = temp % out_stride; // 다음 하위 차원 좌표 계산을 위해 나머지를 구합니다.
     
     // 현재 차원이 수집 대상 차원(dim)인 경우, 계산된 좌표 대신 index 배열에서 값을 읽어옵니다.
     if (i == params.dim) {
-      let raw_bits = index[idx];
+      let raw_val = index[idx];
+      if (raw_val != raw_val) {
+        output[idx] = 0.0;
+        return;
+      }
       let dim_size = i32(params.x_shape[i]);
-      var signed_idx = bitcast<i32>(raw_bits);
+      var signed_idx = i32(round(raw_val));
       if (signed_idx < 0) {
         signed_idx = signed_idx + dim_size;
       }
-      let clamped_idx = u32(clamp(signed_idx, 0, max(0, dim_size - 1)));
-      in_idx = in_idx + clamped_idx * params.x_strides[i];
+      if (signed_idx < 0 || signed_idx >= dim_size) {
+        output[idx] = 0.0;
+        return;
+      }
+      let valid_idx = u32(signed_idx);
+      in_idx = in_idx + valid_idx * params.x_strides[i];
     } else {
       // 수집 대상 차원이 아닌 경우, 출력 텐서와 동일한 좌표를 유지합니다.
       in_idx = in_idx + coord * params.x_strides[i]; // 동일한 좌표에 원본 텐서의 해당 차원 스트라이드를 곱해 누적합니다.
@@ -3107,8 +3066,8 @@ struct Params {
 @group(0) @binding(0) var<uniform> params: Params;
 
 // 변수: index
-// 역할: 흩뿌릴 위치 정보를 가지고 있는 인덱스 배열(읽기 전용 정수 스토리지 버퍼)
-@group(0) @binding(1) var<storage, read> index: array<u32>;
+// 역할: 흩뿌릴 위치 정보를 가지고 있는 인덱스 배열(읽기 전용 부동소수점 스토리지 버퍼)
+@group(0) @binding(1) var<storage, read> index: array<f32>;
 
 // 변수: src
 // 역할: 출력 배열에 복사할 원본 값을 가지고 있는 소스 배열(읽기 전용 스토리지 버퍼)
@@ -3129,7 +3088,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let idx = global_id.x + global_id.y * params.workgroups_x * 64u;
   
   // 조건문: 데이터 경계 검사
-  // 역할: 할당된 스레드의 인덱스가 전체 크기(num_elements)를 초과하는지 검사합니다.
+  // 역할: 할당된 스레드의 인덱스가 전체 크(num_elements)를 초과하는지 검사합니다.
   if (idx >= params.num_elements) { return; }
 
   // 변수: temp
@@ -3146,18 +3105,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   for (var i = 0u; i < params.rank; i = i + 1u) {
     // 변수: coord
     // 역할: 현재 차원(i)에 해당하는 인덱스 텐서 기준의 다차원 논리 좌표
-    let coord = temp / params.idx_strides[i];
+    let idx_stride = max(params.idx_strides[i], 1u);
+    let coord = temp / idx_stride;
     
     // 변수: temp 갱신
     // 역할: 다음 차원 계산을 위해 나머지 값을 임시 변수에 업데이트합니다.
-    temp = temp % params.idx_strides[i];
+    temp = temp % idx_stride;
     
     // 조건문: 타겟 차원(dim) 여부 검사
     // 역할: 현재 처리 중인 차원이 인덱스 값으로 대체할 타겟 차원인지 판단합니다.
     if (i == params.dim) {
-      let raw_bits = index[idx];
+      let raw_val = index[idx];
+      // NaN index skip (NaN != NaN)
+      if (raw_val != raw_val) {
+        return;
+      }
       let dim_size = i32(params.x_shape[i]);
-      var signed_idx = bitcast<i32>(raw_bits);
+      var signed_idx = i32(round(raw_val));
       if (signed_idx < 0) {
         signed_idx = signed_idx + dim_size;
       }
@@ -3244,7 +3208,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   }
   
   // 파라미터 구조체에서 내부 차원의 크기(stride)를 로드합니다.
-  let stride = params.stride;
+  let stride = max(params.stride, 1u);
   // 파라미터 구조체에서 A 텐서의 결합 축 크기를 로드합니다.
   let a_dim = params.a_dim;
   // 파라미터 구조체에서 B 텐서의 결합 축 크기를 로드합니다.
@@ -3253,7 +3217,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   // 결합된 이후 결과 텐서의 해당 축 길이를 계산합니다. (What)
   let out_dim_size = a_dim + b_dim;
   // 한 블록(결합 축 1개 단위 + 하위 차원 전체)이 차지하는 총 요소 개수(청크 크기)를 계산합니다. (How)
-  let chunk_size = out_dim_size * stride;
+  let chunk_size = max(out_dim_size * stride, 1u);
   
   // 현재 1차원 인덱스가 어떤 배치(상위 차원들)에 속하는지 계산합니다. (How)
   let batch_idx = idx / chunk_size;
@@ -3290,88 +3254,53 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
      * - 2026-08-12 12:23:09: Docs: Build Apache-style docs and unify tests (fc28607f9d46845175a9bdaf0e9e8c44bace5ecb)
      */
     const WHERE_WGSL = `
-// 구조체: Params
-// 목적: 조건부 분기(Where) 연산에 사용되는 메타데이터를 저장합니다.
-// 작동 방식: 처리할 전체 요소 크기(size)와 패딩 값들을 통해 16바이트 정렬된 메모리 구조를 형성합니다.
 struct Params {
-  // 변수: size
-  // 목적: 배열의 전체 요소 수를 지정합니다.
-  // 작동 방식: 커널에서 각 스레드가 유효한 범위 내에 있는지 확인하는 데 사용됩니다.
   size: u32,
-  // 변수: workgroups_x
-  // 목적: X축 방향 워크그룹의 총 개수입니다.
-  // 작동 방식: 글로벌 인덱스 변환 시 X축 길이를 곱하는 계수로 사용됩니다.
   workgroups_x: u32,
-  // 변수: pad2 ~ pad7
-  // 목적: 메모리 정렬(Alignment)을 맞추기 위한 여유 공간(패딩)들입니다.
-  // 작동 방식: WGSL 유니폼 버퍼의 레이아웃 규칙에 맞추기 위해 사용됩니다.
-  pad2: u32,
-  pad3: u32,
-  pad4: u32,
-  pad5: u32,
-  pad6: u32,
-  pad7: u32,
+  rank: u32,
+  pad: u32,
+  d_out: array<u32, 8>,
+  eff_s_cond: array<u32, 8>,
+  eff_s_x: array<u32, 8>,
+  eff_s_y: array<u32, 8>,
 };
 
-// 변수: params
-// 목적: 외부에서 제공되는 파라미터 구조체를 바인딩합니다.
-// 작동 방식: 바인딩 0에 읽기 전용으로 매핑됩니다.
 @group(0) @binding(0) var<uniform> params: Params;
-
-// 변수: cond
-// 목적: 요소별로 어느 값을 선택할지 결정하는 조건(Condition) 배열입니다.
-// 작동 방식: 값이 0보다 크면 참(True), 그렇지 않으면 거짓(False)으로 평가됩니다.
 @group(0) @binding(1) var<storage, read> cond: array<f32>;
-
-// 변수: x
-// 목적: 조건이 참(True)일 때 선택될 데이터 배열입니다.
-// 작동 방식: 바인딩 2에 할당됩니다.
 @group(0) @binding(2) var<storage, read> x: array<f32>;
-
-// 변수: y
-// 목적: 조건이 거짓(False)일 때 선택될 데이터 배열입니다.
-// 작동 방식: 바인딩 3에 할당됩니다.
 @group(0) @binding(3) var<storage, read> y: array<f32>;
-
-// 변수: out
-// 목적: 조건에 따라 x 또는 y에서 선택된 결과가 저장될 배열입니다.
-// 작동 방식: 바인딩 4에 할당되어 계산 결과를 기록합니다.
 @group(0) @binding(4) var<storage, read_write> out: array<f32>;
 
-// 함수: main
-// 목적: cond 배열의 값에 따라 병렬로 x 또는 y의 요소를 선택하여 out 배열에 씁니다 (TensorFlow/PyTorch의 where 함수와 유사).
-// 작동 방식: 각 스레드가 조건 평가를 거쳐 선택한 값을 기록합니다.
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  // 변수: num_elements
-  // 목적: 연산할 전체 배열 요소의 개수입니다.
-  // 작동 방식: 유니폼 버퍼에서 읽어옵니다.
   let num_elements = params.size;
-
-  // 변수: workgroups_x
-  // 목적: X축 방향의 워크그룹 개수입니다.
-  // 작동 방식: 유니폼 버퍼에서 읽어옵니다.
   let workgroups_x = params.workgroups_x;
-
-  // 변수: idx
-  // 목적: 현재 스레드가 담당하는 배열 요소의 1차원 인덱스입니다.
-  // 작동 방식: 2차원 워크그룹 배열 인덱스를 1차원으로 평면화하여 계산합니다.
   let idx = global_id.x + global_id.y * workgroups_x * 64u;
 
-  // 제어문: if
-  // 목적: 배열의 유효 범위를 넘어가는 스레드가 메모리에 접근하지 않게 합니다.
-  // 작동 방식: 인덱스가 전체 크기 이상이면 함수를 끝냅니다.
   if (idx >= num_elements) {
     return;
   }
 
-  // 제어문: if-else
-  // 목적: 조건에 맞게 x 배열과 y 배열 중 하나의 값을 선택합니다.
-  // 작동 방식: cond[idx]가 0보다 크면 x[idx]를, 아니면 y[idx]를 out[idx]에 할당합니다.
-  if (cond[idx] > 0.0) {
-    out[idx] = x[idx];
+  var temp = idx;
+  var cond_idx = 0u;
+  var x_idx = 0u;
+  var y_idx = 0u;
+
+  for (var i: i32 = 7; i >= 0; i = i - 1) {
+    let u_i = u32(i);
+    let dim_size = params.d_out[u_i];
+    let coord = temp % dim_size;
+    temp = temp / dim_size;
+
+    cond_idx = cond_idx + coord * params.eff_s_cond[u_i];
+    x_idx = x_idx + coord * params.eff_s_x[u_i];
+    y_idx = y_idx + coord * params.eff_s_y[u_i];
+  }
+
+  if (cond[cond_idx] != 0.0) {
+    out[idx] = x[x_idx];
   } else {
-    out[idx] = y[idx];
+    out[idx] = y[y_idx];
   }
 }
 `;
@@ -3525,8 +3454,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let h_start = i32(oh * params.sH) - i32(params.pH);
     let w_start = i32(ow * params.sW) - i32(params.pW);
     
-    // 최댓값 비교를 위한 초기값을 부동소수점 표현 가능한 가장 작은 값으로 설정합니다.
+    // 최댓값 비교를 위한 초기값을 설정합니다.
     var max_val = -3.402823466e+38; // -FLT_MAX
+    var has_valid = false;
     
     // 커널의 높이(kH)와 너비(kW) 영역을 순회하며 최댓값을 찾기 위한 이중 루프입니다.
     for (var kh = 0u; kh < params.kH; kh++) {
@@ -3542,15 +3472,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let val = input[in_idx]; // 입력값을 읽어옵니다.
                 
                 // 기존의 max_val과 비교하여 더 큰 값이면 갱신합니다.
-                if (val > max_val) {
+                if (!has_valid || val > max_val) {
                     max_val = val;
+                    has_valid = true;
                 }
             }
         }
     }
     
-    // 커널 영역 전체에서 발견한 최댓값을 출력 텐서의 현재 인덱스에 저장합니다.
-    output[idx] = max_val;
+    // 커널 영역 전체에서 발견한 최댓값을 출력 텐서의 현재 인덱스에 저장합니다 (유효 픽셀이 없으면 0.0 기록).
+    output[idx] = select(0.0, max_val, has_valid);
 }
 `;
 
@@ -3997,11 +3928,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // 변수: coord
     // 역할: 남은 1차원 인덱스를 출력 보폭으로 나누어 얻은 현재 차원(i)의 논리적 좌표값
-    let coord = out_idx_remaining / out_stride;
+    let stride_val = max(out_stride, 1u);
+    let coord = out_idx_remaining / stride_val;
     
     // 변수: out_idx_remaining 갱신
     // 역할: 다음 차원 계산을 위해 현재 차원에서 처리된 부분을 제외한 나머지(나머지 연산)를 저장합니다.
-    out_idx_remaining = out_idx_remaining % out_stride;
+    out_idx_remaining = out_idx_remaining % stride_val;
     
     // 변수: in_idx 누적
     // 역할: 도출된 논리적 좌표(coord)에 원래 텐서의 보폭(in_stride)을 곱해, 원본 텐서에서 데이터를 읽어올 정확한 1차원 메모리 주소를 누적해 나갑니다.
@@ -4471,7 +4403,7 @@ struct Params {
   d: u32,             // 헤드 차원 (반드시 짝수, 예: 64, 128)
   base_freq: f32,     // 기본 주파수 (예: 10000.0 또는 500000.0)
   offset_pos: u32,    // KV 캐시 오프셋 위치 (Prefill / Decode 단계별 시작 토큰 인덱스)
-  pad1: u32,
+  workgroupsX: u32,   // 2D 디스패치 X축 워크그룹 수
   pad2: u32,
 };
 
@@ -4485,7 +4417,7 @@ fn main(
   @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
   let thread_id = local_id.x;
-  let flat_token_idx = workgroup_id.x + workgroup_id.y * 65535u;
+  let flat_token_idx = workgroup_id.x + workgroup_id.y * params.workgroupsX;
   let total_tokens = params.B * params.H * params.N;
 
   if (flat_token_idx >= total_tokens) {
@@ -4530,6 +4462,10 @@ struct Params {
   dim: u32,         // 은닉 차원 (Hidden Dim, 예: 2048, 4096)
   eps: f32,         // 수치 안정화 epsilon (예: 1e-5, 1e-6)
   has_gamma: u32,   // 1: gamma 스케일 적용, 0: 생략
+  workgroupsX: u32, // 2D 디스패치 X축 워크그룹 수
+  pad1: u32,
+  pad2: u32,
+  pad3: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -4545,7 +4481,7 @@ fn main(
   @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
   let thread_id = local_id.x;
-  let token_idx = workgroup_id.x + workgroup_id.y * 65535u;
+  let token_idx = workgroup_id.x + workgroup_id.y * params.workgroupsX;
 
   if (token_idx >= params.num_tokens) {
     return;
@@ -4714,12 +4650,12 @@ struct EmbeddingParams {
   num_tokens: u32,
   embedding_dim: u32,
   vocab_size: u32,
-  pad: u32,
+  workgroupsX: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: EmbeddingParams;
 @group(0) @binding(1) var<storage, read> weight: array<f32>;
-@group(0) @binding(2) var<storage, read> index: array<u32>;
+@group(0) @binding(2) var<storage, read> index: array<f32>;
 @group(0) @binding(3) var<storage, read_write> out: array<f32>;
 
 @compute @workgroup_size(64, 1, 1)
@@ -4728,29 +4664,28 @@ fn main(
   @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
   let thread_id = local_id.x;
-  let flat_token_idx = workgroup_id.x + workgroup_id.y * 65535u;
+  let flat_token_idx = workgroup_id.x + workgroup_id.y * params.workgroupsX;
 
   if (flat_token_idx >= params.num_tokens) {
     return;
   }
 
-  // 32비트 정수 토큰 ID를 직접 u32로 읽어 비트 오독 및 Float32 축퇴를 원천 차단
-  let raw_token_id = index[flat_token_idx];
-  var token_id: u32 = 0u;
-
-  if (raw_token_id < params.vocab_size) {
-    token_id = raw_token_id;
-  } else {
-    // Vocab 범위를 벗어난 OOB 인덱스는 0으로 안전하게 클램프
-    token_id = 0u;
-  }
-
-  let weight_row_offset = token_id * params.embedding_dim;
+  let raw_val = index[flat_token_idx];
   let out_token_offset = flat_token_idx * params.embedding_dim;
+  let rounded = round(raw_val);
 
-  // 64개 스레드가 embedding_dim 차원을 협력 복사
-  for (var d: u32 = thread_id; d < params.embedding_dim; d = d + 64u) {
-    out[out_token_offset + d] = weight[weight_row_offset + d];
+  // NaN이거나 반올림 결과가 음수이거나 어휘집 크기 이상인 인덱스는 0번 토큰으로 오염시키지 않고 0.0 벡터 기록
+  if (raw_val != raw_val || rounded < 0.0 || rounded >= f32(params.vocab_size)) {
+    for (var d: u32 = thread_id; d < params.embedding_dim; d = d + 64u) {
+      out[out_token_offset + d] = 0.0;
+    }
+  } else {
+    let token_id = u32(rounded);
+    let weight_row_offset = token_id * params.embedding_dim;
+    // 64개 스레드가 embedding_dim 차원을 협력 복사
+    for (var d: u32 = thread_id; d < params.embedding_dim; d = d + 64u) {
+      out[out_token_offset + d] = weight[weight_row_offset + d];
+    }
   }
 }
 `;
@@ -4779,12 +4714,19 @@ struct EmbeddingBackwardParams {
   embedding_dim: u32,
   vocab_size: u32,
   total_weight_elements: u32,
+  workgroupsX: u32,
+  pad1: u32,
+  pad2: u32,
+  pad3: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: EmbeddingBackwardParams;
 @group(0) @binding(1) var<storage, read> grad_output: array<f32>;
-@group(0) @binding(2) var<storage, read> index: array<u32>;
+@group(0) @binding(2) var<storage, read> index: array<f32>;
 @group(0) @binding(3) var<storage, read_write> grad_weight: array<f32>;
+
+var<workgroup> s_match_count: atomic<u32>;
+var<workgroup> s_matches: array<u32, 64>;
 
 @compute @workgroup_size(64, 1, 1)
 fn main(
@@ -4792,8 +4734,60 @@ fn main(
   @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
   let thread_id = local_id.x;
-  let flat_idx = (workgroup_id.x + workgroup_id.y * 65535u) * 64u + thread_id;
+  let base_workgroup_idx = (workgroup_id.x + workgroup_id.y * params.workgroupsX) * 64u;
+  let flat_idx = base_workgroup_idx + thread_id;
 
+  let start_vocab = base_workgroup_idx / params.embedding_dim;
+  let end_vocab = (base_workgroup_idx + 63u) / params.embedding_dim;
+
+  // 단일 워크그룹 내 모든 스레드가 동일한 vocab_id를 처리하는 경우 (표준 LLM: embedding_dim >= 64):
+  // 64개 단위로 청크 순회(Chunked Cooperative Scan)를 수행하여 64개를 초과하는 임의의 출현 횟수도 절단 없이 100% 완전 누적
+  if (start_vocab == end_vocab && start_vocab < params.vocab_size) {
+    let target_v = start_vocab;
+    let d = flat_idx % params.embedding_dim;
+    var acc: f32 = 0.0;
+
+    let num_chunks = (params.num_tokens + 63u) / 64u;
+    for (var chunk: u32 = 0u; chunk < num_chunks; chunk = chunk + 1u) {
+      if (thread_id == 0u) {
+        atomicStore(&s_match_count, 0u);
+      }
+      workgroupBarrier();
+
+      let t = chunk * 64u + thread_id;
+      if (t < params.num_tokens) {
+        let raw_val = index[t];
+        let rounded = round(raw_val);
+        if (raw_val == raw_val && rounded >= 0.0 && rounded < f32(params.vocab_size)) {
+          let raw_token_id = u32(rounded);
+          if (raw_token_id == target_v) {
+            let slot = atomicAdd(&s_match_count, 1u);
+            if (slot < 64u) {
+              s_matches[slot] = t;
+            }
+          }
+        }
+      }
+      workgroupBarrier();
+
+      let count = min(atomicLoad(&s_match_count), 64u);
+      if (count > 0u && flat_idx < params.total_weight_elements) {
+        for (var m: u32 = 0u; m < count; m = m + 1u) {
+          let matched_t = s_matches[m];
+          let grad_out_offset = matched_t * params.embedding_dim + d;
+          acc = acc + grad_output[grad_out_offset];
+        }
+      }
+      workgroupBarrier();
+    }
+
+    if (flat_idx < params.total_weight_elements) {
+      grad_weight[flat_idx] = acc;
+    }
+    return;
+  }
+
+  // 워크그룹이 경계를 넘거나 소형 임베딩 차원인 경우 일반 스캔
   if (flat_idx >= params.total_weight_elements) {
     return;
   }
@@ -4802,12 +4796,15 @@ fn main(
   let d = flat_idx % params.embedding_dim;
 
   var acc: f32 = 0.0;
-
-  // index[t] == vocab_id인 모든 토큰 t에 대해 grad_output[t, d] 누산 (Lock-Free & Deterministic)
   for (var t: u32 = 0u; t < params.num_tokens; t = t + 1u) {
-    if (index[t] == vocab_id) {
-      let grad_out_offset = t * params.embedding_dim + d;
-      acc = acc + grad_output[grad_out_offset];
+    let raw_val = index[t];
+    let rounded = round(raw_val);
+    if (raw_val == raw_val && rounded >= 0.0 && rounded < f32(params.vocab_size)) {
+      let raw_token_id = u32(rounded);
+      if (raw_token_id == vocab_id) {
+        let grad_out_offset = t * params.embedding_dim + d;
+        acc = acc + grad_output[grad_out_offset];
+      }
     }
   }
 
@@ -4833,7 +4830,11 @@ struct AdamParams {
   eps: f32,
   beta1_power: f32,
   beta2_power: f32,
+  weight_decay: f32,
   workgroupsX: u32,
+  pad0: u32,
+  pad1: u32,
+  pad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: AdamParams;
@@ -4864,11 +4865,18 @@ fn main(
   m[idx] = m_curr;
   v[idx] = v_curr;
 
-  let m_hat = m_curr / (1.0 - params.beta1_power);
-  let v_hat = v_curr / (1.0 - params.beta2_power);
+  let denom1 = max(1.0 - params.beta1_power, 1e-12);
+  let denom2 = max(1.0 - params.beta2_power, 1e-12);
+  let m_hat = m_curr / denom1;
+  let v_hat = v_curr / denom2;
 
-  let step_update = params.lr * m_hat / (sqrt(v_hat) + params.eps);
-  param[idx] = param[idx] - step_update;
+  let step_update = params.lr * m_hat / (sqrt(max(v_hat, 0.0)) + max(params.eps, 1e-12));
+  
+  var p_val = param[idx];
+  if (params.weight_decay > 0.0) {
+    p_val = p_val * (1.0 - params.lr * params.weight_decay);
+  }
+  param[idx] = p_val - step_update;
 }
 `;
 
@@ -4937,12 +4945,12 @@ struct Params {
   num_samples: u32,
   num_classes: u32,
   ignore_index: i32,
-  pad: u32,
+  workgroupsX: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> logits: array<f32>;
-@group(0) @binding(2) var<storage, read> targets: array<u32>;
+@group(0) @binding(2) var<storage, read> targets: array<f32>;
 @group(0) @binding(3) var<storage, read_write> loss: array<f32>;
 
 var<workgroup> s_max: array<f32, 256>;
@@ -4954,9 +4962,16 @@ fn main(
   @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
   let thread_id = local_id.x;
-  let sample_idx = workgroup_id.x + workgroup_id.y * 65535u;
+  let sample_idx = workgroup_id.x + workgroup_id.y * params.workgroupsX;
 
   if (sample_idx >= params.num_samples) {
+    return;
+  }
+
+  if (params.num_classes == 0u) {
+    if (thread_id == 0u) {
+      loss[sample_idx] = 0.0;
+    }
     return;
   }
 
@@ -4966,7 +4981,9 @@ fn main(
   var local_max: f32 = -3.402823e+38;
   for (var c: u32 = thread_id; c < params.num_classes; c = c + 256u) {
     let val = logits[row_offset + c];
-    local_max = max(local_max, val);
+    if (val == val) {
+      local_max = max(local_max, val);
+    }
   }
   s_max[thread_id] = local_max;
 
@@ -5002,12 +5019,12 @@ fn main(
 
   // 3. Thread 0이 NLL Loss 계산 및 출력 버퍼에 기록
   if (thread_id == 0u) {
-    let raw_target = targets[sample_idx];
-    let target_idx = i32(raw_target);
-
-    if (target_idx == params.ignore_index || raw_target >= params.num_classes) {
+    let target_float = targets[sample_idx];
+    let rounded = round(target_float);
+    if (target_float != target_float || rounded < 0.0 || rounded >= f32(params.num_classes) || i32(rounded) == params.ignore_index) {
       loss[sample_idx] = 0.0;
     } else {
+      let raw_target = u32(rounded);
       let target_logit = logits[row_offset + raw_target];
       let log_sum_exp = log(max(sum_exp, 1e-12)) + max_val;
       loss[sample_idx] = log_sum_exp - target_logit;
@@ -5040,11 +5057,15 @@ struct Params {
   num_classes: u32,
   ignore_index: i32,
   reduction_scale: f32,
+  workgroupsX: u32,
+  grad_output_is_scalar: u32,
+  pad2: u32,
+  pad3: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> logits: array<f32>;
-@group(0) @binding(2) var<storage, read> targets: array<u32>;
+@group(0) @binding(2) var<storage, read> targets: array<f32>;
 @group(0) @binding(3) var<storage, read> grad_output: array<f32>;
 @group(0) @binding(4) var<storage, read_write> grad_logits: array<f32>;
 
@@ -5057,9 +5078,13 @@ fn main(
   @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
   let thread_id = local_id.x;
-  let sample_idx = workgroup_id.x + workgroup_id.y * 65535u;
+  let sample_idx = workgroup_id.x + workgroup_id.y * params.workgroupsX;
 
   if (sample_idx >= params.num_samples) {
+    return;
+  }
+
+  if (params.num_classes == 0u) {
     return;
   }
 
@@ -5069,7 +5094,9 @@ fn main(
   var local_max: f32 = -3.402823e+38;
   for (var c: u32 = thread_id; c < params.num_classes; c = c + 256u) {
     let val = logits[row_offset + c];
-    local_max = max(local_max, val);
+    if (val == val) {
+      local_max = max(local_max, val);
+    }
   }
   s_max[thread_id] = local_max;
 
@@ -5102,9 +5129,14 @@ fn main(
   }
 
   let sum_exp = max(s_sum[0], 1e-12);
-  let raw_target = targets[sample_idx];
-  let target_idx = i32(raw_target);
-  let g_out = grad_output[sample_idx];
+  let target_float = targets[sample_idx];
+  let rounded = round(target_float);
+  let is_target_valid = (target_float == target_float) && (rounded >= 0.0) && (rounded < f32(params.num_classes)) && (i32(rounded) != params.ignore_index);
+  let raw_target = select(0u, u32(max(0.0, rounded)), is_target_valid);
+
+  // 스칼라 Loss 역전파 시 0번 인덱스, 샘플별 가중치/벡터 역전파 시 sample_idx를 먼저 안전하게 선택하여 OOB 로드 차단
+  let grad_idx = select(sample_idx, 0u, params.grad_output_is_scalar == 1u);
+  let g_out = grad_output[grad_idx];
   let scale = g_out * params.reduction_scale;
 
   // 3. 각 클래스별 기울기 계산: (prob - indicator) * scale
@@ -5112,7 +5144,7 @@ fn main(
     let val = logits[row_offset + c];
     let prob = exp(val - max_val) / sum_exp;
 
-    if (target_idx == params.ignore_index || raw_target >= params.num_classes) {
+    if (!is_target_valid) {
       grad_logits[row_offset + c] = 0.0;
     } else {
       let indicator = select(0.0, 1.0, c == raw_target);
@@ -5415,7 +5447,17 @@ fn main(
         const promise = (async () => {
             try {
                 const { stagingBuffer, token } = await mapBufferAsync$1(record.buffer, record.byteLength);
-                _pendingStagingBuffers.set(handle, { stagingBuffer, token });
+                if (!_globalRegistry.has(handle)) {
+                    // 핸들이 매핑 진행 중에 이미 dispose된 경우 즉시 언맵 및 쿼터 토큰 회수
+                    try {
+                        stagingBuffer.unmap();
+                    }
+                    catch { /* ignore */ }
+                    releaseStagingBuffer(stagingBuffer, token, record.byteLength, false);
+                }
+                else {
+                    _pendingStagingBuffers.set(handle, { stagingBuffer, token });
+                }
             }
             finally {
                 _inFlightMapPromises.delete(handle);
@@ -5446,6 +5488,7 @@ fn main(
          * HOW: 초기엔 null로 두고 outArray 타입에 따라 getBuffer() 결과가 할당됩니다.
          */
         let bufProxy = null;
+        let stagingReleased = false;
         try {
             /**
              * WHAT: 데이터 복사가 기록될 최종 대상 Float32Array입니다.
@@ -5470,9 +5513,19 @@ fn main(
                 throw new Error(`[AMEVA Forge] readMappedInto size mismatch. Expected ${record.byteLength} bytes, got ${actualData.byteLength} bytes.`);
             }
             readMappedInto$1(obj.stagingBuffer, obj.token, actualData);
+            stagingReleased = true;
         }
         finally {
-            // _readMappedInto already releases the token!
+            // RAII 안전망: 유효성 검사 실패 등으로 _readMappedInto 호출 전 예외 발생 시 스테이징 버퍼 언맵 및 쿼터 토큰 반환
+            if (!stagingReleased) {
+                try {
+                    obj.stagingBuffer.unmap();
+                }
+                catch { /* ignore */ }
+                const rec = _globalRegistry.has(handle) ? _globalRegistry.get(handle) : null;
+                const bLen = rec ? rec.byteLength : obj.stagingBuffer.size;
+                releaseStagingBuffer(obj.stagingBuffer, obj.token, bLen, false);
+            }
             // H-NEW-06: bufProxy.release() 실패 시에도 리소스 정리 보장
             if (bufProxy) {
                 try {
@@ -5488,6 +5541,17 @@ fn main(
      * HOW: _globalRegistry.dispose()를 호출하여 핸들에 연결된 레코드를 삭제하고 버퍼 소멸 스케줄을 잡습니다.
      */
     function dispose(handle) {
+        const pending = _pendingStagingBuffers.get(handle);
+        if (pending) {
+            _pendingStagingBuffers.delete(handle);
+            try {
+                pending.stagingBuffer.unmap();
+            }
+            catch { }
+            const rec = _globalRegistry.has(handle) ? _globalRegistry.get(handle) : null;
+            const bLen = rec ? rec.byteLength : pending.stagingBuffer.size;
+            releaseStagingBuffer(pending.stagingBuffer, pending.token, bLen, false);
+        }
         _globalRegistry.dispose(handle);
     }
     /**
@@ -6277,6 +6341,109 @@ fn main(
     };
 
     /**
+     * uniformPool.ts - Transient Uniform Buffer Pool for GraphExecutor & Direct Ops
+     *
+     * WHAT: 소형 유니폼 버퍼(Uniform Buffer, 16B~256B)를 고성능으로 재사용하는 전용 버퍼 풀입니다.
+     * WHY: 그래프 실행 시 수십 개의 유니폼 버퍼를 매번 allocate/free하면서 onSubmittedWorkDone 지연으로 인해 발생하는 '가짜 OOM(Fake OOM)'을 원천 차단합니다.
+     * HOW: 크기별 버킷(16, 32, 64, 112, 144, 256)으로 버퍼를 관리하며, GPU 작업 제출 후 fence 카운터를 통해 안전하게 재사용합니다.
+     */
+    const UNIFORM_BUCKETS = [16, 32, 64, 112, 144, 256, 512, 1024];
+    class UniformBufferPool {
+        pools = new Map();
+        inFlight = [];
+        fenceCounter = 0;
+        acquire(byteLength) {
+            const bucket = this.bucket(byteLength);
+            const pool = this.pools.get(bucket) ?? [];
+            const reusable = pool.pop();
+            if (reusable) {
+                reusable.inFlight = true;
+                reusable.fenceId = this.fenceCounter;
+                return reusable;
+            }
+            const usage = typeof GPUBufferUsage !== 'undefined'
+                ? (GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST)
+                : (0x0040 | 0x0008);
+            const { buffer, token } = allocateBuffer(bucket, usage, 'uniform', 'UniformBufferPool');
+            return {
+                buffer,
+                token,
+                byteLength: bucket,
+                inFlight: true,
+                fenceId: this.fenceCounter,
+            };
+        }
+        releaseAfterSubmit(entry) {
+            this.inFlight.push(entry);
+        }
+        releaseSync(entry) {
+            entry.inFlight = false;
+            try {
+                freeBuffer(entry.buffer, entry.token);
+            }
+            catch { }
+        }
+        inFlightBytes() {
+            return this.inFlight.reduce((acc, e) => acc + e.byteLength, 0);
+        }
+        async retireSubmitted(device) {
+            const currentFence = ++this.fenceCounter;
+            try {
+                await device.queue.onSubmittedWorkDone();
+            }
+            catch { }
+            const stillInFlight = [];
+            for (const entry of this.inFlight) {
+                if (entry.fenceId < currentFence) {
+                    entry.inFlight = false;
+                    const pool = this.pools.get(entry.byteLength) ?? [];
+                    if (pool.length < 256) {
+                        pool.push(entry);
+                        this.pools.set(entry.byteLength, pool);
+                    }
+                    else {
+                        try {
+                            freeBuffer(entry.buffer, entry.token);
+                        }
+                        catch { }
+                    }
+                }
+                else {
+                    stillInFlight.push(entry);
+                }
+            }
+            this.inFlight = stillInFlight;
+        }
+        clear() {
+            for (const entries of this.pools.values()) {
+                for (const entry of entries) {
+                    try {
+                        freeBuffer(entry.buffer, entry.token);
+                    }
+                    catch { }
+                }
+            }
+            this.pools.clear();
+            for (const entry of this.inFlight) {
+                try {
+                    freeBuffer(entry.buffer, entry.token);
+                }
+                catch { }
+            }
+            this.inFlight = [];
+        }
+        bucket(n) {
+            for (const b of UNIFORM_BUCKETS) {
+                if (n <= b)
+                    return b;
+            }
+            return Math.ceil(n / 256) * 256;
+        }
+    }
+    const _globalUniformPool = new UniformBufferPool();
+    registerTransientPool(() => _globalUniformPool.clear(), (device) => _globalUniformPool.retireSubmitted(device));
+
+    /**
      * Created: 2026-08-12T12:14:52+09:00
      * Modified:
      *   - 2026-08-12T12:59:35+09:00: Feat: Introduce v3.0 features (CNN, Pooling, Dropout, Serialization)
@@ -6332,6 +6499,60 @@ fn main(
     const BUFFER_USAGE_STORAGE_SRC = typeof GPUBufferUsage !== 'undefined'
         ? (GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC)
         : (0x0080 | 0x0004);
+    function getUniformParamsByteLength(op) {
+        switch (op) {
+            case 'pad':
+            case 'where':
+                return 144;
+            case 'gather':
+            case 'scatter':
+            case 'permute':
+            case 'add':
+            case 'sub':
+            case 'mul':
+            case 'div':
+                return 112;
+            case 'maxpool2d':
+            case 'avgpool2d':
+                return 64;
+            case 'im2col':
+            case 'col2im':
+            case 'flash_attention':
+            case 'adam_step':
+                return 48;
+            case 'embedding_backward':
+            case 'rope':
+            case 'matmul':
+            case 'matmul_tiled':
+            case 'matmul_bias_relu':
+            case 'batched_matmul':
+            case 'transpose':
+            case 'axpy':
+            case 'cat':
+            case 'dropout':
+            case 'fill':
+            case 'relu':
+            case 'relu_backward':
+            case 'exp':
+            case 'log':
+            case 'sigmoid':
+            case 'tanh':
+            case 'sigmoid_backward':
+            case 'tanh_backward':
+            case 'neg':
+                return 32;
+            case 'rmsnorm':
+            case 'swiglu':
+            case 'unpack_quant':
+            case 'embedding':
+            case 'sgd_momentum_step':
+            case 'sparse_cross_entropy':
+            case 'sparse_cross_entropy_backward':
+                return 32;
+            default:
+                return 32;
+        }
+    }
     function _safeLog(msg) {
         try {
             if (typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'development') {
@@ -6516,7 +6737,7 @@ fn main(
             'sgd_momentum_step': { minIn: 3, exactIn: true, minParams: 2, exactParams: false }, // param, grad, velocity
             'sparse_cross_entropy': { minIn: 2, exactIn: true, minParams: 0, exactParams: false }, // logits, targets
             'sparse_cross_entropy_backward': { minIn: 3, exactIn: true, minParams: 0, exactParams: false }, // logits, targets, grad_out
-            'cat': { minIn: 2, exactIn: false, minParams: 1, exactParams: false } // 가변 개수 입력, params는 axis 등
+            'cat': { minIn: 2, exactIn: true, minParams: 3, exactParams: true } // in: [a, b], params: [a_dim, b_dim, stride]
         };
         const opStr = i.op;
         const schema = OP_SCHEMA[opStr];
@@ -6544,6 +6765,21 @@ fn main(
                 }
             }
         }
+        if (i.op === 'flash_attention') {
+            const shape = i.shape;
+            if (shape && shape.length >= 4) {
+                const d = shape[3];
+                if (d > 256) {
+                    throw new AMEVAForgeSecurityError(`Instruction[${idx}] flash_attention: head_dim (d=${d}) exceeds maximum supported shared memory tile (256)`);
+                }
+            }
+            if (i.params && i.params.length > 0) {
+                const H_kv = i.params[0];
+                if (H_kv < 1) {
+                    throw new AMEVAForgeSecurityError(`Instruction[${idx}] flash_attention: H_kv must be >= 1, got ${H_kv}`);
+                }
+            }
+        }
         return i;
     }
     /**
@@ -6553,19 +6789,23 @@ fn main(
      * HOW: JSON을 파싱하고, 명령을 검증하며, 적절한 청크로 분할하여 WebGPU 커맨드 버퍼에 기록하고 제출(submit)합니다. 실패 시 트랜잭션을 롤백합니다.
      */
     let _executionQueueChain = Promise.resolve();
-    async function executeGraph(instructionsJson, inputs, outputIds) {
+    async function executeGraph(instructionsJson, inputs, _outputIds) {
         const previous = _executionQueueChain;
         let releaseLock;
         _executionQueueChain = new Promise((resolve) => {
             releaseLock = resolve;
         });
         try {
-            await previous;
-        }
-        catch {
-            // Suppress previous transaction error so queue continues processing
-        }
-        try {
+            try {
+                await previous;
+            }
+            catch {
+                // Suppress previous transaction error so queue continues processing,
+                // but verify device health before proceeding
+                if (isDeviceLost()) {
+                    throw new AMEVAForgeDeviceLostError("Cannot execute graph: WebGPU device was lost during previous transaction");
+                }
+            }
             return await _executeGraphCore(instructionsJson, inputs);
         }
         finally {
@@ -6599,14 +6839,17 @@ fn main(
         }
         // ── 2. Validate ──
         const instructions = rawInstructions.map(validateInstruction);
-        // VULN-06: Ensure AXPY is only executed in the optimizer commit phase and not followed by downstream ops
-        let seenAxpy = false;
+        // VULN-06: Ensure in-place optimizer operations (axpy, adam_step, sgd_momentum_step)
+        // are only executed in the optimizer commit phase and not followed by downstream ops
+        let seenInPlaceOp = false;
+        let inPlaceOpName = '';
         for (const inst of instructions) {
-            if (inst.op === 'axpy') {
-                seenAxpy = true;
+            if (inst.op === 'axpy' || inst.op === 'adam_step' || inst.op === 'sgd_momentum_step') {
+                seenInPlaceOp = true;
+                inPlaceOpName = inst.op;
             }
-            else if (seenAxpy) {
-                throw new AMEVAForgeSecurityError(`Invalid graph execution: In-place 'axpy' is an optimizer commit phase operation and cannot be followed by downstream op '${inst.op}' in the same transaction.`);
+            else if (seenInPlaceOp) {
+                throw new AMEVAForgeSecurityError(`Invalid graph execution: In-place '${inPlaceOpName}' is an optimizer commit phase operation and cannot be followed by downstream op '${inst.op}' in the same transaction.`);
             }
         }
         let inputs;
@@ -6634,6 +6877,7 @@ fn main(
         const idToBuffer = {};
         const idToByteLength = {};
         const idToShape = {};
+        const shadowSnapshots = [];
         const transaction = new GraphTransaction();
         let inputIdx = 0;
         const paramsAllocations = [];
@@ -6783,6 +7027,12 @@ fn main(
                         throw new AMEVAForgeSecurityError(`Instruction axpy is missing 'in' fields.`);
                     }
                     outBuffer = idToBuffer[inst.in[1]];
+                    if (outBuffer && !shadowSnapshots.some(s => s.origBuffer === outBuffer)) {
+                        const { buffer: shadowBuf, token: shadowTok } = allocateBuffer(byteLength, BUFFER_USAGE_STORAGE_COPY, 'tensor', 'ShadowSnapshot_axpy');
+                        commandEncoder.copyBufferToBuffer(outBuffer, 0, shadowBuf, 0, byteLength);
+                        encoderHasCommands = true;
+                        shadowSnapshots.push({ origBuffer: outBuffer, shadowBuffer: shadowBuf, shadowToken: shadowTok, byteLength });
+                    }
                     idToHandle[inst.id] = idToHandle[inst.in[1]];
                     idToBuffer[inst.id] = outBuffer;
                     idToByteLength[inst.id] = byteLength;
@@ -6795,6 +7045,19 @@ fn main(
                     }
                     // inst.in[0]은 param_id이므로 원본 가중치 버퍼를 직접 outBuffer로 재사용 (In-Place 갱신 보장)
                     outBuffer = idToBuffer[inst.in[0]];
+                    // In-place 갱신되는 모든 버퍼(param, m, v, velocity)에 대해 섀도우 스냅샷 생성
+                    const inPlaceInputIndices = inst.op === 'adam_step' ? [0, 2, 3] : [0, 2];
+                    for (const inputIdx of inPlaceInputIndices) {
+                        const inId = inst.in[inputIdx];
+                        const targetBuf = idToBuffer[inId];
+                        const targetByteLen = idToByteLength[inId] ?? byteLength;
+                        if (targetBuf && !shadowSnapshots.some(s => s.origBuffer === targetBuf)) {
+                            const { buffer: shadowBuf, token: shadowTok } = allocateBuffer(targetByteLen, BUFFER_USAGE_STORAGE_COPY, 'tensor', `ShadowSnapshot_${inst.op}_in${inputIdx}`);
+                            commandEncoder.copyBufferToBuffer(targetBuf, 0, shadowBuf, 0, targetByteLen);
+                            encoderHasCommands = true;
+                            shadowSnapshots.push({ origBuffer: targetBuf, shadowBuffer: shadowBuf, shadowToken: shadowTok, byteLength: targetByteLen });
+                        }
+                    }
                     idToHandle[inst.id] = idToHandle[inst.in[0]];
                     idToBuffer[inst.id] = outBuffer;
                     idToByteLength[inst.id] = byteLength;
@@ -6822,36 +7085,25 @@ fn main(
                 }
                 /**
                  * WHAT: 현재 오퍼레이션의 유니폼 파라미터를 담기 위해 필요한 바이트 크기입니다.
-                 * WHY: 오퍼레이션(패딩, 풀링 등)마다 셰이더가 요구하는 인자의 종류와 개수가 다르므로 가변적인 버퍼 크기를 잡기 위해 결정합니다.
-                 * HOW: inst.op 문자열을 판별하여 필요한 바이트 수(최소 32바이트)를 할당합니다.
+                 * WHY: 오퍼레이션(패딩, 풀링, FlashAttention 등)마다 셰이더가 요구하는 인자의 종류와 개수가 다르므로 안전한 버퍼 크기를 잡기 위해 결정합니다.
+                 * HOW: getUniformParamsByteLength 함수를 통해 정확하고 안전한 바이트 크기를 할당합니다.
                  */
-                let paramsSize = 32;
-                if (inst.op === 'pad')
-                    paramsSize = 144;
-                else if (inst.op === 'gather' || inst.op === 'scatter')
-                    paramsSize = 112;
-                else if (inst.op === 'maxpool2d' || inst.op === 'avgpool2d')
-                    paramsSize = 64;
-                else if (inst.op === 'im2col' || inst.op === 'col2im')
-                    paramsSize = 48;
-                else if (inst.op === 'permute')
-                    paramsSize = 112;
-                else if (['add', 'sub', 'mul', 'div'].includes(inst.op))
-                    paramsSize = 112;
+                const paramsSize = getUniformParamsByteLength(inst.op);
                 const { buffer: paramsBuffer, token: paramsToken } = allocateBuffer(paramsSize, BUFFER_USAGE_UNIFORM_COPY, 'uniform', `Graph_${instructions[0]?.id}_params`);
                 paramsAllocations.push({ buffer: paramsBuffer, token: paramsToken });
                 let wgslCode = "";
                 let dispatchX = 1, dispatchY = 1, dispatchZ = 1;
                 let isMatmul = false;
                 let B = 1, M = 1, N = 1, K = 1;
-                if (inst.op === 'matmul' || inst.op === 'matmul_bias_relu') {
+                if (inst.op === 'matmul' || inst.op === 'matmul_tiled' || inst.op === 'matmul_bias_relu') {
                     if (!inst.params || inst.params.length < 3) {
                         throw new AMEVAForgeSecurityError(`${inst.op} instruction missing params`);
                     }
                     [M, N, K] = inst.params;
                     const isFused = inst.op === 'matmul_bias_relu';
-                    const tileSize = isFused ? 16 : 8;
-                    wgslCode = isFused ? MATMUL_BIAS_RELU_WGSL : MATMUL_WGSL;
+                    const isTiled = inst.op === 'matmul_tiled';
+                    const tileSize = isFused || isTiled ? 16 : 8;
+                    wgslCode = isFused ? MATMUL_BIAS_RELU_WGSL : (isTiled ? MATMUL_TILED_WGSL : MATMUL_WGSL);
                     isMatmul = true;
                     // TS-H01 Fix: matmul X축도 65535 클램핑 — 초과분은 Z 차원으로 분산
                     const rawDispatchX = Math.ceil(N / tileSize);
@@ -7249,6 +7501,11 @@ fn main(
                     const [B, H, N, d] = inst.shape;
                     const baseFreq = inst.params?.[0] ?? 10000.0;
                     const offsetPos = inst.params?.[1] ?? 0;
+                    const totalTokens = B * H * N;
+                    const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(totalTokens, 1);
+                    dispatchX = dx;
+                    dispatchY = dy;
+                    dispatchZ = 1;
                     const buf = new ArrayBuffer(32);
                     const u32view = new Uint32Array(buf);
                     const f32view = new Float32Array(buf);
@@ -7258,14 +7515,8 @@ fn main(
                     u32view[3] = d;
                     f32view[4] = baseFreq;
                     u32view[5] = offsetPos;
-                    u32view[6] = 0;
+                    u32view[6] = dx;
                     u32view[7] = 0;
-                    const totalTokens = B * H * N;
-                    // rope.wgsl은 워크그룹당 1개 토큰을 회전하므로 정확히 totalTokens개의 워크그룹 디스패치
-                    const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(totalTokens, 1);
-                    dispatchX = dx;
-                    dispatchY = dy;
-                    dispatchZ = 1;
                     device.queue.writeBuffer(paramsBuffer, 0, u32view);
                 }
                 else if (inst.op === 'rmsnorm') {
@@ -7274,25 +7525,28 @@ fn main(
                     const numTokens = inst.shape.slice(0, -1).reduce((a, b) => a * b, 1);
                     const eps = inst.params?.[0] ?? 1e-5;
                     const hasGamma = (inst.in && inst.in.length >= 2) ? 1 : 0;
-                    const buf = new ArrayBuffer(16);
+                    const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numTokens, 1);
+                    dispatchX = dx;
+                    dispatchY = dy;
+                    dispatchZ = 1;
+                    const buf = new ArrayBuffer(32);
                     const u32view = new Uint32Array(buf);
                     const f32view = new Float32Array(buf);
                     u32view[0] = numTokens;
                     u32view[1] = dim;
                     f32view[2] = eps;
                     u32view[3] = hasGamma;
-                    // rmsnorm.wgsl은 워크그룹당 1개 토큰을 정규화하므로 정확히 numTokens개의 워크그룹 디스패치
-                    const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numTokens, 1);
-                    dispatchX = dx;
-                    dispatchY = dy;
-                    dispatchZ = 1;
+                    u32view[4] = dx;
+                    u32view[5] = 0;
+                    u32view[6] = 0;
+                    u32view[7] = 0;
                     device.queue.writeBuffer(paramsBuffer, 0, u32view);
                 }
                 else if (inst.op === 'swiglu') {
                     wgslCode = SWIGLU_WGSL;
                     const numElements = inst.shape.reduce((a, b) => a * b, 1);
-                    const p = new Uint32Array([numElements, 0, 0, 0]);
                     const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numElements, 64);
+                    const p = new Uint32Array([numElements, dx, 0, 0]);
                     dispatchX = dx;
                     dispatchY = dy;
                     dispatchZ = 1;
@@ -7303,8 +7557,8 @@ fn main(
                     const numElements = inst.shape.reduce((a, b) => a * b, 1);
                     const bits = inst.params?.[0] ?? 4;
                     const groupSize = inst.params?.[1] ?? 128;
-                    const p = new Uint32Array([numElements, bits, groupSize, 0]);
                     const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numElements, 64);
+                    const p = new Uint32Array([numElements, bits, groupSize, dx]);
                     dispatchX = dx;
                     dispatchY = dy;
                     dispatchZ = 1;
@@ -7315,9 +7569,9 @@ fn main(
                     const embeddingDim = inst.shape[inst.shape.length - 1];
                     const numTokens = inst.shape.slice(0, -1).reduce((a, b) => a * b, 1);
                     const vocabSize = inst.params?.[2] ?? 1000000;
-                    const p = new Uint32Array([numTokens, embeddingDim, vocabSize, 0]);
                     // embedding.wgsl은 워크그룹당 1개 토큰을 복사하므로 정확히 numTokens개의 워크그룹 디스패치
                     const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numTokens, 1);
+                    const p = new Uint32Array([numTokens, embeddingDim, vocabSize, dx]);
                     dispatchX = dx;
                     dispatchY = dy;
                     dispatchZ = 1;
@@ -7329,8 +7583,8 @@ fn main(
                     const embeddingDim = inst.shape[1];
                     const numTokens = inst.params?.[0] ?? 1;
                     const totalWeightElements = vocabSize * embeddingDim;
-                    const p = new Uint32Array([numTokens, embeddingDim, vocabSize, totalWeightElements]);
                     const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(totalWeightElements, 64);
+                    const p = new Uint32Array([numTokens, embeddingDim, vocabSize, totalWeightElements, dx, 0, 0, 0]);
                     dispatchX = dx;
                     dispatchY = dy;
                     dispatchZ = 1;
@@ -7345,11 +7599,12 @@ fn main(
                     const eps = inst.params?.[3] ?? 1e-8;
                     const beta1_power = inst.params?.[4] ?? beta1;
                     const beta2_power = inst.params?.[5] ?? beta2;
+                    const weight_decay = inst.params?.[6] ?? 0.0;
                     const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numElements, 64);
                     dispatchX = dx;
                     dispatchY = dy;
                     dispatchZ = 1;
-                    const buf = new ArrayBuffer(32);
+                    const buf = new ArrayBuffer(48);
                     const u32view = new Uint32Array(buf);
                     const f32view = new Float32Array(buf);
                     u32view[0] = numElements;
@@ -7359,7 +7614,11 @@ fn main(
                     f32view[4] = eps;
                     f32view[5] = beta1_power;
                     f32view[6] = beta2_power;
-                    u32view[7] = dispatchX;
+                    f32view[7] = weight_decay;
+                    u32view[8] = dispatchX;
+                    u32view[9] = 0;
+                    u32view[10] = 0;
+                    u32view[11] = 0;
                     device.queue.writeBuffer(paramsBuffer, 0, u32view);
                 }
                 else if (inst.op === 'sgd_momentum_step') {
@@ -7395,7 +7654,7 @@ fn main(
                     u32view[0] = numSamples;
                     u32view[1] = numClasses;
                     i32view[2] = ignoreIndex;
-                    u32view[3] = 0;
+                    u32view[3] = dx;
                     device.queue.writeBuffer(paramsBuffer, 0, u32view);
                 }
                 else if (inst.op === 'sparse_cross_entropy_backward') {
@@ -7404,11 +7663,13 @@ fn main(
                     const numClasses = inst.shape[1];
                     const ignoreIndex = inst.params?.[0] ?? -100;
                     const reductionScale = inst.params?.[1] ?? 1.0;
+                    const gradOutShape = (inst.in && inst.in[2] !== undefined && idToShape[inst.in[2]]) ? idToShape[inst.in[2]] : [];
+                    const isScalarGrad = (gradOutShape.length === 0 || gradOutShape.reduce((a, b) => a * b, 1) === 1) ? 1 : 0;
                     const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numSamples, 1);
                     dispatchX = dx;
                     dispatchY = dy;
                     dispatchZ = 1;
-                    const buf = new ArrayBuffer(16);
+                    const buf = new ArrayBuffer(32);
                     const u32view = new Uint32Array(buf);
                     const i32view = new Int32Array(buf);
                     const f32view = new Float32Array(buf);
@@ -7416,6 +7677,10 @@ fn main(
                     u32view[1] = numClasses;
                     i32view[2] = ignoreIndex;
                     f32view[3] = reductionScale;
+                    u32view[4] = dx;
+                    u32view[5] = isScalarGrad;
+                    u32view[6] = 0;
+                    u32view[7] = 0;
                     device.queue.writeBuffer(paramsBuffer, 0, u32view);
                 }
                 else if (inst.op === 'sum' || inst.op === 'max') {
@@ -7477,6 +7742,34 @@ fn main(
                             p[20 + k] = effSB[k];
                         device.queue.writeBuffer(paramsBuffer, 0, p);
                     }
+                    else if (inst.op === 'where') {
+                        let shapeCond = [1];
+                        let shapeA = [1];
+                        let shapeB = [1];
+                        if (inst.in && inst.in.length >= 3) {
+                            const in0Handle = idToHandle[inst.in[0]];
+                            const in1Handle = idToHandle[inst.in[1]];
+                            const in2Handle = idToHandle[inst.in[2]];
+                            shapeCond = idToShape[inst.in[0]] ?? (_globalRegistry.has(in0Handle) ? _globalRegistry.get(in0Handle).shape : [1]);
+                            shapeA = idToShape[inst.in[1]] ?? (_globalRegistry.has(in1Handle) ? _globalRegistry.get(in1Handle).shape : [1]);
+                            shapeB = idToShape[inst.in[2]] ?? (_globalRegistry.has(in2Handle) ? _globalRegistry.get(in2Handle).shape : [1]);
+                        }
+                        const { dOut, effSCond, effSA, effSB } = computeBroadcastParams3(inst.shape, shapeCond, shapeA, shapeB);
+                        const p = new Uint32Array(36);
+                        p[0] = numElements;
+                        p[1] = dispatchX;
+                        p[2] = inst.shape.length;
+                        p[3] = 0;
+                        for (let k = 0; k < 8; k++)
+                            p[4 + k] = dOut[k];
+                        for (let k = 0; k < 8; k++)
+                            p[12 + k] = effSCond[k];
+                        for (let k = 0; k < 8; k++)
+                            p[20 + k] = effSA[k];
+                        for (let k = 0; k < 8; k++)
+                            p[28 + k] = effSB[k];
+                        device.queue.writeBuffer(paramsBuffer, 0, p);
+                    }
                     else {
                         let numA = 0;
                         let numB = 0;
@@ -7512,6 +7805,10 @@ fn main(
                         currentByteLength = rec ? rec.byteLength : 4;
                     }
                     let currentSize = currentByteLength / 4;
+                    if (currentSize === 0) {
+                        device.queue.writeBuffer(outBuffer, 0, new Float32Array([inst.op === 'sum' ? 0.0 : -3.402823466e+38]));
+                        continue;
+                    }
                     let currentInputBuf = idToBuffer[inst.in[0]];
                     const intermediateAllocations = [];
                     while (currentSize > 1) {
@@ -7742,6 +8039,12 @@ fn main(
             // ── 5. Rollback on Sync Error ──
             _safeLog(`[AMEVA Forge] Transaction Sync Failed. Rolling back... ${err}`);
             transaction.rollback();
+            for (const snap of shadowSnapshots) {
+                try {
+                    freeBuffer(snap.shadowBuffer, snap.shadowToken);
+                }
+                catch (e) { }
+            }
             for (const alloc of paramsAllocations) {
                 if (alloc.isUniformPool && alloc.uniformEntry) {
                     _globalUniformPool.releaseSync(alloc.uniformEntry);
@@ -7774,6 +8077,48 @@ fn main(
         if (gpuError) {
             _safeLog(`[AMEVA Forge] GPU error detected. Rolling back transaction... ${gpuError}`);
             transaction.rollback();
+            // Hardware VRAM snapshot restoration
+            if (shadowSnapshots.length > 0 && !isDeviceLost()) {
+                try {
+                    const recoveryEncoder = device.createCommandEncoder();
+                    for (const snap of shadowSnapshots) {
+                        recoveryEncoder.copyBufferToBuffer(snap.shadowBuffer, 0, snap.origBuffer, 0, snap.byteLength);
+                    }
+                    device.queue.submit([recoveryEncoder.finish()]);
+                    device.queue.onSubmittedWorkDone().then(() => {
+                        for (const snap of shadowSnapshots) {
+                            try {
+                                freeBuffer(snap.shadowBuffer, snap.shadowToken);
+                            }
+                            catch (e) { }
+                        }
+                    }).catch(() => {
+                        for (const snap of shadowSnapshots) {
+                            try {
+                                freeBuffer(snap.shadowBuffer, snap.shadowToken);
+                            }
+                            catch (e) { }
+                        }
+                    });
+                }
+                catch (recErr) {
+                    _safeLog(`[AMEVA Forge] Hardware snapshot rollback failed: ${recErr}`);
+                    for (const snap of shadowSnapshots) {
+                        try {
+                            freeBuffer(snap.shadowBuffer, snap.shadowToken);
+                        }
+                        catch (e) { }
+                    }
+                }
+            }
+            else {
+                for (const snap of shadowSnapshots) {
+                    try {
+                        freeBuffer(snap.shadowBuffer, snap.shadowToken);
+                    }
+                    catch (e) { }
+                }
+            }
             for (const alloc of paramsAllocations) {
                 if (alloc.isUniformPool && alloc.uniformEntry) {
                     _globalUniformPool.releaseAfterSubmit(alloc.uniformEntry);
@@ -7799,7 +8144,24 @@ fn main(
         }
         // ── 6. Commit transaction to global registry only on verified success ──
         transaction.commit(_globalRegistry);
-        // ── 7. Cleanup temporary/uniform allocations after GPU completion ──
+        // ── 7. Cleanup temporary/uniform allocations and shadow snapshots after GPU completion ──
+        if (shadowSnapshots.length > 0) {
+            device.queue.onSubmittedWorkDone().then(() => {
+                for (const snap of shadowSnapshots) {
+                    try {
+                        freeBuffer(snap.shadowBuffer, snap.shadowToken);
+                    }
+                    catch (e) { }
+                }
+            }).catch(() => {
+                for (const snap of shadowSnapshots) {
+                    try {
+                        freeBuffer(snap.shadowBuffer, snap.shadowToken);
+                    }
+                    catch (e) { }
+                }
+            });
+        }
         if (paramsAllocations.length > 0) {
             const nonPoolAllocs = [];
             for (const alloc of paramsAllocations) {
@@ -8245,6 +8607,7 @@ fn main(
     exports.clearStepLossHistory = clearStepLossHistory;
     exports.cloneToFloat32Array = cloneToFloat32Array;
     exports.computeBroadcastParams = computeBroadcastParams;
+    exports.computeBroadcastParams3 = computeBroadcastParams3;
     exports.computeDispatch2D = computeDispatch2D;
     exports.configureRuntime = configureRuntime;
     exports.dispose = dispose;

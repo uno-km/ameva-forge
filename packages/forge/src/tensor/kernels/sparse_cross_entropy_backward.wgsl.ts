@@ -23,11 +23,15 @@ struct Params {
   num_classes: u32,
   ignore_index: i32,
   reduction_scale: f32,
+  workgroupsX: u32,
+  grad_output_is_scalar: u32,
+  pad2: u32,
+  pad3: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> logits: array<f32>;
-@group(0) @binding(2) var<storage, read> targets: array<u32>;
+@group(0) @binding(2) var<storage, read> targets: array<f32>;
 @group(0) @binding(3) var<storage, read> grad_output: array<f32>;
 @group(0) @binding(4) var<storage, read_write> grad_logits: array<f32>;
 
@@ -40,9 +44,13 @@ fn main(
   @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
   let thread_id = local_id.x;
-  let sample_idx = workgroup_id.x + workgroup_id.y * 65535u;
+  let sample_idx = workgroup_id.x + workgroup_id.y * params.workgroupsX;
 
   if (sample_idx >= params.num_samples) {
+    return;
+  }
+
+  if (params.num_classes == 0u) {
     return;
   }
 
@@ -52,7 +60,9 @@ fn main(
   var local_max: f32 = -3.402823e+38;
   for (var c: u32 = thread_id; c < params.num_classes; c = c + 256u) {
     let val = logits[row_offset + c];
-    local_max = max(local_max, val);
+    if (val == val) {
+      local_max = max(local_max, val);
+    }
   }
   s_max[thread_id] = local_max;
 
@@ -85,9 +95,14 @@ fn main(
   }
 
   let sum_exp = max(s_sum[0], 1e-12);
-  let raw_target = targets[sample_idx];
-  let target_idx = i32(raw_target);
-  let g_out = grad_output[sample_idx];
+  let target_float = targets[sample_idx];
+  let rounded = round(target_float);
+  let is_target_valid = (target_float == target_float) && (rounded >= 0.0) && (rounded < f32(params.num_classes)) && (i32(rounded) != params.ignore_index);
+  let raw_target = select(0u, u32(max(0.0, rounded)), is_target_valid);
+
+  // 스칼라 Loss 역전파 시 0번 인덱스, 샘플별 가중치/벡터 역전파 시 sample_idx를 먼저 안전하게 선택하여 OOB 로드 차단
+  let grad_idx = select(sample_idx, 0u, params.grad_output_is_scalar == 1u);
+  let g_out = grad_output[grad_idx];
   let scale = g_out * params.reduction_scale;
 
   // 3. 각 클래스별 기울기 계산: (prob - indicator) * scale
@@ -95,7 +110,7 @@ fn main(
     let val = logits[row_offset + c];
     let prob = exp(val - max_val) / sum_exp;
 
-    if (target_idx == params.ignore_index || raw_target >= params.num_classes) {
+    if (!is_target_valid) {
       grad_logits[row_offset + c] = 0.0;
     } else {
       let indicator = select(0.0, 1.0, c == raw_target);

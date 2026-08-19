@@ -27,6 +27,7 @@ export type ForgeRuntimeConfig = {
 };
 export declare function configureRuntime(config: ForgeRuntimeConfig): void;
 export declare function getRuntimeConfig(): Required<ForgeRuntimeConfig>;
+export declare function getUniformParamsByteLength(op: string): number;
 export interface PendingTensorRecord {
     handle: TensorHandle;
     buffer: GPUBuffer;
@@ -48,4 +49,4 @@ export declare class GraphTransaction {
     commit(registry: TensorRegistry): void;
     rollback(): void;
 }
-export declare function executeGraph(instructionsJson: string, inputs: (Float32Array | any)[], outputIds?: number[]): Promise<Record<string, TensorHandle>>;
+export declare function executeGraph(instructionsJson: string, inputs: (Float32Array | any)[], _outputIds?: number[]): Promise<Record<string, TensorHandle>>;

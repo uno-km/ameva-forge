@@ -15,16 +15,16 @@
  * NM-05 Fix: device.pushErrorScope()로 op별 에러 감지
  */
 
-import { getDevice } from "../webgpu/device";
+import { getDevice, isDeviceLost } from "../webgpu/device";
 import { _globalRegistry, TensorRegistry } from "./tensorRegistry";
 import { TensorHandle, DType } from "../types";
 import { allocateBuffer, writeFloat32Array, freeBuffer } from "../webgpu/buffers";
 import { _globalQuotaManager, AllocationToken } from "../webgpu/quota";
-import { AMEVAForgeShapeError, AMEVAForgeSecurityError, AMEVAForgeUnsupportedOpError, AMEVAForgeValidationError, AMEVAForgeOutOfMemoryError, AMEVAForgeInternalGPUError } from "../errors";
+import { AMEVAForgeShapeError, AMEVAForgeSecurityError, AMEVAForgeUnsupportedOpError, AMEVAForgeValidationError, AMEVAForgeOutOfMemoryError, AMEVAForgeInternalGPUError, AMEVAForgeDeviceLostError } from "../errors";
 import { assertAllowedKernelName } from "../webgpu/shaderGuard";
 import { assertWasmRange } from "../webgpu/validateWasmRange";
 import { _globalPipelineCache } from "../webgpu/pipelineCache";
-import { computeBroadcastParams } from "./broadcastParams";
+import { computeBroadcastParams, computeBroadcastParams3 } from "./broadcastParams";
 import { computeDispatch2D } from "./dispatchShape";
 import { _globalUniformPool, UniformEntry } from "../webgpu/uniformPool";
 
@@ -134,6 +134,61 @@ const BUFFER_USAGE_UNIFORM_COPY = typeof GPUBufferUsage !== 'undefined'
 const BUFFER_USAGE_STORAGE_SRC = typeof GPUBufferUsage !== 'undefined'
   ? (GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC)
   : (0x0080 | 0x0004);
+
+export function getUniformParamsByteLength(op: string): number {
+  switch (op) {
+    case 'pad':
+    case 'where':
+      return 144;
+    case 'gather':
+    case 'scatter':
+    case 'permute':
+    case 'add':
+    case 'sub':
+    case 'mul':
+    case 'div':
+      return 112;
+    case 'maxpool2d':
+    case 'avgpool2d':
+      return 64;
+    case 'im2col':
+    case 'col2im':
+    case 'flash_attention':
+    case 'adam_step':
+      return 48;
+    case 'embedding_backward':
+    case 'rope':
+    case 'matmul':
+    case 'matmul_tiled':
+    case 'matmul_bias_relu':
+    case 'batched_matmul':
+    case 'transpose':
+    case 'axpy':
+    case 'cat':
+    case 'dropout':
+    case 'fill':
+    case 'relu':
+    case 'relu_backward':
+    case 'exp':
+    case 'log':
+    case 'sigmoid':
+    case 'tanh':
+    case 'sigmoid_backward':
+    case 'tanh_backward':
+    case 'neg':
+      return 32;
+    case 'rmsnorm':
+    case 'swiglu':
+    case 'unpack_quant':
+    case 'embedding':
+    case 'sgd_momentum_step':
+    case 'sparse_cross_entropy':
+    case 'sparse_cross_entropy_backward':
+      return 32;
+    default:
+      return 32;
+  }
+}
 
 /**
  * WHAT: 단일 텐서 연산을 지시하는 그래프 명령어의 데이터 타입 인터페이스입니다.
@@ -367,7 +422,7 @@ function validateInstruction(inst: unknown, idx: number): GraphInstruction {
     'sgd_momentum_step': { minIn: 3, exactIn: true, minParams: 2, exactParams: false }, // param, grad, velocity
     'sparse_cross_entropy': { minIn: 2, exactIn: true, minParams: 0, exactParams: false }, // logits, targets
     'sparse_cross_entropy_backward': { minIn: 3, exactIn: true, minParams: 0, exactParams: false }, // logits, targets, grad_out
-    'cat': { minIn: 2, exactIn: false, minParams: 1, exactParams: false } // 가변 개수 입력, params는 axis 등
+    'cat': { minIn: 2, exactIn: true, minParams: 3, exactParams: true } // in: [a, b], params: [a_dim, b_dim, stride]
   };
 
   const opStr = i.op as string;
@@ -398,6 +453,22 @@ function validateInstruction(inst: unknown, idx: number): GraphInstruction {
     }
   }
 
+  if (i.op === 'flash_attention') {
+    const shape = i.shape as number[];
+    if (shape && shape.length >= 4) {
+      const d = shape[3];
+      if (d > 256) {
+        throw new AMEVAForgeSecurityError(`Instruction[${idx}] flash_attention: head_dim (d=${d}) exceeds maximum supported shared memory tile (256)`);
+      }
+    }
+    if (i.params && (i.params as number[]).length > 0) {
+      const H_kv = (i.params as number[])[0];
+      if (H_kv < 1) {
+        throw new AMEVAForgeSecurityError(`Instruction[${idx}] flash_attention: H_kv must be >= 1, got ${H_kv}`);
+      }
+    }
+  }
+
   return i as unknown as GraphInstruction;
 }
 
@@ -412,24 +483,28 @@ let _executionQueueChain: Promise<any> = Promise.resolve();
 export async function executeGraph(
   instructionsJson: string,
   inputs: (Float32Array | any)[],
-  outputIds?: number[]
+  _outputIds?: number[]
 ): Promise<Record<string, TensorHandle>> {
   const previous = _executionQueueChain;
-  let releaseLock: () => void;
+  let releaseLock!: () => void;
   _executionQueueChain = new Promise<void>((resolve) => {
     releaseLock = resolve;
   });
 
   try {
-    await previous;
-  } catch {
-    // Suppress previous transaction error so queue continues processing
-  }
+    try {
+      await previous;
+    } catch {
+      // Suppress previous transaction error so queue continues processing,
+      // but verify device health before proceeding
+      if (isDeviceLost()) {
+        throw new AMEVAForgeDeviceLostError("Cannot execute graph: WebGPU device was lost during previous transaction");
+      }
+    }
 
-  try {
     return await _executeGraphCore(instructionsJson, inputs);
   } finally {
-    releaseLock!();
+    releaseLock();
   }
 }
 
@@ -467,14 +542,17 @@ async function _executeGraphCore(
   // ── 2. Validate ──
   const instructions: GraphInstruction[] = rawInstructions.map(validateInstruction);
 
-  // VULN-06: Ensure AXPY is only executed in the optimizer commit phase and not followed by downstream ops
-  let seenAxpy = false;
+  // VULN-06: Ensure in-place optimizer operations (axpy, adam_step, sgd_momentum_step)
+  // are only executed in the optimizer commit phase and not followed by downstream ops
+  let seenInPlaceOp = false;
+  let inPlaceOpName = '';
   for (const inst of instructions) {
-    if (inst.op === 'axpy') {
-      seenAxpy = true;
-    } else if (seenAxpy) {
+    if (inst.op === 'axpy' || inst.op === 'adam_step' || inst.op === 'sgd_momentum_step') {
+      seenInPlaceOp = true;
+      inPlaceOpName = inst.op;
+    } else if (seenInPlaceOp) {
       throw new AMEVAForgeSecurityError(
-        `Invalid graph execution: In-place 'axpy' is an optimizer commit phase operation and cannot be followed by downstream op '${inst.op}' in the same transaction.`
+        `Invalid graph execution: In-place '${inPlaceOpName}' is an optimizer commit phase operation and cannot be followed by downstream op '${inst.op}' in the same transaction.`
       );
     }
   }
@@ -506,6 +584,7 @@ async function _executeGraphCore(
   const idToBuffer: Record<number, GPUBuffer> = {};
   const idToByteLength: Record<number, number> = {};
   const idToShape: Record<number, number[]> = {};
+  const shadowSnapshots: Array<{ origBuffer: GPUBuffer, shadowBuffer: GPUBuffer, shadowToken: AllocationToken, byteLength: number }> = [];
   const transaction = new GraphTransaction();
   let inputIdx = 0;
   
@@ -679,6 +758,17 @@ async function _executeGraphCore(
           throw new AMEVAForgeSecurityError(`Instruction axpy is missing 'in' fields.`);
         }
         outBuffer = idToBuffer[inst.in[1]];
+        if (outBuffer && !shadowSnapshots.some(s => s.origBuffer === outBuffer)) {
+          const { buffer: shadowBuf, token: shadowTok } = allocateBuffer(
+            byteLength,
+            BUFFER_USAGE_STORAGE_COPY,
+            'tensor',
+            'ShadowSnapshot_axpy'
+          );
+          commandEncoder.copyBufferToBuffer(outBuffer, 0, shadowBuf, 0, byteLength);
+          encoderHasCommands = true;
+          shadowSnapshots.push({ origBuffer: outBuffer, shadowBuffer: shadowBuf, shadowToken: shadowTok, byteLength });
+        }
         idToHandle[inst.id] = idToHandle[inst.in[1]];
         idToBuffer[inst.id] = outBuffer;
         idToByteLength[inst.id] = byteLength;
@@ -690,6 +780,25 @@ async function _executeGraphCore(
         }
         // inst.in[0]은 param_id이므로 원본 가중치 버퍼를 직접 outBuffer로 재사용 (In-Place 갱신 보장)
         outBuffer = idToBuffer[inst.in[0]];
+
+        // In-place 갱신되는 모든 버퍼(param, m, v, velocity)에 대해 섀도우 스냅샷 생성
+        const inPlaceInputIndices = inst.op === 'adam_step' ? [0, 2, 3] : [0, 2];
+        for (const inputIdx of inPlaceInputIndices) {
+          const inId = inst.in[inputIdx];
+          const targetBuf = idToBuffer[inId];
+          const targetByteLen = idToByteLength[inId] ?? byteLength;
+          if (targetBuf && !shadowSnapshots.some(s => s.origBuffer === targetBuf)) {
+            const { buffer: shadowBuf, token: shadowTok } = allocateBuffer(
+              targetByteLen,
+              BUFFER_USAGE_STORAGE_COPY,
+              'tensor',
+              `ShadowSnapshot_${inst.op}_in${inputIdx}`
+            );
+            commandEncoder.copyBufferToBuffer(targetBuf, 0, shadowBuf, 0, targetByteLen);
+            encoderHasCommands = true;
+            shadowSnapshots.push({ origBuffer: targetBuf, shadowBuffer: shadowBuf, shadowToken: shadowTok, byteLength: targetByteLen });
+          }
+        }
         idToHandle[inst.id] = idToHandle[inst.in[0]];
         idToBuffer[inst.id] = outBuffer;
         idToByteLength[inst.id] = byteLength;
@@ -722,16 +831,10 @@ async function _executeGraphCore(
 
       /**
        * WHAT: 현재 오퍼레이션의 유니폼 파라미터를 담기 위해 필요한 바이트 크기입니다.
-       * WHY: 오퍼레이션(패딩, 풀링 등)마다 셰이더가 요구하는 인자의 종류와 개수가 다르므로 가변적인 버퍼 크기를 잡기 위해 결정합니다.
-       * HOW: inst.op 문자열을 판별하여 필요한 바이트 수(최소 32바이트)를 할당합니다.
+       * WHY: 오퍼레이션(패딩, 풀링, FlashAttention 등)마다 셰이더가 요구하는 인자의 종류와 개수가 다르므로 안전한 버퍼 크기를 잡기 위해 결정합니다.
+       * HOW: getUniformParamsByteLength 함수를 통해 정확하고 안전한 바이트 크기를 할당합니다.
        */
-      let paramsSize = 32;
-      if (inst.op === 'pad') paramsSize = 144;
-      else if (inst.op === 'gather' || inst.op === 'scatter') paramsSize = 112;
-      else if (inst.op === 'maxpool2d' || inst.op === 'avgpool2d') paramsSize = 64;
-      else if (inst.op === 'im2col' || inst.op === 'col2im') paramsSize = 48;
-      else if (inst.op === 'permute') paramsSize = 112;
-      else if (['add', 'sub', 'mul', 'div'].includes(inst.op)) paramsSize = 112;
+      const paramsSize = getUniformParamsByteLength(inst.op);
 
       const { buffer: paramsBuffer, token: paramsToken } = allocateBuffer(
         paramsSize,
@@ -746,14 +849,15 @@ async function _executeGraphCore(
       let isMatmul = false;
       let B = 1, M = 1, N = 1, K = 1;
 
-      if (inst.op === 'matmul' || inst.op === 'matmul_bias_relu') {
+      if (inst.op === 'matmul' || inst.op === 'matmul_tiled' || inst.op === 'matmul_bias_relu') {
         if (!inst.params || inst.params.length < 3) {
           throw new AMEVAForgeSecurityError(`${inst.op} instruction missing params`);
         }
         [M, N, K] = inst.params;
         const isFused = inst.op === 'matmul_bias_relu';
-        const tileSize = isFused ? 16 : 8;
-        wgslCode = isFused ? MATMUL_BIAS_RELU_WGSL : MATMUL_WGSL;
+        const isTiled = inst.op === 'matmul_tiled';
+        const tileSize = isFused || isTiled ? 16 : 8;
+        wgslCode = isFused ? MATMUL_BIAS_RELU_WGSL : (isTiled ? MATMUL_TILED_WGSL : MATMUL_WGSL);
         isMatmul = true;
         // TS-H01 Fix: matmul X축도 65535 클램핑 — 초과분은 Z 차원으로 분산
         const rawDispatchX = Math.ceil(N / tileSize);
@@ -1147,6 +1251,11 @@ async function _executeGraphCore(
         const [B, H, N, d] = inst.shape;
         const baseFreq = inst.params?.[0] ?? 10000.0;
         const offsetPos = inst.params?.[1] ?? 0;
+        const totalTokens = B * H * N;
+        const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(totalTokens, 1);
+        dispatchX = dx;
+        dispatchY = dy;
+        dispatchZ = 1;
 
         const buf = new ArrayBuffer(32);
         const u32view = new Uint32Array(buf);
@@ -1157,15 +1266,8 @@ async function _executeGraphCore(
         u32view[3] = d;
         f32view[4] = baseFreq;
         u32view[5] = offsetPos;
-        u32view[6] = 0;
+        u32view[6] = dx;
         u32view[7] = 0;
-
-        const totalTokens = B * H * N;
-        // rope.wgsl은 워크그룹당 1개 토큰을 회전하므로 정확히 totalTokens개의 워크그룹 디스패치
-        const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(totalTokens, 1);
-        dispatchX = dx;
-        dispatchY = dy;
-        dispatchZ = 1;
         device.queue.writeBuffer(paramsBuffer, 0, u32view);
       } else if (inst.op === 'rmsnorm') {
         wgslCode = RMSNORM_WGSL;
@@ -1174,25 +1276,28 @@ async function _executeGraphCore(
         const eps = inst.params?.[0] ?? 1e-5;
         const hasGamma = (inst.in && inst.in.length >= 2) ? 1 : 0;
 
-        const buf = new ArrayBuffer(16);
+        const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numTokens, 1);
+        dispatchX = dx;
+        dispatchY = dy;
+        dispatchZ = 1;
+
+        const buf = new ArrayBuffer(32);
         const u32view = new Uint32Array(buf);
         const f32view = new Float32Array(buf);
         u32view[0] = numTokens;
         u32view[1] = dim;
         f32view[2] = eps;
         u32view[3] = hasGamma;
-
-        // rmsnorm.wgsl은 워크그룹당 1개 토큰을 정규화하므로 정확히 numTokens개의 워크그룹 디스패치
-        const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numTokens, 1);
-        dispatchX = dx;
-        dispatchY = dy;
-        dispatchZ = 1;
+        u32view[4] = dx;
+        u32view[5] = 0;
+        u32view[6] = 0;
+        u32view[7] = 0;
         device.queue.writeBuffer(paramsBuffer, 0, u32view);
       } else if (inst.op === 'swiglu') {
         wgslCode = SWIGLU_WGSL;
         const numElements = inst.shape.reduce((a, b) => a * b, 1);
-        const p = new Uint32Array([numElements, 0, 0, 0]);
         const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numElements, 64);
+        const p = new Uint32Array([numElements, dx, 0, 0]);
         dispatchX = dx;
         dispatchY = dy;
         dispatchZ = 1;
@@ -1202,8 +1307,8 @@ async function _executeGraphCore(
         const numElements = inst.shape.reduce((a, b) => a * b, 1);
         const bits = inst.params?.[0] ?? 4;
         const groupSize = inst.params?.[1] ?? 128;
-        const p = new Uint32Array([numElements, bits, groupSize, 0]);
         const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numElements, 64);
+        const p = new Uint32Array([numElements, bits, groupSize, dx]);
         dispatchX = dx;
         dispatchY = dy;
         dispatchZ = 1;
@@ -1213,9 +1318,9 @@ async function _executeGraphCore(
         const embeddingDim = inst.shape[inst.shape.length - 1];
         const numTokens = inst.shape.slice(0, -1).reduce((a, b) => a * b, 1);
         const vocabSize = inst.params?.[2] ?? 1000000;
-        const p = new Uint32Array([numTokens, embeddingDim, vocabSize, 0]);
         // embedding.wgsl은 워크그룹당 1개 토큰을 복사하므로 정확히 numTokens개의 워크그룹 디스패치
         const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numTokens, 1);
+        const p = new Uint32Array([numTokens, embeddingDim, vocabSize, dx]);
         dispatchX = dx;
         dispatchY = dy;
         dispatchZ = 1;
@@ -1226,8 +1331,8 @@ async function _executeGraphCore(
         const embeddingDim = inst.shape[1];
         const numTokens = inst.params?.[0] ?? 1;
         const totalWeightElements = vocabSize * embeddingDim;
-        const p = new Uint32Array([numTokens, embeddingDim, vocabSize, totalWeightElements]);
         const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(totalWeightElements, 64);
+        const p = new Uint32Array([numTokens, embeddingDim, vocabSize, totalWeightElements, dx, 0, 0, 0]);
         dispatchX = dx;
         dispatchY = dy;
         dispatchZ = 1;
@@ -1241,13 +1346,14 @@ async function _executeGraphCore(
         const eps = inst.params?.[3] ?? 1e-8;
         const beta1_power = inst.params?.[4] ?? beta1;
         const beta2_power = inst.params?.[5] ?? beta2;
+        const weight_decay = inst.params?.[6] ?? 0.0;
 
         const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numElements, 64);
         dispatchX = dx;
         dispatchY = dy;
         dispatchZ = 1;
 
-        const buf = new ArrayBuffer(32);
+        const buf = new ArrayBuffer(48);
         const u32view = new Uint32Array(buf);
         const f32view = new Float32Array(buf);
         u32view[0] = numElements;
@@ -1257,7 +1363,11 @@ async function _executeGraphCore(
         f32view[4] = eps;
         f32view[5] = beta1_power;
         f32view[6] = beta2_power;
-        u32view[7] = dispatchX;
+        f32view[7] = weight_decay;
+        u32view[8] = dispatchX;
+        u32view[9] = 0;
+        u32view[10] = 0;
+        u32view[11] = 0;
         device.queue.writeBuffer(paramsBuffer, 0, u32view);
       } else if (inst.op === 'sgd_momentum_step') {
         wgslCode = SGD_MOMENTUM_STEP_WGSL;
@@ -1294,7 +1404,7 @@ async function _executeGraphCore(
         u32view[0] = numSamples;
         u32view[1] = numClasses;
         i32view[2] = ignoreIndex;
-        u32view[3] = 0;
+        u32view[3] = dx;
         device.queue.writeBuffer(paramsBuffer, 0, u32view);
       } else if (inst.op === 'sparse_cross_entropy_backward') {
         wgslCode = SPARSE_CROSS_ENTROPY_BACKWARD_WGSL;
@@ -1302,12 +1412,14 @@ async function _executeGraphCore(
         const numClasses = inst.shape[1];
         const ignoreIndex = inst.params?.[0] ?? -100;
         const reductionScale = inst.params?.[1] ?? 1.0;
+        const gradOutShape = (inst.in && inst.in[2] !== undefined && idToShape[inst.in[2]]) ? idToShape[inst.in[2]] : [];
+        const isScalarGrad = (gradOutShape.length === 0 || gradOutShape.reduce((a, b) => a * b, 1) === 1) ? 1 : 0;
         const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numSamples, 1);
         dispatchX = dx;
         dispatchY = dy;
         dispatchZ = 1;
 
-        const buf = new ArrayBuffer(16);
+        const buf = new ArrayBuffer(32);
         const u32view = new Uint32Array(buf);
         const i32view = new Int32Array(buf);
         const f32view = new Float32Array(buf);
@@ -1315,6 +1427,10 @@ async function _executeGraphCore(
         u32view[1] = numClasses;
         i32view[2] = ignoreIndex;
         f32view[3] = reductionScale;
+        u32view[4] = dx;
+        u32view[5] = isScalarGrad;
+        u32view[6] = 0;
+        u32view[7] = 0;
         device.queue.writeBuffer(paramsBuffer, 0, u32view);
       } else if (inst.op === 'sum' || inst.op === 'max') {
         // Handled entirely dynamically below, but we need to bypass normal flow
@@ -1372,6 +1488,29 @@ async function _executeGraphCore(
           for (let k = 0; k < 8; k++) p[12 + k] = effSA[k];
           for (let k = 0; k < 8; k++) p[20 + k] = effSB[k];
           device.queue.writeBuffer(paramsBuffer, 0, p);
+        } else if (inst.op === 'where') {
+          let shapeCond = [1];
+          let shapeA = [1];
+          let shapeB = [1];
+          if (inst.in && inst.in.length >= 3) {
+            const in0Handle = idToHandle[inst.in[0]];
+            const in1Handle = idToHandle[inst.in[1]];
+            const in2Handle = idToHandle[inst.in[2]];
+            shapeCond = idToShape[inst.in[0]] ?? (_globalRegistry.has(in0Handle) ? _globalRegistry.get(in0Handle).shape : [1]);
+            shapeA = idToShape[inst.in[1]] ?? (_globalRegistry.has(in1Handle) ? _globalRegistry.get(in1Handle).shape : [1]);
+            shapeB = idToShape[inst.in[2]] ?? (_globalRegistry.has(in2Handle) ? _globalRegistry.get(in2Handle).shape : [1]);
+          }
+          const { dOut, effSCond, effSA, effSB } = computeBroadcastParams3(inst.shape, shapeCond, shapeA, shapeB);
+          const p = new Uint32Array(36);
+          p[0] = numElements;
+          p[1] = dispatchX;
+          p[2] = inst.shape.length;
+          p[3] = 0;
+          for (let k = 0; k < 8; k++) p[4 + k] = dOut[k];
+          for (let k = 0; k < 8; k++) p[12 + k] = effSCond[k];
+          for (let k = 0; k < 8; k++) p[20 + k] = effSA[k];
+          for (let k = 0; k < 8; k++) p[28 + k] = effSB[k];
+          device.queue.writeBuffer(paramsBuffer, 0, p);
         } else {
           let numA = 0;
           let numB = 0;
@@ -1410,6 +1549,10 @@ async function _executeGraphCore(
             currentByteLength = rec ? rec.byteLength : 4;
           }
           let currentSize = currentByteLength / 4;
+          if (currentSize === 0) {
+            device.queue.writeBuffer(outBuffer, 0, new Float32Array([inst.op === 'sum' ? 0.0 : -3.402823466e+38]));
+            continue;
+          }
           let currentInputBuf = idToBuffer[inst.in[0]];
           const intermediateAllocations: Array<{ buffer: GPUBuffer, token: AllocationToken }> = [];
           
@@ -1656,6 +1799,10 @@ async function _executeGraphCore(
     _safeLog(`[AMEVA Forge] Transaction Sync Failed. Rolling back... ${err}`);
     
     transaction.rollback();
+
+    for (const snap of shadowSnapshots) {
+      try { freeBuffer(snap.shadowBuffer, snap.shadowToken); } catch (e) {}
+    }
     
     for (const alloc of paramsAllocations) {
       if (alloc.isUniformPool && alloc.uniformEntry) {
@@ -1687,6 +1834,36 @@ async function _executeGraphCore(
   if (gpuError) {
     _safeLog(`[AMEVA Forge] GPU error detected. Rolling back transaction... ${gpuError}`);
     transaction.rollback();
+
+    // Hardware VRAM snapshot restoration
+    if (shadowSnapshots.length > 0 && !isDeviceLost()) {
+      try {
+        const recoveryEncoder = device.createCommandEncoder();
+        for (const snap of shadowSnapshots) {
+          recoveryEncoder.copyBufferToBuffer(snap.shadowBuffer, 0, snap.origBuffer, 0, snap.byteLength);
+        }
+        device.queue.submit([recoveryEncoder.finish()]);
+        device.queue.onSubmittedWorkDone().then(() => {
+          for (const snap of shadowSnapshots) {
+            try { freeBuffer(snap.shadowBuffer, snap.shadowToken); } catch (e) {}
+          }
+        }).catch(() => {
+          for (const snap of shadowSnapshots) {
+            try { freeBuffer(snap.shadowBuffer, snap.shadowToken); } catch (e) {}
+          }
+        });
+      } catch (recErr) {
+        _safeLog(`[AMEVA Forge] Hardware snapshot rollback failed: ${recErr}`);
+        for (const snap of shadowSnapshots) {
+          try { freeBuffer(snap.shadowBuffer, snap.shadowToken); } catch (e) {}
+        }
+      }
+    } else {
+      for (const snap of shadowSnapshots) {
+        try { freeBuffer(snap.shadowBuffer, snap.shadowToken); } catch (e) {}
+      }
+    }
+
     for (const alloc of paramsAllocations) {
       if (alloc.isUniformPool && alloc.uniformEntry) {
         _globalUniformPool.releaseAfterSubmit(alloc.uniformEntry);
@@ -1708,7 +1885,19 @@ async function _executeGraphCore(
   // ── 6. Commit transaction to global registry only on verified success ──
   transaction.commit(_globalRegistry);
 
-  // ── 7. Cleanup temporary/uniform allocations after GPU completion ──
+  // ── 7. Cleanup temporary/uniform allocations and shadow snapshots after GPU completion ──
+  if (shadowSnapshots.length > 0) {
+    device.queue.onSubmittedWorkDone().then(() => {
+      for (const snap of shadowSnapshots) {
+        try { freeBuffer(snap.shadowBuffer, snap.shadowToken); } catch (e) {}
+      }
+    }).catch(() => {
+      for (const snap of shadowSnapshots) {
+        try { freeBuffer(snap.shadowBuffer, snap.shadowToken); } catch (e) {}
+      }
+    });
+  }
+
   if (paramsAllocations.length > 0) {
     const nonPoolAllocs: Array<{ buffer: GPUBuffer, token: AllocationToken }> = [];
     for (const alloc of paramsAllocations) {

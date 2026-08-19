@@ -27,16 +27,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     return;
   }
 
-  let inner = linear % params.inner_stride;
-  let tmp = linear / params.inner_stride;
-  let r = tmp % params.reduction_size;
-  let outer = tmp / params.reduction_size;
+  let inner_stride = max(params.inner_stride, 1u);
+  let reduction_size = max(params.reduction_size, 1u);
+  let inner = linear % inner_stride;
+  let tmp = linear / inner_stride;
+  let r = tmp % reduction_size;
+  let outer = tmp / reduction_size;
 
-  let reduced_idx = outer * params.inner_stride + inner;
+  let reduced_idx = outer * inner_stride + inner;
 
   var max_val = -3.402823e+38;
-  for (var j: u32 = 0u; j < params.reduction_size; j = j + 1u) {
-    let idx = outer * params.reduction_size * params.inner_stride + j * params.inner_stride + inner;
+  for (var j: u32 = 0u; j < reduction_size; j = j + 1u) {
+    let idx = outer * reduction_size * inner_stride + j * inner_stride + inner;
     max_val = max(max_val, x[idx]);
   }
 

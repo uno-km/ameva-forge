@@ -78,11 +78,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   for (var i = 0u; i < params.rank; i = i + 1u) {
     // 변수: coord
     // 역할: 출력 텐서의 i번째 차원에 대한 구체적 좌표(인덱스)
-    let coord = temp / params.out_strides[i];
+    let out_stride = max(params.out_strides[i], 1u);
+    let coord = temp / out_stride;
     
     // 변수: temp 갱신
     // 역할: 다음 하위 차원 계산을 위해 남은 나머지 값을 임시 변수에 대입합니다.
-    temp = temp % params.out_strides[i];
+    temp = temp % out_stride;
     
     // 조건문: 원본 영역 이탈 확인
     // 역할: 계산된 해당 차원의 좌표가 패딩 영역(원본 데이터가 없는 곳)인지 판단합니다.

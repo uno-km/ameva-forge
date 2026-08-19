@@ -29,8 +29,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'npx -y http-server ../.. -p 4173 -c-1',
-    url: 'http://127.0.0.1:4173/docs/demo.html',
+    command: 'npx -y http-server . -p 4173 -c-1',
+    url: 'http://127.0.0.1:4173/test.html',
     reuseExistingServer: true,
     timeout: 30_000,
   },

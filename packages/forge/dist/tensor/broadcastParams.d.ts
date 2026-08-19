@@ -14,3 +14,15 @@ export interface BroadcastParams {
  * HOW: 8차원으로 정규화 후 역순 스트라이드를 계산하고, 크기가 1인 차원은 스트라이드를 0으로 매핑(브로드캐스팅)합니다.
  */
 export declare function computeBroadcastParams(outShape: number[], shapeA: number[], shapeB: number[]): BroadcastParams;
+export interface BroadcastParams3 {
+    dOut: number[];
+    effSCond: number[];
+    effSA: number[];
+    effSB: number[];
+}
+/**
+ * WHAT: 세 텐서(조건, x, y)의 형태를 8차원으로 좌측 패딩하고 각 텐서의 유효 브로드캐스팅 스트라이드를 계산합니다.
+ * WHY: where 연산이 스칼라뿐만 아니라 (3, 1) to (3, 5) 등의 임의의 다차원 브로드캐스팅을 VRAM OOB 없이 안전하게 수행하기 위함입니다.
+ * HOW: 8차원 정규화 후 각 차원별 스트라이드를 계산하고, 크기가 1인 차원은 스트라이드를 0으로 매핑합니다.
+ */
+export declare function computeBroadcastParams3(outShape: number[], shapeCond: number[], shapeA: number[], shapeB: number[]): BroadcastParams3;

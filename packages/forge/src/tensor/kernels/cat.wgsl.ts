@@ -60,7 +60,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   }
   
   // 파라미터 구조체에서 내부 차원의 크기(stride)를 로드합니다.
-  let stride = params.stride;
+  let stride = max(params.stride, 1u);
   // 파라미터 구조체에서 A 텐서의 결합 축 크기를 로드합니다.
   let a_dim = params.a_dim;
   // 파라미터 구조체에서 B 텐서의 결합 축 크기를 로드합니다.
@@ -69,7 +69,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   // 결합된 이후 결과 텐서의 해당 축 길이를 계산합니다. (What)
   let out_dim_size = a_dim + b_dim;
   // 한 블록(결합 축 1개 단위 + 하위 차원 전체)이 차지하는 총 요소 개수(청크 크기)를 계산합니다. (How)
-  let chunk_size = out_dim_size * stride;
+  let chunk_size = max(out_dim_size * stride, 1u);
   
   // 현재 1차원 인덱스가 어떤 배치(상위 차원들)에 속하는지 계산합니다. (How)
   let batch_idx = idx / chunk_size;

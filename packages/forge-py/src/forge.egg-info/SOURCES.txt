@@ -46,6 +46,7 @@ tests/test_exceptions.py
 tests/test_extreme.py
 tests/test_finite_difference.py
 tests/test_generated_schema.py
+tests/test_gpu_optimizers.py
 tests/test_gpu_sgd_contract.py
 tests/test_graph_monster.py
 tests/test_hub_models_and_rl.py

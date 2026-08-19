@@ -1490,10 +1490,12 @@ class WhereFunction(Function):
     @staticmethod
     def forward(ctx: Context, condition: Tensor, x: Tensor, y: Tensor) -> Tensor:
         ctx.save_for_backward(condition, x, y)
+        ctx.x_shape = x.shape
+        ctx.y_shape = y.shape
         if condition.device != x.device or x.device != y.device:
             raise AMEVAForgeDeviceError("where requires all tensors to be on the same device")
         
-        out_shape = x.shape
+        out_shape = _broadcast_shapes(_broadcast_shapes(condition.shape, x.shape), y.shape)
         if _should_use_gpu(x, y):
             return Tensor(shape=out_shape, dtype="float32", device="gpu", op='where', parents=(condition, x, y))
         else:
@@ -1515,7 +1517,7 @@ class WhereFunction(Function):
         zero_grad = zeros_like(grad_output)
         grad_x = where(condition, grad_output, zero_grad)
         grad_y = where(condition, zero_grad, grad_output)
-        return (None, grad_x, grad_y)
+        return (None, _unbroadcast(grad_x, ctx.x_shape), _unbroadcast(grad_y, ctx.y_shape))
 
 # WHAT: 조건부 선택 편의 함수입니다.
 # WHY: 외부에서 텐서 마스킹을 손쉽게 수행하기 위함입니다.

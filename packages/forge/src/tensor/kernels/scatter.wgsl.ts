@@ -37,8 +37,8 @@ struct Params {
 @group(0) @binding(0) var<uniform> params: Params;
 
 // 변수: index
-// 역할: 흩뿌릴 위치 정보를 가지고 있는 인덱스 배열(읽기 전용 정수 스토리지 버퍼)
-@group(0) @binding(1) var<storage, read> index: array<u32>;
+// 역할: 흩뿌릴 위치 정보를 가지고 있는 인덱스 배열(읽기 전용 부동소수점 스토리지 버퍼)
+@group(0) @binding(1) var<storage, read> index: array<f32>;
 
 // 변수: src
 // 역할: 출력 배열에 복사할 원본 값을 가지고 있는 소스 배열(읽기 전용 스토리지 버퍼)
@@ -59,7 +59,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let idx = global_id.x + global_id.y * params.workgroups_x * 64u;
   
   // 조건문: 데이터 경계 검사
-  // 역할: 할당된 스레드의 인덱스가 전체 크기(num_elements)를 초과하는지 검사합니다.
+  // 역할: 할당된 스레드의 인덱스가 전체 크(num_elements)를 초과하는지 검사합니다.
   if (idx >= params.num_elements) { return; }
 
   // 변수: temp
@@ -76,18 +76,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   for (var i = 0u; i < params.rank; i = i + 1u) {
     // 변수: coord
     // 역할: 현재 차원(i)에 해당하는 인덱스 텐서 기준의 다차원 논리 좌표
-    let coord = temp / params.idx_strides[i];
+    let idx_stride = max(params.idx_strides[i], 1u);
+    let coord = temp / idx_stride;
     
     // 변수: temp 갱신
     // 역할: 다음 차원 계산을 위해 나머지 값을 임시 변수에 업데이트합니다.
-    temp = temp % params.idx_strides[i];
+    temp = temp % idx_stride;
     
     // 조건문: 타겟 차원(dim) 여부 검사
     // 역할: 현재 처리 중인 차원이 인덱스 값으로 대체할 타겟 차원인지 판단합니다.
     if (i == params.dim) {
-      let raw_bits = index[idx];
+      let raw_val = index[idx];
+      // NaN index skip (NaN != NaN)
+      if (raw_val != raw_val) {
+        return;
+      }
       let dim_size = i32(params.x_shape[i]);
-      var signed_idx = bitcast<i32>(raw_bits);
+      var signed_idx = i32(round(raw_val));
       if (signed_idx < 0) {
         signed_idx = signed_idx + dim_size;
       }

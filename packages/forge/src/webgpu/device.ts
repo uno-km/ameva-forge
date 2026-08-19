@@ -39,20 +39,6 @@ export function _safeLog(msg: string) {
       (globalThis as any).log(msg, 'system');
     }
   } catch (err) {
-    _consecutiveLoggingErrors++;
-    const now = Date.now();
-    
-    // 자가 치유(Self-Healing): 3회 연속 에러 시 쿼터 상태 자동 정합 및 치료
-    if (_consecutiveLoggingErrors >= 3 && now - _lastSelfHealTimestamp > 5000) {
-      _lastSelfHealTimestamp = now;
-      _consecutiveLoggingErrors = 0;
-      try {
-        _globalQuotaManager.sanitizePendingBytes();
-      } catch (sanitizeErr) {
-        // Safe fallback
-      }
-    }
-
     if (typeof console !== 'undefined' && typeof console.debug === 'function') {
       console.debug('[AMEVA-SafeLog-Fallback]', msg, err);
     }
@@ -191,6 +177,10 @@ export function getQueue(): GPUQueue {
  */
 export function isAvailable(): boolean {
   return device !== null;
+}
+
+export function isDeviceLost(): boolean {
+  return device === null;
 }
 
 export function _resetDeviceForTesting(): void {

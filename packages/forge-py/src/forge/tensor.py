@@ -300,6 +300,8 @@ class Tensor:
             import weakref
             weakref.finalize(self, Tensor._finalize_buffer, self._handle_cell)
             self._finalizer_registered = True
+            if len(_gc_queue) >= 16:
+                flush_gc()
 
     @property
     def _handle(self) -> Optional[str]:

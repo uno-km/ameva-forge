@@ -195,15 +195,16 @@ def js_dispose_batch(handles: list) -> None:
 def _map_js_error(e: Exception) -> None:
     """Map JS error names to Python typed exceptions."""
     msg = str(e)
-    if 'AMEVAForgeValidationError' in msg:
+    err_name = getattr(e, 'name', '')
+    if 'AMEVAForgeValidationError' in msg or err_name == 'AMEVAForgeValidationError':
         raise AMEVAForgeValidationError(msg) from e
-    elif 'AMEVAForgeOutOfMemoryError' in msg or 'OOM' in msg:
+    elif 'AMEVAForgeOutOfMemoryError' in msg or 'OOM' in msg or err_name == 'AMEVAForgeOutOfMemoryError':
         raise AMEVAForgeOutOfMemoryError(msg) from e
-    elif 'AMEVAForgeInternalGPUError' in msg:
+    elif 'AMEVAForgeInternalGPUError' in msg or err_name == 'AMEVAForgeInternalGPUError':
         raise AMEVAForgeInternalGPUError(msg) from e
-    elif 'AMEVAForgeDeviceLostError' in msg or 'device lost' in msg.lower():
+    elif 'AMEVAForgeDeviceLostError' in msg or 'device lost' in msg.lower() or err_name == 'AMEVAForgeDeviceLostError':
         raise AMEVAForgeDeviceLostError(msg) from e
-    elif 'AMEVAForgeQuotaExceededError' in msg:
+    elif 'AMEVAForgeQuotaExceededError' in msg or err_name == 'AMEVAForgeQuotaExceededError':
         raise AMEVAForgeQuotaExceededError(msg) from e
 
 async def js_execute_graph(instructions_json: str, inputs) -> dict:
@@ -233,12 +234,22 @@ async def js_execute_graph(instructions_json: str, inputs) -> dict:
     finally:
         if js_inputs is not None:
             try:
-                js_inputs.destroy()
+                if hasattr(js_inputs, 'length'):
+                    for i in range(len(js_inputs)):
+                        try:
+                            elem = js_inputs[i]
+                            if hasattr(elem, 'destroy'):
+                                elem.destroy()
+                        except Exception:
+                            pass
+                if hasattr(js_inputs, 'destroy'):
+                    js_inputs.destroy()
             except Exception:
                 pass
         if result_proxy is not None:
             try:
-                result_proxy.destroy()
+                if hasattr(result_proxy, 'destroy'):
+                    result_proxy.destroy()
             except Exception:
                 pass
 

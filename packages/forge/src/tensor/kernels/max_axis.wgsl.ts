@@ -28,7 +28,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     return;
   }
 
-  let inner_stride = params.inner_stride;
+  let inner_stride = max(params.inner_stride, 1u);
   let reduction_size = params.reduction_size;
   let outer_idx = out_idx / inner_stride;
   let inner_idx = out_idx % inner_stride;
@@ -38,8 +38,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   var max_val = -3.402823e+38;
   for (var r = 0u; r < reduction_size; r = r + 1u) {
     let val = input[base_offset + r * inner_stride];
-    if (val > max_val) {
+    if (val > max_val || val != val) {
       max_val = val;
+      if (val != val) {
+        break;
+      }
     }
   }
   output[out_idx] = max_val;

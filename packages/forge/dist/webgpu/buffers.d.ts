@@ -27,6 +27,9 @@ export declare function allocateBuffer(byteLength: number, usage: GPUBufferUsage
  * HOW: WebGPU 큐(`device.queue.writeBuffer`)를 사용하여 주어진 데이터의 전체 크기만큼 지정된 버퍼의 오프셋 0부터 복사합니다.
  */
 export declare function writeFloat32Array(buffer: GPUBuffer, data: Float32Array): void;
+type PoolCleaner = () => void;
+type PoolRetirer = (device: GPUDevice) => Promise<void>;
+export declare function registerTransientPool(cleaner: PoolCleaner, retirer?: PoolRetirer): void;
 interface StagingPoolEntry {
     buffer: GPUBuffer;
     token: AllocationToken;
@@ -34,9 +37,11 @@ interface StagingPoolEntry {
 export declare const _stagingPool: Map<number, StagingPoolEntry[]>;
 export declare function clearStagingPool(): void;
 export declare function flushGC(): Promise<void>;
+export declare function getStagingBucketSize(byteLength: number): number;
 export declare function acquireStagingBuffer(byteLength: number): {
     buffer: GPUBuffer;
     token: AllocationToken;
+    bucketSize: number;
 };
 export declare function releaseStagingBuffer(buffer: GPUBuffer, token: AllocationToken, byteLength: number, isCorrupted?: boolean): void;
 /**

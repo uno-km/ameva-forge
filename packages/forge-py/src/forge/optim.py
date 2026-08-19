@@ -14,6 +14,7 @@
 # HOW: 타입 힌트 어노테이션에 List를 사용합니다.
 from typing import List, Optional
 import math
+import asyncio
 import numpy as np
 from .tensor import Tensor
 from .errors import (
@@ -283,7 +284,7 @@ class Adam(Optimizer):
     # WHAT: Adam 인스턴스 초기화 메서드입니다.
     # WHY: Adam 알고리즘에 필요한 하이퍼파라미터(베타, 엡실론)를 설정하고 모멘트 저장 공간을 할당하기 위함입니다.
     # HOW: 상위 초기화 후 beta, eps 등을 저장하고 상태 변수 리스트를 생성합니다.
-    def __init__(self, params, lr=0.001, betas=(0.9, 0.999), eps=1e-8):
+    def __init__(self, params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay: float = 0.0):
         super().__init__(params, lr)
         # WHAT: 1차 및 2차 모멘트 추정을 위한 감쇠율(decay rate)입니다.
         # WHY: 과거의 그래디언트 정보를 어느 정도 비율로 반영할지 결정하기 위함입니다.
@@ -294,6 +295,7 @@ class Adam(Optimizer):
         # WHY: 수치적 안정성을 보장하기 위함입니다.
         # HOW: 업데이트 식의 제곱근 항에 더해집니다.
         self.eps = eps
+        self.weight_decay = float(weight_decay)
         
         # WHAT: 파라미터별 1차 모멘트(평균 추정치)를 저장하는 리스트입니다.
         # WHY: 각 방향별 모멘텀을 추적하기 위함입니다.
@@ -354,9 +356,11 @@ class Adam(Optimizer):
             m_hat = self.m[i] / (1 - self.beta1 ** self.t)
             v_hat = self.v[i] / (1 - self.beta2 ** self.t)
             
-            # WHAT: 최종적으로 파라미터를 업데이트하는 수식입니다.
+            # WHAT: 최종적으로 파라미터를 업데이트하는 수식입니다 (Decoupled Weight Decay 지원).
             # WHY: 보정된 모멘트를 사용하여 적응적으로 스텝을 이동하기 위함입니다.
-            # HOW: 파라미터 데이터에서 `lr * m_hat / (sqrt(v_hat) + eps)`를 차감합니다.
+            # HOW: 파라미터 데이터에서 감쇠를 적용한 뒤 `lr * m_hat / (sqrt(v_hat) + eps)`를 차감합니다.
+            if self.weight_decay > 0.0:
+                param_data = param_data * (1.0 - self.lr * self.weight_decay)
             param_data = param_data - self.lr * m_hat / (np.sqrt(v_hat) + self.eps)
             
             # WHAT: 갱신된 데이터를 텐서에 덮어쓰고 기울기를 비웁니다.
@@ -436,6 +440,7 @@ class Adam(Optimizer):
                     float(self.eps),
                     beta1_power,
                     beta2_power,
+                    float(self.weight_decay),
                 ],
             )
             param_out_map.append((p, out_id))
@@ -451,65 +456,111 @@ class Adam(Optimizer):
                         "Adam contract violation: optimizer returned a different handle."
                     )
                 p._version += 1
+                if p.grad is not None and getattr(p.grad, 'device', None) == 'gpu':
+                    try:
+                        p.grad.dispose()
+                    except Exception:
+                        pass
                 p.grad = None
 
 
-# WHAT: 파라미터들의 그래디언트 글로벌 L2 노름(Norm)을 제한(Clip)하는 함수입니다.
+# WHAT: 파라미터들의 그래디언트 글로벌 L2 노름(Norm)을 제한(Clip)하는 동기 함수입니다.
 # WHY: RNN이나 깊은 신경망에서 그래디언트 폭발(Gradient Exploding) 문제를 방지하여 학습을 안정화하기 위함입니다.
-# HOW: 모든 그래디언트의 제곱합을 구해 노름을 계산하고, max_norm을 넘으면 그 비율만큼 전체 기울기를 축소합니다.
-def clip_grad_norm(parameters: List[Tensor], max_norm: float):
-    # WHAT: 전체 그래디언트의 제곱합을 누적할 변수입니다.
-    # WHY: L2 노름을 계산하기 위한 중간 합계를 저장하기 위함입니다.
-    # HOW: 0.0으로 초기화한 뒤 순회하며 누적합니다.
+# HOW: 모든 CPU 그래디언트의 제곱합을 구해 노름을 계산하고, max_norm을 넘으면 그 비율만큼 전체 기울기를 축소합니다.
+def clip_grad_norm(parameters: List[Tensor], max_norm: float) -> float:
     total_norm = 0.0
-    
-    # WHAT: 모든 파라미터를 순회하며 그래디언트 제곱합을 계산하는 루프입니다.
-    # WHY: 전체 벡터 공간에서의 길이를 파악하기 위함입니다.
-    # HOW: 각 파라미터의 grad를 배열로 변환해 요소별 제곱 후 더합니다.
     for p in parameters:
         if p.device == "gpu" or (p.grad is not None and p.grad.device == "gpu"):
             raise AMEVAForgeDeviceError(
-                "clip_grad_norm is supported only for CPU parameters in Release 1. "
-                "GPU-native gradient clipping requires asynchronous GPU reduction."
+                "clip_grad_norm() is synchronous and supported only for CPU parameters. "
+                "For GPU tensors in Pyodide/WebGPU, use 'await clip_grad_norm_async(parameters, max_norm)'."
             )
         if p.grad is not None:
             g = _require_cpu_data(p.grad, "p.grad")
-            total_norm += np.sum(g ** 2)
+            total_norm += float(np.sum(g ** 2))
                 
-    # WHAT: 전체 분산 합계에 제곱근을 취해 최종 L2 노름을 구합니다.
-    # WHY: 스케일링 계수를 계산하기 위한 실수값을 얻기 위함입니다.
-    # HOW: np.sqrt 연산을 수행하고 float 타입으로 변환합니다.
     total_norm = float(np.sqrt(total_norm))
-    
-    # WHAT: 그래디언트를 스케일링할 비율(계수)입니다.
-    # WHY: 전체 노름이 max_norm을 초과했을 때 그 비율만큼 줄이기 위함입니다.
-    # HOW: max_norm을 total_norm으로 나누어 계산하며, 0 분할 방지를 위해 1e-6을 더합니다.
     clip_coef = max_norm / (total_norm + 1e-6)
     
     if clip_coef < 1.0:
-        # WHAT: 그래디언트가 제한치를 초과했을 때 실제 클리핑을 수행하는 루프입니다.
-        # WHY: 모든 기울기의 방향은 유지한 채 크기만 비례적으로 줄이기 위함입니다.
-        # HOW: 각 파라미터를 다시 순회하며 그래디언트 배열에 clip_coef를 곱해줍니다.
         for p in parameters:
             if p.grad is not None:
                 g = _require_cpu_data(p.grad, "p.grad")
                 p.grad._data = (g * clip_coef).astype(np.float32)
+    return total_norm
 
-# WHAT: 개별 그래디언트 요소의 최댓값/최솟값을 직접 자르는(Value Clipping) 함수입니다.
+
+# WHAT: WebGPU 및 Pyodide 비동기 환경을 지원하는 GPU/CPU 통합 비동기 Gradient Norm Clipping 함수입니다.
+async def clip_grad_norm_async(parameters: List[Tensor], max_norm: float) -> float:
+    valid_params = [p for p in parameters if p.grad is not None]
+    if not valid_params:
+        return 0.0
+
+    async def fetch_grad(grad_tensor: Tensor) -> np.ndarray:
+        if grad_tensor.device == "gpu":
+            return await grad_tensor.numpy_async()
+        return _require_cpu_data(grad_tensor, "p.grad")
+
+    grads_data = await asyncio.gather(*(fetch_grad(p.grad) for p in valid_params))
+    
+    total_norm = 0.0
+    for g in grads_data:
+        total_norm += float(np.sum(g ** 2))
+                
+    total_norm = float(np.sqrt(total_norm))
+    clip_coef = max_norm / (total_norm + 1e-6)
+    
+    if clip_coef < 1.0:
+        for p, g in zip(valid_params, grads_data):
+            scaled = (g * clip_coef).astype(np.float32)
+            if p.grad.device == "gpu":
+                old_grad = p.grad
+                from .tensor import tensor as create_tensor
+                p.grad = create_tensor(scaled, device="gpu")
+                if hasattr(old_grad, 'dispose'):
+                    old_grad.dispose()
+            else:
+                p.grad._data = scaled
+    return total_norm
+
+
+# WHAT: 개별 그래디언트 요소의 최댓값/최솟값을 직접 자르는(Value Clipping) 동기 함수입니다.
 # WHY: 매우 큰 특정 그래디언트 값이 전체 학습을 망치는 것을 방지하기 위함입니다.
 # HOW: 각 그래디언트 요소를 [-clip_value, clip_value] 범위 내로 제한(clip)합니다.
-def clip_grad_value(parameters: List[Tensor], clip_value: float):
-    # WHAT: 모든 파라미터를 순회하는 루프입니다.
-    # WHY: 각 텐서의 그래디언트에 클리핑을 적용하기 위함입니다.
-    # HOW: for문을 통해 파라미터를 하나씩 꺼냅니다.
+def clip_grad_value(parameters: List[Tensor], clip_value: float) -> None:
     for p in parameters:
         if p.device == "gpu" or (p.grad is not None and p.grad.device == "gpu"):
             raise AMEVAForgeDeviceError(
-                "clip_grad_value is supported only for CPU parameters in Release 1."
+                "clip_grad_value() is synchronous and supported only for CPU parameters. "
+                "For GPU tensors in Pyodide/WebGPU, use 'await clip_grad_value_async(parameters, clip_value)'."
             )
         if p.grad is not None:
             g = _require_cpu_data(p.grad, "p.grad")
             p.grad._data = np.clip(g, -clip_value, clip_value).astype(np.float32)
+
+
+# WHAT: WebGPU 및 Pyodide 비동기 환경을 지원하는 GPU/CPU 통합 비동기 Gradient Value Clipping 함수입니다.
+async def clip_grad_value_async(parameters: List[Tensor], clip_value: float) -> None:
+    valid_params = [p for p in parameters if p.grad is not None]
+    if not valid_params:
+        return
+
+    async def fetch_grad(grad_tensor: Tensor) -> np.ndarray:
+        if grad_tensor.device == "gpu":
+            return await grad_tensor.numpy_async()
+        return _require_cpu_data(grad_tensor, "p.grad")
+
+    grads_data = await asyncio.gather(*(fetch_grad(p.grad) for p in valid_params))
+    for p, g in zip(valid_params, grads_data):
+        clipped = np.clip(g, -clip_value, clip_value).astype(np.float32)
+        if p.grad.device == "gpu":
+            old_grad = p.grad
+            from .tensor import tensor as create_tensor
+            p.grad = create_tensor(clipped, device="gpu")
+            if hasattr(old_grad, 'dispose'):
+                old_grad.dispose()
+        else:
+            p.grad._data = clipped
 
 # WHAT: 정해진 에포크 주기마다 학습률을 단계적으로 감소시키는 스케줄러입니다.
 # WHY: 학습 후반부에 학습률을 낮춰 더 세밀한 최적화 지점(Global Minimum)에 도달하게 하기 위함입니다.

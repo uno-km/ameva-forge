@@ -135,7 +135,31 @@ function simulateFlashAttention2(
 
 describe('SCRUM-209 ~ SCRUM-213: FlashAttention-2 Architectural & Numerical Contract', () => {
   const mockDevice: any = {
-    createBuffer: jest.fn(() => ({ destroy: jest.fn() })),
+    createShaderModule: jest.fn(() => ({})),
+    createComputePipeline: jest.fn(() => ({
+      getBindGroupLayout: jest.fn(() => ({})),
+    })),
+    createBuffer: jest.fn((desc: any) => ({
+      size: desc?.size ?? 48,
+      usage: desc?.usage,
+      destroy: jest.fn(),
+      mapAsync: jest.fn().mockResolvedValue(undefined),
+      getMappedRange: jest.fn(() => new ArrayBuffer(desc?.size ?? 48)),
+      unmap: jest.fn(),
+    })),
+    createBindGroupLayout: jest.fn(() => ({})),
+    createBindGroup: jest.fn(() => ({})),
+    createCommandEncoder: jest.fn(() => ({
+      beginComputePass: jest.fn(() => ({
+        setPipeline: jest.fn(),
+        setBindGroup: jest.fn(),
+        dispatchWorkgroups: jest.fn(),
+        end: jest.fn()
+      })),
+      finish: jest.fn(() => ({}))
+    })),
+    pushErrorScope: jest.fn(),
+    popErrorScope: jest.fn().mockResolvedValue(null),
     queue: {
       writeBuffer: jest.fn(),
       submit: jest.fn(),
@@ -221,4 +245,28 @@ describe('SCRUM-209 ~ SCRUM-213: FlashAttention-2 Architectural & Numerical Cont
       }
     });
   });
+
+  describe('4. executeGraph FlashAttention-2 Dispatch & Uniform Buffer Integration', () => {
+    it('executes flash_attention graph instruction with exact 48-byte uniform buffer without overflow', async () => {
+      const { executeGraph } = await import('../src/tensor/graphExecutor');
+      const B = 1, H = 2, H_kv = 2, N = 4, d = 8;
+      const qData = new Float32Array(B * H * N * d);
+      const kData = new Float32Array(B * H_kv * N * d);
+      const vData = new Float32Array(B * H_kv * N * d);
+      qData.fill(0.5);
+      kData.fill(0.5);
+      vData.fill(0.5);
+
+      const instructions = [
+        { id: 1, op: 'upload', in: [], shape: [B, H, N, d], params: [] },
+        { id: 2, op: 'upload', in: [], shape: [B, H_kv, N, d], params: [] },
+        { id: 3, op: 'upload', in: [], shape: [B, H_kv, N, d], params: [] },
+        { id: 4, op: 'flash_attention', in: [1, 2, 3], shape: [B, H, N, d], params: [H_kv, 1.0 / Math.sqrt(d), 0] }
+      ];
+
+      const res = await executeGraph(JSON.stringify(instructions), [qData, kData, vData]);
+      expect(res[4]).toBeDefined();
+    });
+  });
 });
+

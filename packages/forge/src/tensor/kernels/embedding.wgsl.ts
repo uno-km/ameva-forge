@@ -22,12 +22,12 @@ struct EmbeddingParams {
   num_tokens: u32,
   embedding_dim: u32,
   vocab_size: u32,
-  pad: u32,
+  workgroupsX: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: EmbeddingParams;
 @group(0) @binding(1) var<storage, read> weight: array<f32>;
-@group(0) @binding(2) var<storage, read> index: array<u32>;
+@group(0) @binding(2) var<storage, read> index: array<f32>;
 @group(0) @binding(3) var<storage, read_write> out: array<f32>;
 
 @compute @workgroup_size(64, 1, 1)
@@ -36,29 +36,28 @@ fn main(
   @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
   let thread_id = local_id.x;
-  let flat_token_idx = workgroup_id.x + workgroup_id.y * 65535u;
+  let flat_token_idx = workgroup_id.x + workgroup_id.y * params.workgroupsX;
 
   if (flat_token_idx >= params.num_tokens) {
     return;
   }
 
-  // 32비트 정수 토큰 ID를 직접 u32로 읽어 비트 오독 및 Float32 축퇴를 원천 차단
-  let raw_token_id = index[flat_token_idx];
-  var token_id: u32 = 0u;
-
-  if (raw_token_id < params.vocab_size) {
-    token_id = raw_token_id;
-  } else {
-    // Vocab 범위를 벗어난 OOB 인덱스는 0으로 안전하게 클램프
-    token_id = 0u;
-  }
-
-  let weight_row_offset = token_id * params.embedding_dim;
+  let raw_val = index[flat_token_idx];
   let out_token_offset = flat_token_idx * params.embedding_dim;
+  let rounded = round(raw_val);
 
-  // 64개 스레드가 embedding_dim 차원을 협력 복사
-  for (var d: u32 = thread_id; d < params.embedding_dim; d = d + 64u) {
-    out[out_token_offset + d] = weight[weight_row_offset + d];
+  // NaN이거나 반올림 결과가 음수이거나 어휘집 크기 이상인 인덱스는 0번 토큰으로 오염시키지 않고 0.0 벡터 기록
+  if (raw_val != raw_val || rounded < 0.0 || rounded >= f32(params.vocab_size)) {
+    for (var d: u32 = thread_id; d < params.embedding_dim; d = d + 64u) {
+      out[out_token_offset + d] = 0.0;
+    }
+  } else {
+    let token_id = u32(rounded);
+    let weight_row_offset = token_id * params.embedding_dim;
+    // 64개 스레드가 embedding_dim 차원을 협력 복사
+    for (var d: u32 = thread_id; d < params.embedding_dim; d = d + 64u) {
+      out[out_token_offset + d] = weight[weight_row_offset + d];
+    }
   }
 }
 `;

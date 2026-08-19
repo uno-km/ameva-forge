@@ -24,6 +24,7 @@ import {
   clearStagingPool,
   mapBufferAsync as _mapBufferAsync,
   readMappedInto as _readMappedInto,
+  releaseStagingBuffer,
 } from "../webgpu/buffers";
 import { _globalQuotaManager, AllocationToken } from "../webgpu/quota";
 import { _globalRegistry } from "./tensorRegistry";
@@ -383,7 +384,13 @@ export async function mapBufferAsync(handle: TensorHandle): Promise<void> {
   const promise = (async () => {
     try {
       const { stagingBuffer, token } = await _mapBufferAsync(record.buffer, record.byteLength);
-      _pendingStagingBuffers.set(handle, { stagingBuffer, token });
+      if (!_globalRegistry.has(handle)) {
+        // 핸들이 매핑 진행 중에 이미 dispose된 경우 즉시 언맵 및 쿼터 토큰 회수
+        try { stagingBuffer.unmap(); } catch { /* ignore */ }
+        releaseStagingBuffer(stagingBuffer, token, record.byteLength, false);
+      } else {
+        _pendingStagingBuffers.set(handle, { stagingBuffer, token });
+      }
     } finally {
       _inFlightMapPromises.delete(handle);
     }
@@ -418,6 +425,7 @@ export function readMappedInto(handle: TensorHandle, outArray: any): void {
    * HOW: 초기엔 null로 두고 outArray 타입에 따라 getBuffer() 결과가 할당됩니다.
    */
   let bufProxy: any = null;
+  let stagingReleased = false;
   try {
     /**
      * WHAT: 데이터 복사가 기록될 최종 대상 Float32Array입니다.
@@ -446,8 +454,15 @@ export function readMappedInto(handle: TensorHandle, outArray: any): void {
     }
 
     _readMappedInto(obj.stagingBuffer, obj.token, actualData);
+    stagingReleased = true;
   } finally {
-    // _readMappedInto already releases the token!
+    // RAII 안전망: 유효성 검사 실패 등으로 _readMappedInto 호출 전 예외 발생 시 스테이징 버퍼 언맵 및 쿼터 토큰 반환
+    if (!stagingReleased) {
+      try { obj.stagingBuffer.unmap(); } catch { /* ignore */ }
+      const rec = _globalRegistry.has(handle) ? _globalRegistry.get(handle) : null;
+      const bLen = rec ? rec.byteLength : obj.stagingBuffer.size;
+      releaseStagingBuffer(obj.stagingBuffer, obj.token, bLen, false);
+    }
     // H-NEW-06: bufProxy.release() 실패 시에도 리소스 정리 보장
     if (bufProxy) {
       try { bufProxy.release(); } catch { /* ignore */ }
@@ -461,6 +476,14 @@ export function readMappedInto(handle: TensorHandle, outArray: any): void {
  * HOW: _globalRegistry.dispose()를 호출하여 핸들에 연결된 레코드를 삭제하고 버퍼 소멸 스케줄을 잡습니다.
  */
 export function dispose(handle: TensorHandle): void {
+  const pending = _pendingStagingBuffers.get(handle);
+  if (pending) {
+    _pendingStagingBuffers.delete(handle);
+    try { pending.stagingBuffer.unmap(); } catch {}
+    const rec = _globalRegistry.has(handle) ? _globalRegistry.get(handle) : null;
+    const bLen = rec ? rec.byteLength : pending.stagingBuffer.size;
+    releaseStagingBuffer(pending.stagingBuffer, pending.token, bLen, false);
+  }
   _globalRegistry.dispose(handle);
 }
 

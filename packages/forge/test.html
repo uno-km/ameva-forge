@@ -32,7 +32,7 @@
         const pyodide = await loadPyodide({
           indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/"
         });
-        await pyodide.loadPackage("micropip");
+        await pyodide.loadPackage(["micropip", "numpy"]);
         const micropip = pyodide.pyimport("micropip");
         try {
           await micropip.install("/test-artifacts/forge-0.1.0-py3-none-any.whl");

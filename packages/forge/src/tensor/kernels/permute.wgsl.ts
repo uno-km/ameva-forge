@@ -102,11 +102,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     // 변수: coord
     // 역할: 남은 1차원 인덱스를 출력 보폭으로 나누어 얻은 현재 차원(i)의 논리적 좌표값
-    let coord = out_idx_remaining / out_stride;
+    let stride_val = max(out_stride, 1u);
+    let coord = out_idx_remaining / stride_val;
     
     // 변수: out_idx_remaining 갱신
     // 역할: 다음 차원 계산을 위해 현재 차원에서 처리된 부분을 제외한 나머지(나머지 연산)를 저장합니다.
-    out_idx_remaining = out_idx_remaining % out_stride;
+    out_idx_remaining = out_idx_remaining % stride_val;
     
     // 변수: in_idx 누적
     // 역할: 도출된 논리적 좌표(coord)에 원래 텐서의 보폭(in_stride)을 곱해, 원본 텐서에서 데이터를 읽어올 정확한 1차원 메모리 주소를 누적해 나갑니다.

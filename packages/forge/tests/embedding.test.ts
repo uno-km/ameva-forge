@@ -68,12 +68,12 @@ describe('WebGPU Native Embedding & Embedding Backward Kernel Tests', () => {
     const fwdWgsl = KERNEL_REGISTRY.get('embedding');
     expect(fwdWgsl).toBeDefined();
     expect(fwdWgsl).toContain('struct EmbeddingParams');
-    expect(fwdWgsl).toContain('index: array<u32>');
+    expect(fwdWgsl).toContain('index: array<f32>');
 
     const bwdWgsl = KERNEL_REGISTRY.get('embedding_backward');
     expect(bwdWgsl).toBeDefined();
     expect(bwdWgsl).toContain('struct EmbeddingBackwardParams');
-    expect(bwdWgsl).toContain('index: array<u32>');
+    expect(bwdWgsl).toContain('index: array<f32>');
     expect(bwdWgsl).toContain('grad_weight: array<f32>');
   });
 
@@ -141,7 +141,7 @@ describe('WebGPU Native Embedding & Embedding Backward Kernel Tests', () => {
     expect(tensorGradW.byteLength).toBe(1000 * 32 * 4);
   });
 
-  it('should validate embedding and embedding_backward schemas in executeGraph', async () => {
+  it('should validate and execute embedding and embedding_backward in executeGraph', async () => {
     const instructions = [
       { id: 1, op: 'upload', in: [], shape: [100, 32], params: [] },
       { id: 2, op: 'upload', in: [], shape: [2, 8], params: [] },
@@ -150,12 +150,12 @@ describe('WebGPU Native Embedding & Embedding Backward Kernel Tests', () => {
       { id: 5, op: 'embedding_backward', in: [4, 2], shape: [100, 32], params: [16, 32, 100, 3200] }
     ];
 
-    try {
-      await executeGraph(JSON.stringify(instructions), []);
-    } catch (err: any) {
-      expect(err.message).not.toContain('expected min');
-      expect(err.message).not.toContain('Unknown operation');
-    }
+    const weightData = new Float32Array(100 * 32);
+    const indexData = new Float32Array(2 * 8);
+    const gradData = new Float32Array(2 * 8 * 32);
+    const res = await executeGraph(JSON.stringify(instructions), [weightData, indexData, gradData]);
+    expect(res[3]).toBeDefined();
+    expect(res[5]).toBeDefined();
   });
 
   it('should reject embedding_backward instruction with insufficient inputs (< 2)', async () => {
@@ -212,6 +212,28 @@ describe('WebGPU Native Embedding & Embedding Backward Kernel Tests', () => {
     const tensorOut = _globalRegistry.get(hOut);
     expect(tensorOut.shape).toEqual([1, 128, 64]);
     expect(tensorOut.byteLength).toBe(1 * 128 * 64 * 4);
+  });
+
+  it('should support embedding_backward with > 64 repeated tokens without truncation', async () => {
+    const numTokens = 128;
+    const embeddingDim = 64;
+    const vocabSize = 10;
+    const instructions = [
+      { id: 1, op: 'upload', in: [], shape: [numTokens, embeddingDim], params: [] },
+      { id: 2, op: 'upload', in: [], shape: [numTokens], params: [] },
+      { id: 3, op: 'embedding_backward', in: [1, 2], shape: [vocabSize, embeddingDim], params: [numTokens, embeddingDim, vocabSize, vocabSize * embeddingDim] }
+    ];
+
+    const gradData = new Float32Array(numTokens * embeddingDim);
+    gradData.fill(1.0);
+    const indexData = new Float32Array(numTokens);
+    // All 128 tokens are token_id 0!
+    indexData.fill(0.0);
+
+    const res = await executeGraph(JSON.stringify(instructions), [gradData, indexData]);
+    expect(res[3]).toBeDefined();
+    const tensorGradW = _globalRegistry.get(res[3]);
+    expect(tensorGradW.shape).toEqual([vocabSize, embeddingDim]);
   });
 });
 

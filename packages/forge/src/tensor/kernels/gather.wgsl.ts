@@ -20,7 +20,7 @@ struct Params {
 
 @group(0) @binding(0) var<uniform> params: Params; // 메타데이터 및 형태 정보가 담긴 유니폼 데이터입니다.
 @group(0) @binding(1) var<storage, read> input: array<f32>; // 수집 대상이 되는 원본 데이터 배열입니다.
-@group(0) @binding(2) var<storage, read> index: array<u32>; // 수집할 인덱스를 지정하는 정수 배열입니다.
+@group(0) @binding(2) var<storage, read> index: array<f32>; // 수집할 인덱스를 지정하는 부동소수점 배열입니다.
 @group(0) @binding(3) var<storage, read_write> output: array<f32>; // 수집된 데이터가 쓰여질 결과 배열입니다.
 
 /**
@@ -40,19 +40,28 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   // 출력 텐서의 각 차원(0부터 rank-1까지)에 대해 루프를 돕니다.
   // 이 루프는 출력 텐서의 1D 인덱스(idx)를 다차원 좌표로 변환하고, 이를 다시 입력 텐서의 1D 인덱스(in_idx)로 매핑합니다.
   for (var i = 0u; i < params.rank; i = i + 1u) {
-    let coord = temp / params.out_strides[i]; // 현재 차원 i에서의 다차원 좌표 값입니다.
-    temp = temp % params.out_strides[i]; // 다음 하위 차원 좌표 계산을 위해 나머지를 구합니다.
+    let out_stride = max(params.out_strides[i], 1u);
+    let coord = temp / out_stride; // 현재 차원 i에서의 다차원 좌표 값입니다.
+    temp = temp % out_stride; // 다음 하위 차원 좌표 계산을 위해 나머지를 구합니다.
     
     // 현재 차원이 수집 대상 차원(dim)인 경우, 계산된 좌표 대신 index 배열에서 값을 읽어옵니다.
     if (i == params.dim) {
-      let raw_bits = index[idx];
+      let raw_val = index[idx];
+      if (raw_val != raw_val) {
+        output[idx] = 0.0;
+        return;
+      }
       let dim_size = i32(params.x_shape[i]);
-      var signed_idx = bitcast<i32>(raw_bits);
+      var signed_idx = i32(round(raw_val));
       if (signed_idx < 0) {
         signed_idx = signed_idx + dim_size;
       }
-      let clamped_idx = u32(clamp(signed_idx, 0, max(0, dim_size - 1)));
-      in_idx = in_idx + clamped_idx * params.x_strides[i];
+      if (signed_idx < 0 || signed_idx >= dim_size) {
+        output[idx] = 0.0;
+        return;
+      }
+      let valid_idx = u32(signed_idx);
+      in_idx = in_idx + valid_idx * params.x_strides[i];
     } else {
       // 수집 대상 차원이 아닌 경우, 출력 텐서와 동일한 좌표를 유지합니다.
       in_idx = in_idx + coord * params.x_strides[i]; // 동일한 좌표에 원본 텐서의 해당 차원 스트라이드를 곱해 누적합니다.

@@ -23,12 +23,19 @@ struct EmbeddingBackwardParams {
   embedding_dim: u32,
   vocab_size: u32,
   total_weight_elements: u32,
+  workgroupsX: u32,
+  pad1: u32,
+  pad2: u32,
+  pad3: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: EmbeddingBackwardParams;
 @group(0) @binding(1) var<storage, read> grad_output: array<f32>;
-@group(0) @binding(2) var<storage, read> index: array<u32>;
+@group(0) @binding(2) var<storage, read> index: array<f32>;
 @group(0) @binding(3) var<storage, read_write> grad_weight: array<f32>;
+
+var<workgroup> s_match_count: atomic<u32>;
+var<workgroup> s_matches: array<u32, 64>;
 
 @compute @workgroup_size(64, 1, 1)
 fn main(
@@ -36,8 +43,60 @@ fn main(
   @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
   let thread_id = local_id.x;
-  let flat_idx = (workgroup_id.x + workgroup_id.y * 65535u) * 64u + thread_id;
+  let base_workgroup_idx = (workgroup_id.x + workgroup_id.y * params.workgroupsX) * 64u;
+  let flat_idx = base_workgroup_idx + thread_id;
 
+  let start_vocab = base_workgroup_idx / params.embedding_dim;
+  let end_vocab = (base_workgroup_idx + 63u) / params.embedding_dim;
+
+  // 단일 워크그룹 내 모든 스레드가 동일한 vocab_id를 처리하는 경우 (표준 LLM: embedding_dim >= 64):
+  // 64개 단위로 청크 순회(Chunked Cooperative Scan)를 수행하여 64개를 초과하는 임의의 출현 횟수도 절단 없이 100% 완전 누적
+  if (start_vocab == end_vocab && start_vocab < params.vocab_size) {
+    let target_v = start_vocab;
+    let d = flat_idx % params.embedding_dim;
+    var acc: f32 = 0.0;
+
+    let num_chunks = (params.num_tokens + 63u) / 64u;
+    for (var chunk: u32 = 0u; chunk < num_chunks; chunk = chunk + 1u) {
+      if (thread_id == 0u) {
+        atomicStore(&s_match_count, 0u);
+      }
+      workgroupBarrier();
+
+      let t = chunk * 64u + thread_id;
+      if (t < params.num_tokens) {
+        let raw_val = index[t];
+        let rounded = round(raw_val);
+        if (raw_val == raw_val && rounded >= 0.0 && rounded < f32(params.vocab_size)) {
+          let raw_token_id = u32(rounded);
+          if (raw_token_id == target_v) {
+            let slot = atomicAdd(&s_match_count, 1u);
+            if (slot < 64u) {
+              s_matches[slot] = t;
+            }
+          }
+        }
+      }
+      workgroupBarrier();
+
+      let count = min(atomicLoad(&s_match_count), 64u);
+      if (count > 0u && flat_idx < params.total_weight_elements) {
+        for (var m: u32 = 0u; m < count; m = m + 1u) {
+          let matched_t = s_matches[m];
+          let grad_out_offset = matched_t * params.embedding_dim + d;
+          acc = acc + grad_output[grad_out_offset];
+        }
+      }
+      workgroupBarrier();
+    }
+
+    if (flat_idx < params.total_weight_elements) {
+      grad_weight[flat_idx] = acc;
+    }
+    return;
+  }
+
+  // 워크그룹이 경계를 넘거나 소형 임베딩 차원인 경우 일반 스캔
   if (flat_idx >= params.total_weight_elements) {
     return;
   }
@@ -46,12 +105,15 @@ fn main(
   let d = flat_idx % params.embedding_dim;
 
   var acc: f32 = 0.0;
-
-  // index[t] == vocab_id인 모든 토큰 t에 대해 grad_output[t, d] 누산 (Lock-Free & Deterministic)
   for (var t: u32 = 0u; t < params.num_tokens; t = t + 1u) {
-    if (index[t] == vocab_id) {
-      let grad_out_offset = t * params.embedding_dim + d;
-      acc = acc + grad_output[grad_out_offset];
+    let raw_val = index[t];
+    let rounded = round(raw_val);
+    if (raw_val == raw_val && rounded >= 0.0 && rounded < f32(params.vocab_size)) {
+      let raw_token_id = u32(rounded);
+      if (raw_token_id == vocab_id) {
+        let grad_out_offset = t * params.embedding_dim + d;
+        acc = acc + grad_output[grad_out_offset];
+      }
     }
   }
 

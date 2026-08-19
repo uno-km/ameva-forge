@@ -312,7 +312,7 @@ for text in texts:
     res["latency_ms"] = round(latency_ms, 2)
     res["text"] = text
     results.append(res)
-    print(f"[{res['label']}] (Score: {res['score']:.4f} | {latency_ms:.2f}ms) -> \"{text}\"")
+    print(f"[{res['label']}] (Score: {res['score']:.4f} | {latency_ms:.2f}ms) -> '{text}'")
 
 del pipe
 import gc; gc.collect()

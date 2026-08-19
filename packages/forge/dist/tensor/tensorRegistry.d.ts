@@ -18,6 +18,9 @@ import { TensorHandle, TensorRecord } from "../types";
 export declare class TensorRegistry {
     private records;
     private nextId;
+    private pendingDisposals;
+    private flushScheduled;
+    private scheduleFlush;
     snapshotHandles(): string[];
     registerRecord(record: Omit<TensorRecord, 'createdAt' | 'disposed'>): TensorHandle;
     /**
@@ -41,7 +44,7 @@ export declare class TensorRegistry {
     /**
      * WHAT: 지정된 핸들의 텐서를 폐기하고 GPU 메모리를 해제하는 함수입니다.
      * WHY: 사용이 끝난 텐서의 메모리를 반환하여 OOM(Out of Memory)을 방지하고 자원 누수를 막기 위함입니다.
-     * HOW: 레코드를 disposed로 표시하고 맵에서 제거한 뒤, QuotaManager와 WebGPU 큐를 통해 버퍼를 해제합니다.
+     * HOW: 레코드를 disposed로 표시하고 맵에서 제거한 뒤, 마이크로태스크 배치 큐를 통해 GPU 큐 완료 시 해제합니다.
      */
     dispose(handle: TensorHandle): void;
     markFailed(handle: TensorHandle, errorMsg: string): void;

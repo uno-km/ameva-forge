@@ -271,6 +271,60 @@ test('V3 Extended Kernels (Rectangular BMM, Scatter, Gather, Permute) in WebGPU 
     const scat_nan_actual = new Float32Array(3);
     forge.readMappedInto(h_sout, scat_nan_actual);
 
+    // 9. Matmul Tiled 16x16 Test:
+    const tM = 32, tN = 32, tK = 32;
+    const matA = new Float32Array(tM * tK);
+    const matB = new Float32Array(tK * tN);
+    for (let i = 0; i < matA.length; i++) matA[i] = (i % 7) * 0.1;
+    for (let i = 0; i < matB.length; i++) matB[i] = (i % 5) * 0.1;
+    const h_matA = forge.uploadFloat32Array(matA, [tM, tK]);
+    const h_matB = forge.uploadFloat32Array(matB, [tK, tN]);
+    const matTiledInst = [
+      { op: 'load', id: 1, handle: h_matA, shape: [tM, tK], in: [], params: [] },
+      { op: 'load', id: 2, handle: h_matB, shape: [tK, tN], in: [], params: [] },
+      { op: 'matmul_tiled', id: 3, shape: [tM, tN], in: [1, 2], params: [tM, tN, tK] }
+    ];
+    const outMatTiled = await forge.executeGraph(JSON.stringify(matTiledInst), [], [3]);
+    const h_mt = outMatTiled[3];
+    handles.push(h_matA, h_matB, h_mt);
+    await forge.mapBufferAsync(h_mt);
+    const mt_actual = new Float32Array(tM * tN);
+    forge.readMappedInto(h_mt, mt_actual);
+
+    const mt_expected = new Float32Array(tM * tN);
+    for (let r = 0; r < tM; r++) {
+      for (let c = 0; c < tN; c++) {
+        let sum = 0;
+        for (let k = 0; k < tK; k++) {
+          sum += matA[r * tK + k] * matB[k * tN + c];
+        }
+        mt_expected[r * tN + c] = sum;
+      }
+    }
+
+    // 10. Native Embedding Forward & Backward Test with non-zero indices [2, 0, 1]:
+    const embVocab = 4, embDim = 8;
+    const embWeightData = new Float32Array(embVocab * embDim);
+    for (let v = 0; v < embVocab; v++) {
+      for (let d = 0; d < embDim; d++) {
+        embWeightData[v * embDim + d] = (v + 1) * 10 + d;
+      }
+    }
+    const embIdxData = new Float32Array([2, 0, 1]); // non-zero tokens!
+    const h_ew = forge.uploadFloat32Array(embWeightData, [embVocab, embDim]);
+    const h_ei = forge.uploadFloat32Array(embIdxData, [3]);
+    const embInst = [
+      { op: 'load', id: 1, handle: h_ew, shape: [embVocab, embDim], in: [], params: [] },
+      { op: 'load', id: 2, handle: h_ei, shape: [3], in: [], params: [] },
+      { op: 'embedding', id: 3, shape: [3, embDim], in: [1, 2], params: [3, embDim, embVocab, 0] }
+    ];
+    const outEmb = await forge.executeGraph(JSON.stringify(embInst), [], [3]);
+    const h_eout = outEmb[3];
+    handles.push(h_ew, h_ei, h_eout);
+    await forge.mapBufferAsync(h_eout);
+    const emb_actual = new Float32Array(3 * embDim);
+    forge.readMappedInto(h_eout, emb_actual);
+
     for (const h of handles) {
       try { forge.dispose(h); } catch {}
     }
@@ -294,6 +348,12 @@ test('V3 Extended Kernels (Rectangular BMM, Scatter, Gather, Permute) in WebGPU 
       expected_permute_samples,
       drop_reproducible: Array.from(d1_actual).every((v, i) => v === d2_actual[i]),
       scat_nan_unmodified: Array.from(scat_nan_actual),
+      mt_actual: Array.from(mt_actual),
+      mt_expected: Array.from(mt_expected),
+      emb_actual: Array.from(emb_actual),
+      emb_expected_row0: Array.from(embWeightData.slice(2 * embDim, 3 * embDim)),
+      emb_expected_row1: Array.from(embWeightData.slice(0, embDim)),
+      emb_expected_row2: Array.from(embWeightData.slice(embDim, 2 * embDim)),
     };
   });
 
@@ -308,6 +368,10 @@ test('V3 Extended Kernels (Rectangular BMM, Scatter, Gather, Permute) in WebGPU 
   expect(allClose(jsResult.permute_samples, jsResult.expected_permute_samples)).toBe(true);
   expect(jsResult.drop_reproducible).toBe(true);
   expect(jsResult.scat_nan_unmodified).toEqual([10, 20, 30]);
+  expect(allClose(jsResult.mt_actual, jsResult.mt_expected)).toBe(true);
+  expect(allClose(jsResult.emb_actual.slice(0, 8), jsResult.emb_expected_row0)).toBe(true);
+  expect(allClose(jsResult.emb_actual.slice(8, 16), jsResult.emb_expected_row1)).toBe(true);
+  expect(allClose(jsResult.emb_actual.slice(16, 24), jsResult.emb_expected_row2)).toBe(true);
 
   // ── PART 2: Pyodide Python WebGPU E2E Verification ──
   const pyResult = await page.evaluate(async () => {
@@ -408,15 +472,13 @@ res_6d = await t_out_6d.numpy_async()
 expected_6d = a_6d_np * b_6d_np
 broadcast_6d_diff = float(np.max(np.abs(res_6d - expected_6d)))
 
-# 9. GPU SGD Momentum Policy Verification:
+# 9. GPU SGD Momentum Native WebGPU Execution:
 param_gpu = forge.tensor([1.0, 2.0], requires_grad=True).to('gpu')
 param_gpu.grad = forge.tensor([0.1, 0.2]).to('gpu')
 opt_mom = forge.optim.SGD([param_gpu], lr=0.1, momentum=0.9)
-momentum_guard_passed = False
-try:
-    await opt_mom.step_async()
-except forge.errors.AMEVAForgeDeviceError:
-    momentum_guard_passed = True
+await opt_mom.step_async()
+param_gpu_val = await param_gpu.numpy_async()
+momentum_guard_passed = bool(abs(param_gpu_val[0] - 0.99) < 1e-3 and abs(param_gpu_val[1] - 1.98) < 1e-3)
 
 # 10. Strict Mode NaN Gradient Detection on WebGPU:
 param_strict = forge.tensor([1.0, 2.0], requires_grad=True).to('gpu')
@@ -510,7 +572,7 @@ forge.flush_gc(force=True)
 handles_snapshot = forge.bridge.get_js_core().snapshotHandles().to_py()
 gc_finalizer_passed = bool(w_handle not in handles_snapshot)
 
-# 19. CrossEntropy on GPU:
+# 19. CrossEntropy on GPU with exact analytical gradient comparison:
 ce_preds = forge.tensor([[2.0, 1.0, 0.1], [0.5, 2.5, 0.3]], requires_grad=True).to('gpu')
 ce_targets = forge.tensor([0, 1], device='cpu')
 ce_loss = forge.functional.cross_entropy(ce_preds, ce_targets)
@@ -519,7 +581,50 @@ ce_loss_val = await ce_loss.numpy_async()
 ce_loss.backward()
 await ce_preds.grad.realize()
 ce_grad_val = await ce_preds.grad.numpy_async()
-ce_passed = bool(float(ce_loss_val) > 0.0 and ce_grad_val.shape == (2, 3) and np.isfinite(ce_grad_val).all())
+
+logits_np = np.array([[2.0, 1.0, 0.1], [0.5, 2.5, 0.3]], dtype=np.float32)
+exp_l = np.exp(logits_np - np.max(logits_np, axis=-1, keepdims=True))
+probs_np = exp_l / np.sum(exp_l, axis=-1, keepdims=True)
+expected_grad_np = probs_np.copy()
+expected_grad_np[0, 0] -= 1.0
+expected_grad_np[1, 1] -= 1.0
+expected_grad_np /= 2.0
+ce_passed = bool(np.allclose(ce_grad_val, expected_grad_np, atol=1e-4))
+
+# 19b. Sparse CrossEntropy backward with vector per-sample grad_output:
+ce_preds_w = forge.tensor([[2.0, 1.0, 0.1], [0.5, 2.5, 0.3]], requires_grad=True).to('gpu')
+ce_targets_w = forge.tensor([0, 1], dtype='float32', device='gpu')
+ce_grad_out = forge.tensor([2.0, 0.5], dtype='float32', device='gpu')
+t_grad_logits = forge.Tensor(
+    shape=ce_preds_w.shape,
+    dtype='float32',
+    device='gpu',
+    op='sparse_cross_entropy_backward',
+    parents=(ce_preds_w, ce_targets_w, ce_grad_out),
+    op_params=[-100, 1.0]
+)
+await t_grad_logits.realize()
+grad_w_val = await t_grad_logits.numpy_async()
+expected_grad_w = probs_np.copy()
+expected_grad_w[0, 0] -= 1.0
+expected_grad_w[1, 1] -= 1.0
+expected_grad_w[0] *= 2.0
+expected_grad_w[1] *= 0.5
+ce_vec_passed = bool(np.allclose(grad_w_val, expected_grad_w, atol=1e-4))
+
+# 20. nn.Embedding on GPU with non-zero indices [2, 0, 1]:
+emb_layer = forge.nn.Embedding(num_embeddings=4, embedding_dim=8)
+emb_layer.to('gpu')
+emb_tokens = forge.tensor([2, 0, 1], dtype='int32', device='gpu')
+emb_out = emb_layer(emb_tokens)
+await emb_out.realize()
+emb_out_val = await emb_out.numpy_async()
+emb_w_val = await emb_layer.weight.numpy_async()
+emb_gpu_passed = bool(
+    np.allclose(emb_out_val[0], emb_w_val[2]) and
+    np.allclose(emb_out_val[1], emb_w_val[0]) and
+    np.allclose(emb_out_val[2], emb_w_val[1])
+)
 
 {
     "bmm_diff": bmm_diff,
@@ -543,6 +648,8 @@ ce_passed = bool(float(ce_loss_val) > 0.0 and ce_grad_val.shape == (2, 3) and np
     "pe_dynamic_passed": pe_dynamic_passed,
     "gc_finalizer_passed": gc_finalizer_passed,
     "ce_passed": ce_passed,
+    "ce_vec_passed": ce_vec_passed,
+    "emb_gpu_passed": emb_gpu_passed,
 }
 `;
     const res = await pyodide.runPythonAsync(pyCode);
@@ -571,4 +678,6 @@ ce_passed = bool(float(ce_loss_val) > 0.0 and ce_grad_val.shape == (2, 3) and np
   expect(pyResult.pe_dynamic_passed).toBe(true);
   expect(pyResult.gc_finalizer_passed).toBe(true);
   expect(pyResult.ce_passed).toBe(true);
+  expect(pyResult.ce_vec_passed).toBe(true);
+  expect(pyResult.emb_gpu_passed).toBe(true);
 });
