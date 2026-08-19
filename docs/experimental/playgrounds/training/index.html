@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -62,16 +62,10 @@
         </main>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
-    <script>var exports = {};</script>
-    <script src="../../packages/forge/dist/index.js"></script>
+    <script src="../../../dist/index.js"></script>
+    <script src="../../../dist/forge-py-bundle.js"></script>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
     <script>
-        if (exports.registerPyodideBridge) {
-            exports.registerPyodideBridge();
-        } else if (typeof registerPyodideBridge !== 'undefined') {
-            registerPyodideBridge();
-        }
-
         let pyodide = null;
         let isTraining = false;
         
@@ -83,16 +77,35 @@
 
         async function initDashboard() {
             try {
-                const adapter = await navigator.gpu.requestAdapter();
-                if (!adapter) throw new Error("No WebGPU adapter found");
+                if (!navigator.gpu) {
+                    document.getElementById('loadingText').innerText = "FATAL: WebGPU is not supported in this browser.";
+                    return;
+                }
 
-                pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.0/full/" });
-                await pyodide.loadPackage("micropip");
-                const micropip = pyodide.pyimport("micropip");
+                if (window.ameva && typeof window.ameva.registerPyodideBridge === 'function') {
+                    window.bridgeApi = window.ameva.registerPyodideBridge();
+                    window.forge = window.bridgeApi;
+                }
+                if (window.bridgeApi && typeof window.bridgeApi.init === 'function') {
+                    await window.bridgeApi.init();
+                } else if (window.forge && typeof window.forge.init === 'function') {
+                    await window.forge.init();
+                }
+
+                pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/" });
+                await pyodide.loadPackage("numpy");
+
+                if (window.__FORGE_PY_FILES__) {
+                    const pyFiles = window.__FORGE_PY_FILES__;
+                    for (const [relPath, content] of Object.entries(pyFiles)) {
+                        const fullPath = '/lib/python3.11/site-packages/forge/' + relPath;
+                        const dir = fullPath.substring(0, fullPath.lastIndexOf('/'));
+                        try { pyodide.FS.mkdirTree(dir); } catch (e) {}
+                        pyodide.FS.writeFile(fullPath, content);
+                    }
+                }
                 
-                await micropip.install("../../../packages/forge-py/dist/forge-0.1.0-py3-none-any.whl");
-                
-                await pyodide.runPythonAsync(
+                await pyodide.runPythonAsync(`
 import sys
 from js import log
 class WebConsole:
@@ -105,7 +118,7 @@ import forge.nn as nn
 import time
 import asyncio
 log("Pyodide Engine Ready!")
-                );
+`);
                 
                 document.getElementById('loadingOverlay').classList.add('hidden');
             } catch (e) {
@@ -121,7 +134,7 @@ log("Pyodide Engine Ready!")
             
             let code = "";
             if (mode === 'low') {
-                code = 
+                code = `
 async def train():
     log("Initializing XOR Dataset...")
     import numpy as np
@@ -133,7 +146,7 @@ async def train():
     for epoch in range(1, 51):
         opt.zero_grad()
         pred = model(x)
-        loss = fg.F.mse_loss(pred, y)
+        loss = fg.functional.mse_loss(pred, y)
         loss.backward()
         opt.step()
         if epoch % 10 == 0:
@@ -141,9 +154,9 @@ async def train():
         await asyncio.sleep(0.01)
     log("XOR Training Complete!")
 await train()
-;
+`;
             } else if (mode === 'medium') {
-                code = 
+                code = `
 async def train():
     log("Generating Synthetic 1000x20 Dataset...")
     import numpy as np
@@ -156,7 +169,7 @@ async def train():
     for epoch in range(1, 101):
         opt.zero_grad()
         pred = model(x)
-        loss = fg.F.mse_loss(pred, y)
+        loss = fg.functional.mse_loss(pred, y)
         loss.backward()
         opt.step()
         if epoch % 20 == 0:
@@ -164,28 +177,29 @@ async def train():
         await asyncio.sleep(0.01)
     log("Medium MLP Training Complete!")
 await train()
-;
+`;
             } else if (mode === 'extreme') {
-                code = 
+                code = `
 async def train():
     log("WARNING: EXTREME VRAM CRUSHER INITIATED")
-    log("Allocating 4096x4096x3 tensors on GPU...")
+    log("Allocating 2048x2048x3 tensors on GPU...")
     import numpy as np
     try:
         for i in range(1, 6):
             t0 = time.time()
-            a = fg.tensor(np.random.randn(4096, 4096).astype(np.float32))
-            b = fg.tensor(np.random.randn(4096, 4096).astype(np.float32))
-            c = fg.tensor(np.random.randn(4096, 4096).astype(np.float32))
+            a = fg.tensor(np.random.randn(2048, 2048).astype(np.float32), device='gpu')
+            b = fg.tensor(np.random.randn(2048, 2048).astype(np.float32), device='gpu')
+            c = fg.tensor(np.random.randn(2048, 2048).astype(np.float32), device='gpu')
             res = (a @ b) + c
-            val = res.mean().numpy()
-            log(f"Iteration {i}/5 | Matrix size: 16M params | Time: {time.time()-t0:.2f}s | Checksum: {val.item():.2f}")
+            await res.realize()
+            val = (await res.numpy_async()).mean()
+            log(f"Iteration {i}/5 | Matrix size: 4M params | Time: {time.time()-t0:.2f}s | Checksum: {float(val):.2f}")
             await asyncio.sleep(0.01)
         log("Extreme VRAM benchmark survived!")
     except Exception as e:
         log(f"CRASH: {str(e)}")
 await train()
-;
+`;
             }
             
             try {

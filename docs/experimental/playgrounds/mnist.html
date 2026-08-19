@@ -67,16 +67,10 @@
         </main>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
-    <script>var exports = {};</script>
-    <script src="../../packages/forge/dist/index.js"></script>
+    <script src="../../dist/index.js"></script>
+    <script src="../../dist/forge-py-bundle.js"></script>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
     <script>
-        if (exports.registerPyodideBridge) {
-            exports.registerPyodideBridge();
-        } else if (typeof registerPyodideBridge !== 'undefined') {
-            registerPyodideBridge();
-        }
-
         let pyodide = null;
         let isDrawing = false;
         const canvas = document.getElementById('canvas');
@@ -115,20 +109,30 @@
                     document.getElementById('loadingText').innerText = "FATAL: WebGPU is not supported.";
                     return;
                 }
-                const adapter = await navigator.gpu.requestAdapter();
-                if (!adapter) {
-                    document.getElementById('loadingText').innerText = "FATAL: No WebGPU adapter found.";
-                    return;
+
+                if (window.ameva && typeof window.ameva.registerPyodideBridge === 'function') {
+                    window.bridgeApi = window.ameva.registerPyodideBridge();
+                    window.forge = window.bridgeApi;
+                }
+                if (window.bridgeApi && typeof window.bridgeApi.init === 'function') {
+                    await window.bridgeApi.init();
+                } else if (window.forge && typeof window.forge.init === 'function') {
+                    await window.forge.init();
                 }
 
-                pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.0/full/" });
-                await pyodide.loadPackage("micropip");
-                const micropip = pyodide.pyimport("micropip");
+                pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/" });
+                await pyodide.loadPackage("numpy");
+
+                if (window.__FORGE_PY_FILES__) {
+                    const pyFiles = window.__FORGE_PY_FILES__;
+                    for (const [relPath, content] of Object.entries(pyFiles)) {
+                        const fullPath = '/lib/python3.11/site-packages/forge/' + relPath;
+                        const dir = fullPath.substring(0, fullPath.lastIndexOf('/'));
+                        try { pyodide.FS.mkdirTree(dir); } catch (e) {}
+                        pyodide.FS.writeFile(fullPath, content);
+                    }
+                }
                 
-                // Fetch wheel and weights
-                await micropip.install("../../packages/forge-py/dist/ameva_tensor-0.1.0-py3-none-any.whl");
-                
-                // We mock weight loading for demonstration purposes in this UI iteration
                 await pyodide.runPythonAsync(`
 import sys
 class WebConsole:
@@ -139,7 +143,6 @@ sys.stderr = WebConsole()
 
 import forge as fg
 import forge.nn as nn
-import json
 
 class MNISTModel(nn.Module):
     def __init__(self):

@@ -1,11 +1,13 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <title data-i18n="common.nav.benchmark">AMEVA-Forge: Benchmark Dashboard</title>
-    <link rel="stylesheet" href="../../style.css">
-    <script src="../../i18n.js"></script>
-    <script src="../../i18n-translations.js"></script>
+    <link rel="stylesheet" href="../../../style.css">
+    <script src="../../../dist/index.js"></script>
+    <script src="../../../dist/forge-py-bundle.js"></script>
+    <script src="../../../i18n.js"></script>
+    <script src="../../../i18n-translations.js"></script>
     <style>
         .dashboard-container { display: flex; flex-direction: row; gap: 20px; margin-top: 20px; }
         .panel { border: 1px solid #ccc; background: #fff; padding: 15px; border-radius: 4px; flex: 1; }
@@ -112,16 +114,8 @@
         <span data-i18n="common.footerText">&copy; 2026 AMEVA-Forge Team. Released under the Apache-2.0 License.</span>
     </footer>
 
-    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
-    <script>var exports = {};</script>
-    <script src="../../packages/forge/dist/index.js"></script>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
     <script>
-        if (exports.registerPyodideBridge) {
-            exports.registerPyodideBridge();
-        } else if (typeof registerPyodideBridge !== 'undefined') {
-            registerPyodideBridge();
-        }
-
         let pyodide = null;
         let currentLogs = [];
 
@@ -148,13 +142,13 @@
             board.appendChild(line);
             board.scrollTop = board.scrollHeight;
 
-            if(msg.includes("Zero-Copy readback time")) {
-                const parts = msg.split(': ');
-                if(parts.length > 1) setStat('valTime', parts[1].replace('s', '') + 's', '#2e7d32');
+            if(msg.includes("Zero-Copy readback time") || msg.includes("in ")) {
+                const match = msg.match(/in ([\d\.]+)s/);
+                if(match) setStat('valTime', match[1] + 's', '#2e7d32');
             }
-            if(msg.includes("MB")) {
-                const match = msg.match(/~?(\d+ MB)/);
-                if(match) setStat('valMem', match[1], '#003399');
+            if(window.forge && window.forge.getQuotaSnapshot) {
+                const snap = window.forge.getQuotaSnapshot();
+                if(snap) setStat('valMem', (snap.usedBytes / (1024*1024)).toFixed(2) + ' MB', '#003399');
             }
         };
 
@@ -165,44 +159,42 @@
             setStat('valMem', '--', '#333');
         }
 
-        document.getElementById('reportBoard').addEventListener('keydown', function(e) {
-            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
-                e.preventDefault();
-                const range = document.createRange();
-                range.selectNodeContents(this);
-                const sel = window.getSelection();
-                sel.removeAllRanges();
-                sel.addRange(range);
-            }
-        });
-
         async function initDashboard() {
             try {
                 if (!navigator.gpu) {
                     document.getElementById('loadingText').innerText = "FATAL: WebGPU is not supported in this browser. Use Chrome 113+ or Edge 113+.";
                     return;
                 }
-                const adapter = await navigator.gpu.requestAdapter();
-                if (!adapter) {
-                    document.getElementById('loadingText').innerText = "FATAL: No WebGPU adapter found.";
-                    return;
-                }
-                window.log(WebGPU adapter ready: , 'info');
 
-                if (!globalThis.amevaForge) {
-                    document.getElementById('loadingText').innerText = "FATAL: amevaForge bridge not registered. Check script paths.";
-                    return;
+                if (window.ameva && typeof window.ameva.registerPyodideBridge === 'function') {
+                    window.bridgeApi = window.ameva.registerPyodideBridge();
+                    window.forge = window.bridgeApi;
+                }
+                if (window.bridgeApi && typeof window.bridgeApi.init === 'function') {
+                    await window.bridgeApi.init();
+                } else if (window.forge && typeof window.forge.init === 'function') {
+                    await window.forge.init();
                 }
 
-                pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.0/full/" });
-                await pyodide.loadPackage("micropip");
-                const micropip = pyodide.pyimport("micropip");
-                
-                await micropip.install("../../../packages/forge-py/dist/forge-0.1.0-py3-none-any.whl");
-                
+                window.log('[WebGPU] Hardware adapter initialized.', 'system');
+
+                pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/" });
+                await pyodide.loadPackage("numpy");
+
+                if (window.__FORGE_PY_FILES__) {
+                    const pyFiles = window.__FORGE_PY_FILES__;
+                    for (const [relPath, content] of Object.entries(pyFiles)) {
+                        const fullPath = '/lib/python3.11/site-packages/forge/' + relPath;
+                        const dir = fullPath.substring(0, fullPath.lastIndexOf('/'));
+                        try { pyodide.FS.mkdirTree(dir); } catch (e) {}
+                        pyodide.FS.writeFile(fullPath, content);
+                    }
+                    window.log('[AMEVA-Forge] Installed forge Python package into virtual FS.', 'system');
+                }
+
                 document.getElementById('loadingOverlay').classList.add('hidden');
                 
-                pyodide.runPython(
+                await pyodide.runPythonAsync(`
 import sys
 from js import log
 class WebConsole:
@@ -211,7 +203,9 @@ class WebConsole:
     def flush(self): pass
 sys.stdout = WebConsole()
 sys.stderr = WebConsole()
-                );
+import forge as torch
+print("[Ready] AMEVA-Forge WebGPU Python engine ready.")
+                `);
 
                 refreshTests();
             } catch (e) {
@@ -235,12 +229,12 @@ sys.stderr = WebConsole()
                     const li = document.createElement('li');
                     li.className = 'file-item';
                     li.innerText = '▶ ' + f;
-                    li.ondblclick = () => runTestFile(f);
+                    li.onclick = () => runTestFile(f);
                     list.appendChild(li);
                 });
             } catch (e) {
                 console.error("Failed to dynamically load tests from GitHub:", e);
-                window.log("Failed to load test list from GitHub API.", "error");
+                window.log("Failed to load test list from GitHub API: " + e.message, "error");
             }
         }
 
@@ -248,10 +242,10 @@ sys.stderr = WebConsole()
             if(!pyodide) return;
             clearConsole();
             setStat('valStatus', 'RUNNING', '#d32f2f');
-            window.log(--- Executing:  ---, 'system');
+            window.log(`--- Executing: ${filename} ---`, 'system');
 
             try {
-                const rawUrl = https://raw.githubusercontent.com/uno-km/ameva-forge/main/packages/forge-py/tests/;
+                const rawUrl = `https://raw.githubusercontent.com/uno-km/ameva-forge/main/packages/forge-py/tests/${filename}`;
                 const codeRes = await fetch(rawUrl);
                 if (!codeRes.ok) throw new Error("Failed to load test file: " + codeRes.status);
                 const pythonCode = await codeRes.text();
@@ -261,13 +255,12 @@ sys.stderr = WebConsole()
                     .replace(/unittest\.IsolatedAsyncioTestCase/g, "unittest.TestCase")
                     .replace(/.*__file__.*/g, ""); 
                 
-                const runnerCode = 
+                const runnerCode = `
 import unittest
 import sys
 import asyncio
 import time
 import traceback
-import types
 
 __file__ = "browser_test.py"
 
@@ -275,7 +268,7 @@ for _k, _v in list(globals().items()):
     if isinstance(_v, type) and issubclass(_v, unittest.TestCase):
         del globals()[_k]
 
-
+${safeCode}
 
 async def _run_tests_in_browser():
     test_classes = [v for k, v in globals().items() if k.startswith('Test') and isinstance(v, type) and issubclass(v, unittest.TestCase)]
@@ -302,7 +295,7 @@ async def _run_tests_in_browser():
                     print(f"PASS: {attr} in {time.time()-t0:.3f}s")
                     passed += 1
                 except Exception as e:
-                    print(f"FAIL: {attr}\\n")
+                    print(f"FAIL: {attr}")
                     traceback.print_exc()
                     
                 if hasattr(instance, 'asyncTearDown'):
@@ -314,11 +307,11 @@ async def _run_tests_in_browser():
     print(f"\\nRan {total} tests. Passed: {passed}, Failed: {total - passed}")
 
 await _run_tests_in_browser()
-;
+`;
                 await pyodide.runPythonAsync(runnerCode);
-                window.log(--- Execution Complete ---, 'success');
+                window.log(`--- Execution Complete ---`, 'success');
             } catch(e) {
-                window.log(FATAL ERROR: , 'error');
+                window.log(`FATAL ERROR: ${e.message}`, 'error');
             }
             
             setStat('valStatus', 'IDLE', '#333');

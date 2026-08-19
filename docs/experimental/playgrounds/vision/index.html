@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -73,16 +73,10 @@
         </main>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
-    <script>var exports = {};</script>
-    <script src="../../packages/forge/dist/index.js"></script>
+    <script src="../../../dist/index.js"></script>
+    <script src="../../../dist/forge-py-bundle.js"></script>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
     <script>
-        if (exports.registerPyodideBridge) {
-            exports.registerPyodideBridge();
-        } else if (typeof registerPyodideBridge !== 'undefined') {
-            registerPyodideBridge();
-        }
-
         let pyodide = null;
         const ctxIn = document.getElementById('canvasIn').getContext('2d');
         const ctxOut = document.getElementById('canvasOut').getContext('2d');
@@ -98,16 +92,35 @@
 
         async function initDashboard() {
             try {
-                const adapter = await navigator.gpu.requestAdapter();
-                if (!adapter) throw new Error("No WebGPU adapter found");
+                if (!navigator.gpu) {
+                    document.getElementById('loadingText').innerText = "FATAL: WebGPU is not supported in this browser.";
+                    return;
+                }
 
-                pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.0/full/" });
-                await pyodide.loadPackage("micropip");
-                const micropip = pyodide.pyimport("micropip");
+                if (window.ameva && typeof window.ameva.registerPyodideBridge === 'function') {
+                    window.bridgeApi = window.ameva.registerPyodideBridge();
+                    window.forge = window.bridgeApi;
+                }
+                if (window.bridgeApi && typeof window.bridgeApi.init === 'function') {
+                    await window.bridgeApi.init();
+                } else if (window.forge && typeof window.forge.init === 'function') {
+                    await window.forge.init();
+                }
+
+                pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/" });
+                await pyodide.loadPackage("numpy");
+
+                if (window.__FORGE_PY_FILES__) {
+                    const pyFiles = window.__FORGE_PY_FILES__;
+                    for (const [relPath, content] of Object.entries(pyFiles)) {
+                        const fullPath = '/lib/python3.11/site-packages/forge/' + relPath;
+                        const dir = fullPath.substring(0, fullPath.lastIndexOf('/'));
+                        try { pyodide.FS.mkdirTree(dir); } catch (e) {}
+                        pyodide.FS.writeFile(fullPath, content);
+                    }
+                }
                 
-                await micropip.install("../../../packages/forge-py/dist/forge-0.1.0-py3-none-any.whl");
-                
-                await pyodide.runPythonAsync(
+                await pyodide.runPythonAsync(`
 import sys
 class WebConsole:
     def write(self, msg): pass
@@ -117,7 +130,7 @@ sys.stderr = WebConsole()
 
 import forge as fg
 import numpy as np
-                );
+`);
                 
                 document.getElementById('loadingOverlay').classList.add('hidden');
             } catch (e) {
@@ -139,7 +152,7 @@ import numpy as np
             pyodide.globals.set("img_data", Array.from(arr));
             pyodide.globals.set("f_type", type);
             
-            await pyodide.runPythonAsync(
+            await pyodide.runPythonAsync(`
 import forge as fg
 import forge.nn as nn
 import numpy as np
@@ -168,7 +181,7 @@ else:
     out_pixels = conv(pixels)
 
 res_flat = out_pixels.reshape(90000).numpy()
-            );
+`);
             
             const res = pyodide.globals.get("res_flat");
             const outImg = ctxOut.createImageData(300,300);
