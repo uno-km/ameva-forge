@@ -220,11 +220,36 @@ class TestInplaceVersionLock(unittest.TestCase):
 
     def test_tensor_setitem_cpu(self):
         """Tests that __setitem__ mutates CPU tensor and increments version."""
-        x = tensor([10.0, 20.0, 30.0])
+        # 1. Single index
+        x = tensor([10.0, 20.0, 30.0, 40.0])
         self.assertEqual(x._version, 0)
         x[1] = 99.0
         self.assertEqual(x._version, 1)
-        np.testing.assert_allclose(x.numpy(), [10.0, 99.0, 30.0])
+        np.testing.assert_allclose(x.numpy(), [10.0, 99.0, 30.0, 40.0])
+
+        # 2. Slice assignment
+        x[1:3] = 55.0
+        self.assertEqual(x._version, 2)
+        np.testing.assert_allclose(x.numpy(), [10.0, 55.0, 55.0, 40.0])
+
+        # 3. Tensor assignment
+        x[1:3] = tensor([77.0, 88.0])
+        self.assertEqual(x._version, 3)
+        np.testing.assert_allclose(x.numpy(), [10.0, 77.0, 88.0, 40.0])
+
+        # 4. Multi-dimensional 2D indexing
+        m = tensor([[1.0, 2.0], [3.0, 4.0]])
+        m[0, 1] = 999.0
+        self.assertEqual(m._version, 1)
+        np.testing.assert_allclose(m.numpy(), [[1.0, 999.0], [3.0, 4.0]])
+
+        # 5. Autograd version lock detection on __setitem__
+        a = tensor([2.0, 3.0], requires_grad=True)
+        b = a * a
+        a[0] = 100.0  # In-place mutation!
+        with self.assertRaises(RuntimeError) as ctx:
+            b.backward(tensor([1.0, 1.0]))
+        self.assertIn("modified by an inplace operation", str(ctx.exception))
 
 
 if __name__ == '__main__':
