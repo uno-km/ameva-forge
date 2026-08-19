@@ -341,12 +341,15 @@ class CrossEntropyFunction(Function):
 
 def cross_entropy(predictions, targets):
     """
-    Cross-entropy loss. predictions: (N, C), targets: (N,) integer class indices.
-    
-    무엇을: 크로스 엔트로피 함수 래퍼.
-    왜: 사용자 편의성을 위해 제공.
-    어떻게: CrossEntropyFunction.apply 호출.
+    WHAT: 크로스 엔트로피 손실을 계산하며, 1D 정수 라벨 및 2D 확률 분포(Soft Target)를 모두 지원합니다.
+    WHY: 일반 분류뿐만 아니라 Label Smoothing, Knowledge Distillation(지식 증류) 등의 최신 LLM/Vision 학습을 지원하기 위함입니다.
+    HOW: targets의 차원이 1D이면 고속 sparse_cross_entropy로, predictions와 동일한 2D이면 Soft Target 공식(-sum(y * log_softmax(z)))으로 디스패치합니다.
     """
+    if len(targets.shape) == len(predictions.shape) and len(targets.shape) == 2:
+        from .ops import mul, sum_axis, mean_op, neg
+        log_p = log_softmax(predictions, axis=-1)
+        loss_unreduced = neg(sum_axis(mul(targets, log_p), axis=-1))
+        return mean_op(loss_unreduced)
     return CrossEntropyFunction.apply(predictions, targets)
 
 def mse_loss(predictions, targets):
@@ -366,12 +369,21 @@ def _move_tensor_state(dst, src) -> None:
     WHAT: src 텐서의 상태와 지연 연산 그래프를 dst 텐서로 안전하게 이동(Move)합니다.
     WHY: BatchNorm의 running_mean/running_var 같은 in-place 통계량 갱신 시,
          src의 식별자/그래프/데이터 소유권을 dst로 이전하여 dst 객체의 참조 동일성을 유지하기 위함입니다.
-    HOW: dst 필드 덮어쓰기 -> src 필드 None 초기화.
+    HOW: 기존 dst GPU 버퍼 안전 해제 -> src의 _HandleCell 및 AST 소유권 인계 -> src 필드 None 초기화.
     """
+    if dst.device == "gpu" and getattr(dst, "_handle_cell", None) is not None:
+        try:
+            dst.dispose()
+        except Exception:
+            pass
+
     dst._data = src._data
-    dst._handle = src._handle
-    if hasattr(dst, "_handle_cell"):
-        dst._handle_cell.handle = src._handle
+    dst._handle_cell = getattr(src, "_handle_cell", None)
+    if dst.device == "gpu" and dst._handle_cell is not None:
+        dst._handle_cell.inc_ref()
+        import weakref
+        from .tensor import Tensor
+        weakref.finalize(dst, Tensor._finalize_buffer, dst._handle_cell)
 
     dst._lazy_op = getattr(src, "_lazy_op", None)
     dst._op = getattr(src, "_op", None)
@@ -383,18 +395,12 @@ def _move_tensor_state(dst, src) -> None:
     dst.device = src.device
     dst.requires_grad = False
     dst.grad = None
+    dst._disposed = False
+    dst._finalizer_registered = (dst.device == "gpu")
     dst._version += 1
 
-    if dst.device == "gpu" and not getattr(dst, "_finalizer_registered", False):
-        import weakref
-        from .tensor import Tensor
-        weakref.finalize(dst, Tensor._finalize_buffer, dst._handle_cell)
-        dst._finalizer_registered = True
-
-    src._handle = None
-    if hasattr(src, "_handle_cell"):
-        src._handle_cell.handle = None
     src._data = None
+    src._handle_cell = None
 
 def batch_norm2d(x, running_mean, running_var, weight, bias, training=False, momentum=0.1, eps=1e-5):
     """
@@ -436,7 +442,8 @@ def batch_norm2d(x, running_mean, running_var, weight, bias, training=False, mom
                 data=running_mean._data,
                 op=running_mean._lazy_op,
                 parents=running_mean._parents,
-                op_params=running_mean._lazy_params
+                op_params=running_mean._lazy_params,
+                handle_cell=getattr(running_mean, "_handle_cell", None),
             )
             old_rv = Tensor(
                 shape=running_var.shape,
@@ -446,7 +453,8 @@ def batch_norm2d(x, running_mean, running_var, weight, bias, training=False, mom
                 data=running_var._data,
                 op=running_var._lazy_op,
                 parents=running_var._parents,
-                op_params=running_var._lazy_params
+                op_params=running_var._lazy_params,
+                handle_cell=getattr(running_var, "_handle_cell", None),
             )
             new_rm = add(mul(old_rm, full(running_mean.shape, 1 - momentum, device=x.device)), mul(m_c, full(m_c.shape, momentum, device=x.device)))
             unbiased_v = mul(v_c, full(v_c.shape, n / (n - 1) if n > 1 else 1.0, device=x.device))
@@ -504,28 +512,35 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     무엇을: 스케일드 닷 프로덕트 어텐션(Scaled Dot-Product Attention)을 계산한다.
     왜: 트랜스포머 구조에서 토큰 간의 연관성(Attention weight)을 구하고 정보를 집계하기 위함이다.
     어떻게: Q와 K의 전치를 내적하고 스케일링한 후, Softmax를 통과시켜 V와 가중합을 계산한다.
+            추론(requires_grad=False) 시 1-Pass WebGPU FlashAttention을 디스패치하고,
+            학습(requires_grad=True) 시 Autograd DAG를 정상 구성하여 역전파 미분 소실을 방지한다.
     """
     from .ops import bmm, transpose, div, full, reshape, dropout, permute, matmul, add, mul
+    from .autograd import _grad_mode
     import math
     
     orig_shape = query.shape
     d_k = orig_shape[-1]
     effective_scale = scale if scale is not None else (1.0 / math.sqrt(d_k))
+    needs_grad = _grad_mode and (query.requires_grad or key.requires_grad or value.requires_grad)
     
-    if len(orig_shape) == 4 and query.device == 'gpu' and key.device == 'gpu' and value.device == 'gpu' and dropout_p == 0.0 and attn_mask is None:
+    # 1. 추론 전용 (Inference / no_grad): 초고속 1-Pass Fused WebGPU FlashAttention 커널 디스패치
+    if not needs_grad and len(orig_shape) == 4 and query.device == 'gpu' and key.device == 'gpu' and value.device == 'gpu' and dropout_p == 0.0 and attn_mask is None:
         from .tensor import Tensor
         B, H, N_q, d = query.shape
         H_kv = key.shape[1]
+        N_kv = key.shape[2]
         return Tensor(
             shape=query.shape,
             dtype=query.dtype,
             device='gpu',
             op='flash_attention',
             parents=(query, key, value),
-            op_params=[float(H_kv), float(effective_scale), 1.0 if is_causal else 0.0],
-            requires_grad=query.requires_grad or key.requires_grad or value.requires_grad
+            op_params=[float(H_kv), float(effective_scale), 1.0 if is_causal else 0.0, float(N_kv)],
+            requires_grad=False
         )
             
+    # 2. 학습 모드 및 범용 Autograd 체인 (PyTorch 표준 역전파 지원)
     if len(orig_shape) == 4:
         B, H, L, D = orig_shape
         query = reshape(query, (B * H, L, D))
@@ -567,23 +582,26 @@ def rms_norm(x, weight=None, eps=1e-5):
     왜: LayerNorm 대비 평균 계산을 생략하여 추론 및 학습 처리 속도를 20~30% 가속한다.
     어떻게: x / sqrt(mean(x^2) + eps) * weight
     """
-    if x.device == 'gpu':
+    from .autograd import _grad_mode
+    needs_grad = _grad_mode and (x.requires_grad or (weight is not None and weight.requires_grad))
+
+    if not needs_grad and x.device == 'gpu':
         from .tensor import Tensor
         parents = (x,) if weight is None else (x, weight)
         return Tensor(shape=x.shape, dtype=x.dtype, device='gpu',
                       op='rmsnorm', parents=parents, op_params=[float(eps)],
-                      requires_grad=x.requires_grad or (weight.requires_grad if weight is not None else False))
+                      requires_grad=False)
     
-    # CPU Reference Math
-    from .ops import tensor
-    data = x.numpy()
-    dim = data.shape[-1]
-    mean_sq = np.mean(data * data, axis=-1, keepdims=True)
-    inv_rms = 1.0 / np.sqrt(mean_sq + eps)
-    out_np = data * inv_rms
+    from .ops import sub, mul, div, add, mean_axis, full, sqrt, unsqueeze
+    sq = mul(x, x)
+    m = mean_axis(sq, -1)
+    m_view = unsqueeze(m, -1)
+    eps_t = full(m_view.shape, eps, device=x.device)
+    denom = sqrt(add(m_view, eps_t))
+    out = div(x, denom)
     if weight is not None:
-        out_np = out_np * weight.numpy()
-    return tensor(out_np, device=x.device, dtype=x.dtype, requires_grad=x.requires_grad)
+        out = mul(out, weight)
+    return out
 
 def swiglu(gate, up):
     """
@@ -591,30 +609,32 @@ def swiglu(gate, up):
     왜: LLaMA 및 Gemma 등의 최신 FFN 아키텍처 비선형성을 효율적으로 제공하기 위함이다.
     어떻게: (gate * sigmoid(gate)) * up
     """
-    if gate.device == 'gpu' and up.device == 'gpu':
+    from .autograd import _grad_mode
+    needs_grad = _grad_mode and (gate.requires_grad or up.requires_grad)
+
+    if not needs_grad and gate.device == 'gpu' and up.device == 'gpu':
         from .tensor import Tensor
         return Tensor(shape=gate.shape, dtype=gate.dtype, device='gpu',
                       op='swiglu', parents=(gate, up),
-                      requires_grad=gate.requires_grad or up.requires_grad)
+                      requires_grad=False)
             
-    # CPU Reference Math
-    from .ops import tensor
-    g_data = gate.numpy()
-    u_data = up.numpy()
-    swish_g = g_data / (1.0 + np.exp(-g_data))
-    out_np = swish_g * u_data
-    return tensor(out_np, device=gate.device, dtype=gate.dtype, requires_grad=gate.requires_grad or up.requires_grad)
+    from .ops import mul, sigmoid_op
+    swish_g = mul(gate, sigmoid_op(gate))
+    return mul(swish_g, up)
 
 def rope(x, base_freq=10000.0, offset_pos=0):
     """
     무엇을: Rotary Position Embedding (RoPE) 2D 복소수 평면 회전을 수행한다.
     왜: 토큰 위치 정보를 Query와 Key 벡터에 인플레이스로 주입하기 위함이다.
     """
-    if x.device == 'gpu':
+    from .autograd import _grad_mode
+    needs_grad = _grad_mode and x.requires_grad
+
+    if not needs_grad and x.device == 'gpu':
         from .tensor import Tensor
         return Tensor(shape=x.shape, dtype=x.dtype, device='gpu',
                       op='rope', parents=(x,), op_params=[float(base_freq), float(offset_pos)],
-                      requires_grad=x.requires_grad)
+                      requires_grad=False)
     
     # CPU Reference Math
     from .ops import tensor

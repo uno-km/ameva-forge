@@ -2543,3 +2543,69 @@ class BmmFunction(Function):
 # HOW: BmmFunction.apply를 호출합니다.
 def bmm(a: Tensor, b: Tensor) -> Tensor:
     return BmmFunction.apply(a, b)
+
+
+# WHAT: 텐서 복제(Clone) 연산 클래스입니다.
+# WHY: 원본 텐서와 분리된 메모리를 가지면서도 Autograd 그래프를 정상 전파하기 위함입니다.
+# HOW: CPU는 copy(), GPU는 axpy(1*x + 0)를 사용하여 새로운 버퍼 노드를 생성합니다.
+class CloneFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, x: Tensor) -> Tensor:
+        if x.device == 'cpu':
+            data = _require_cpu_data(x, 'x').copy()
+            return Tensor(shape=x.shape, dtype=x.dtype, device='cpu', data=data)
+        else:
+            return Tensor(shape=x.shape, dtype=x.dtype, device='gpu', op='axpy', parents=(x,), op_params=[1.0, 0.0])
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor]:
+        return (grad_output,)
+
+def clone(x: Tensor) -> Tensor:
+    return CloneFunction.apply(x)
+
+
+# WHAT: 거듭제곱(Power) 연산 클래스입니다.
+# WHY: x^p 연산을 수행하며, p < 1 및 x = 0에서의 수치 안정성(Zero-Safe Gradient Clamping)을 보장하기 위함입니다.
+# HOW: Forward 시 x^p를 계산하고, Backward 시 d/dx = p * x^(p-1)을 계산하되 x==0인 특이점에서는 0.0을 반환합니다.
+class PowFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, x: Tensor, exponent: float) -> Tensor:
+        ctx.save_for_backward(x)
+        ctx.exponent = float(exponent)
+        if x.device == 'cpu':
+            data = _require_cpu_data(x, 'x') ** exponent
+            return Tensor(shape=x.shape, dtype=x.dtype, device='cpu', data=data)
+        else:
+            if exponent == 2.0:
+                return mul(x, x)
+            return Tensor(shape=x.shape, dtype=x.dtype, device='gpu', op='pow', parents=(x,), op_params=[float(exponent)])
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, None]:
+        x, = ctx.saved_tensors
+        p = ctx.exponent
+        if p == 0.0:
+            return (zeros(x.shape, device=x.device, dtype=x.dtype), None)
+        elif p == 1.0:
+            return (grad_output, None)
+        elif p == 2.0:
+            return (mul(grad_output, mul(x, full(x.shape, 2.0, device=x.device))), None)
+        else:
+            # Safe pow backward with zero masking to prevent NaN explosion
+            if x.device == 'cpu':
+                x_data = _require_cpu_data(x, 'x')
+                grad_data = _require_cpu_data(grad_output, 'grad_output')
+                safe_mask = (x_data != 0.0)
+                safe_x = np.where(safe_mask, np.abs(x_data), 1.0)
+                dx = np.where(safe_mask, p * np.power(safe_x, p - 1.0) * np.sign(x_data), 0.0)
+                return (Tensor(shape=x.shape, dtype=x.dtype, device='cpu', data=grad_data * dx), None)
+            else:
+                base_grad = mul(full(x.shape, p, device=x.device), pow_op(x, p - 1.0))
+                return (mul(grad_output, base_grad), None)
+
+def pow_op(x: Tensor, exponent: float) -> Tensor:
+    if isinstance(exponent, (int, float)):
+        return PowFunction.apply(x, float(exponent))
+    raise TypeError(f"Exponent must be a float or int, got {type(exponent)}")
+

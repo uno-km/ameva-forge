@@ -285,9 +285,11 @@ class Tensor:
         # --- 내부 상태 ---
         # WHAT: 실제 텐서 핸들(GPU 등)을 간접 참조하기 위한 래퍼 객체입니다.
         # WHY: PyTorch c10::StorageImpl 패턴: handle을 _HandleCell로 감싸고 ref_count를 관리하여 안전한 View/Detach를 지원합니다.
-        # HOW: 전달받은 handle_cell이 있으면 재사용하고, 없으면 새로 생성합니다.
+        # HOW: 전달받은 handle_cell이 있으면 재사용하고(inc_ref), 없으면 새로 생성합니다.
         if handle_cell is not None:
             self._handle_cell = handle_cell
+            if self.device == "gpu":
+                self._handle_cell.inc_ref()
         else:
             elem_count = 1
             for d in shape:
@@ -531,9 +533,6 @@ class Tensor:
         HOW: self._handle_cell의 참조 카운트를 1 올리고 handle_cell로 전달하여 동일 버퍼를 안전하게 바인딩합니다.
         """
         self._check_disposed()
-        if self.device == "gpu" and self._handle_cell is not None:
-            self._handle_cell.inc_ref()
-
         out = Tensor(
             shape=self.shape,
             dtype=self.dtype,
@@ -602,19 +601,20 @@ class Tensor:
 
         moved = self.to(device)
 
-        # 기존 GPU 핸들 정리
-        if self.device == "gpu" and self._handle is not None and self._handle != moved._handle:
+        # 기존 장치 리소스 정리
+        if self.device == "gpu" and getattr(self, "_handle_cell", None) is not None:
             try:
                 self.dispose()
-                self._disposed = False
             except Exception:
                 pass
 
         # moved의 내부 상태를 self로 in-place 이전
         self._data = moved._data
-        self._handle = moved._handle
-        if hasattr(self, "_handle_cell"):
-            self._handle_cell.handle = moved._handle
+        self._handle_cell = getattr(moved, "_handle_cell", None)
+        if device == "gpu" and self._handle_cell is not None:
+            self._handle_cell.inc_ref()
+            import weakref
+            weakref.finalize(self, Tensor._finalize_buffer, self._handle_cell)
 
         self._lazy_op = getattr(moved, "_lazy_op", None)
         self._op = getattr(moved, "_op", None)
@@ -623,18 +623,12 @@ class Tensor:
         self.shape = moved.shape
         self.dtype = moved.dtype
         self.device = moved.device
+        self._disposed = False
+        self._finalizer_registered = (device == "gpu")
         self._version += 1
 
-        if self.device == "gpu" and not getattr(self, "_finalizer_registered", False):
-            import weakref
-            weakref.finalize(self, Tensor._finalize_buffer, self._handle_cell)
-            self._finalizer_registered = True
-
-        # moved가 동일 핸들을 중복 해제하지 않도록 소유권 박탈
-        moved._handle = None
-        if hasattr(moved, "_handle_cell"):
-            moved._handle_cell.handle = None
         moved._data = None
+        moved._handle_cell = None
 
         return self
 
@@ -650,7 +644,9 @@ class Tensor:
             if self._handle_cell.dec_ref():
                 handle = self._handle_cell.handle
                 if handle is not None:
+                    global _gc_queued_bytes
                     _gc_queue.add(handle)
+                    _gc_queued_bytes += self._handle_cell.byte_length
                     self._handle_cell.handle = None
                     flush_gc()
 
@@ -873,6 +869,213 @@ class Tensor:
         self._check_disposed()
         from .ops import neg
         return neg(self)
+
+    def __pow__(self, exponent):
+        """
+        WHAT: 거듭제곱 연산(`x ** exponent`)을 수행합니다.
+        WHY: 지수 계산 및 L2 정규화, 제곱근 등을 편리하게 계산하기 위함입니다.
+        HOW: ops.pow_op 함수를 호출하여 Zero-Safe 미분이 지원되는 텐서를 반환합니다.
+        """
+        self._check_disposed()
+        from .ops import pow_op
+        return pow_op(self, exponent)
+
+    def clone(self) -> 'Tensor':
+        """
+        WHAT: 텐서의 복제본을 생성하여 반환합니다.
+        WHY: 원본 텐서와 분리된 메모리를 가지면서도 역전파 그래프는 유지하기 위함입니다.
+        HOW: ops.clone 함수를 호출하여 복제 텐서를 생성합니다.
+        """
+        self._check_disposed()
+        from .ops import clone
+        return clone(self)
+
+    # =========================================================================
+    # PyTorch 호환 In-place 연산자 및 Autograd 버전 관리 (_version increment)
+    # =========================================================================
+    def __iadd__(self, other):
+        """In-place addition (self += other) with version increment."""
+        return self.add_(other)
+
+    def add_(self, other):
+        """
+        WHAT: 현재 텐서에 other를 in-place 덧셈하고 버전을 증가시킵니다.
+        WHY: 메모리 재할당 없이 텐서를 수정하며, 역전파 시 saved_tensors 변조를 감지하기 위함입니다.
+        """
+        self._check_disposed()
+        from .ops import add, tensor
+        if isinstance(other, (int, float)):
+            other = tensor(float(other), device=self.device, dtype=self.dtype)
+        if self.device == 'cpu':
+            res = add(self, other)
+            if res._data is not None:
+                self._data = res._data
+        else:
+            old_self = Tensor(
+                shape=self.shape,
+                dtype=self.dtype,
+                device=self.device,
+                handle=self._handle,
+                data=self._data,
+                op=self._lazy_op,
+                parents=self._parents,
+                op_params=self._lazy_params,
+                handle_cell=self._handle_cell,
+            )
+            res = add(old_self, other)
+            self._lazy_op = res._lazy_op
+            self._parents = res._parents
+            self._lazy_params = res._lazy_params
+            self._handle_cell = _HandleCell(None, old_self._handle_cell.byte_length)
+            import weakref
+            weakref.finalize(self, Tensor._finalize_buffer, self._handle_cell)
+        self._version += 1
+        return self
+
+    def __isub__(self, other):
+        """In-place subtraction (self -= other) with version increment."""
+        return self.sub_(other)
+
+    def sub_(self, other):
+        """
+        WHAT: 현재 텐서에 other를 in-place 뺄셈하고 버전을 증가시킵니다.
+        """
+        self._check_disposed()
+        from .ops import sub, tensor
+        if isinstance(other, (int, float)):
+            other = tensor(float(other), device=self.device, dtype=self.dtype)
+        if self.device == 'cpu':
+            res = sub(self, other)
+            if res._data is not None:
+                self._data = res._data
+        else:
+            old_self = Tensor(
+                shape=self.shape,
+                dtype=self.dtype,
+                device=self.device,
+                handle=self._handle,
+                data=self._data,
+                op=self._lazy_op,
+                parents=self._parents,
+                op_params=self._lazy_params,
+                handle_cell=self._handle_cell,
+            )
+            res = sub(old_self, other)
+            self._lazy_op = res._lazy_op
+            self._parents = res._parents
+            self._lazy_params = res._lazy_params
+            self._handle_cell = _HandleCell(None, old_self._handle_cell.byte_length)
+            import weakref
+            weakref.finalize(self, Tensor._finalize_buffer, self._handle_cell)
+        self._version += 1
+        return self
+
+    def __imul__(self, other):
+        """In-place multiplication (self *= other) with version increment."""
+        return self.mul_(other)
+
+    def mul_(self, other):
+        """
+        WHAT: 현재 텐서에 other를 in-place 곱셈하고 버전을 증가시킵니다.
+        """
+        self._check_disposed()
+        from .ops import mul, tensor
+        if isinstance(other, (int, float)):
+            other = tensor(float(other), device=self.device, dtype=self.dtype)
+        if self.device == 'cpu':
+            res = mul(self, other)
+            if res._data is not None:
+                self._data = res._data
+        else:
+            old_self = Tensor(
+                shape=self.shape,
+                dtype=self.dtype,
+                device=self.device,
+                handle=self._handle,
+                data=self._data,
+                op=self._lazy_op,
+                parents=self._parents,
+                op_params=self._lazy_params,
+                handle_cell=self._handle_cell,
+            )
+            res = mul(old_self, other)
+            self._lazy_op = res._lazy_op
+            self._parents = res._parents
+            self._lazy_params = res._lazy_params
+            self._handle_cell = _HandleCell(None, old_self._handle_cell.byte_length)
+            import weakref
+            weakref.finalize(self, Tensor._finalize_buffer, self._handle_cell)
+        self._version += 1
+        return self
+
+    def __itruediv__(self, other):
+        """In-place division (self /= other) with version increment."""
+        return self.div_(other)
+
+    def div_(self, other):
+        """
+        WHAT: 현재 텐서에 other를 in-place 나눗셈하고 버전을 증가시킵니다.
+        """
+        self._check_disposed()
+        from .ops import div, tensor
+        if isinstance(other, (int, float)):
+            other = tensor(float(other), device=self.device, dtype=self.dtype)
+        if self.device == 'cpu':
+            res = div(self, other)
+            if res._data is not None:
+                self._data = res._data
+        else:
+            old_self = Tensor(
+                shape=self.shape,
+                dtype=self.dtype,
+                device=self.device,
+                handle=self._handle,
+                data=self._data,
+                op=self._lazy_op,
+                parents=self._parents,
+                op_params=self._lazy_params,
+                handle_cell=self._handle_cell,
+            )
+            res = div(old_self, other)
+            self._lazy_op = res._lazy_op
+            self._parents = res._parents
+            self._lazy_params = res._lazy_params
+            self._handle_cell = _HandleCell(None, old_self._handle_cell.byte_length)
+            import weakref
+            weakref.finalize(self, Tensor._finalize_buffer, self._handle_cell)
+        self._version += 1
+        return self
+
+    def fill_(self, value: float):
+        """
+        WHAT: 현재 텐서를 지정된 상수 값으로 in-place 채우고 버전을 증가시킵니다.
+        WHY: 기존 버퍼를 안전하게 해제/치환하고 새 상수 연산 노드를 연결하기 위함입니다.
+        """
+        self._check_disposed()
+        if self.device == 'cpu':
+            if self._data is not None:
+                self._data.fill(float(value))
+        else:
+            if self._handle_cell is not None and self._handle_cell.handle is not None:
+                try:
+                    self.dispose()
+                except Exception:
+                    pass
+            from .ops import full
+            res = full(self.shape, float(value), dtype=self.dtype, device='gpu')
+            self._lazy_op = res._lazy_op
+            self._parents = res._parents
+            self._lazy_params = res._lazy_params
+            self._handle_cell = _HandleCell(None, res._handle_cell.byte_length)
+            self._disposed = False
+            import weakref
+            weakref.finalize(self, Tensor._finalize_buffer, self._handle_cell)
+        self._version += 1
+        return self
+
+    def zero_(self):
+        """In-place zero out the tensor."""
+        return self.fill_(0.0)
 
 
 

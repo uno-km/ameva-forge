@@ -404,8 +404,8 @@ function validateInstruction(inst: unknown, idx: number): GraphInstruction {
     'max_axis': { minIn: 1, exactIn: true, minParams: 2, exactParams: false },
     'max_axis_backward': { minIn: 2, exactIn: true, minParams: 2, exactParams: false },
     'dropout': { minIn: 1, exactIn: true, minParams: 2, exactParams: true },
-    'maxpool2d': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
-    'avgpool2d': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
+    'maxpool2d': { minIn: 1, exactIn: true, minParams: 10, exactParams: false },
+    'avgpool2d': { minIn: 1, exactIn: true, minParams: 10, exactParams: false },
     'im2col': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
     'col2im': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
     'transpose': { minIn: 1, exactIn: true, minParams: 2, exactParams: false },
@@ -1218,7 +1218,7 @@ async function _executeGraphCore(
         }
         device.queue.writeBuffer(paramsBuffer, 0, p);
       } else if (inst.op === 'flash_attention') {
-        const [B, H, N, d] = inst.shape;
+        const [B, H, N_q, d] = inst.shape;
         if (d > 256) {
           throw new AMEVAForgeShapeError(`HeadDim ${d} exceeds max supported dimension 256 in FlashAttention`);
         }
@@ -1226,11 +1226,13 @@ async function _executeGraphCore(
         const H_kv = inst.params?.[0] ?? H;
         const scale = inst.params?.[1] ?? (1.0 / Math.sqrt(d));
         const isCausal = (inst.params?.[2] ?? 0) === 1 ? 1 : 0;
+        const kShape = (inst.in && inst.in[1] !== undefined && idToShape[inst.in[1]]) ? idToShape[inst.in[1]] : null;
+        const N_kv = inst.params?.[3] ?? (kShape ? kShape[kShape.length - 2] : N_q);
         
-        const strideQ = N * d;
-        const strideK = N * d;
-        const strideV = N * d;
-        const strideO = N * d;
+        const strideQ = N_q * d;
+        const strideK = N_kv * d;
+        const strideV = N_kv * d;
+        const strideO = N_q * d;
 
         const buf = new ArrayBuffer(48);
         const u32view = new Uint32Array(buf);
@@ -1238,8 +1240,8 @@ async function _executeGraphCore(
         u32view[0] = B;
         u32view[1] = H;
         u32view[2] = H_kv;
-        u32view[3] = N; // N_q
-        u32view[4] = N; // N_kv
+        u32view[3] = N_q; // N_q
+        u32view[4] = N_kv; // N_kv
         u32view[5] = d;
         f32view[6] = scale;
         u32view[7] = isCausal;
@@ -1248,7 +1250,7 @@ async function _executeGraphCore(
         u32view[10] = strideV;
         u32view[11] = strideO;
 
-        dispatchX = N;
+        dispatchX = N_q;
         dispatchY = H;
         dispatchZ = B;
         device.queue.writeBuffer(paramsBuffer, 0, u32view);
@@ -1438,7 +1440,8 @@ async function _executeGraphCore(
       } else if (inst.op === 'sparse_cross_entropy') {
         wgslCode = SPARSE_CROSS_ENTROPY_WGSL;
         const numSamples = inst.shape[0];
-        const numClasses = inst.params?.[0] ?? 1000;
+        const logitsShape = (inst.in && inst.in[0] !== undefined && idToShape[inst.in[0]]) ? idToShape[inst.in[0]] : null;
+        const numClasses = inst.params?.[0] ?? (logitsShape && logitsShape.length >= 2 ? logitsShape[1] : (inst.shape.length >= 2 ? inst.shape[1] : 1));
         const ignoreIndex = inst.params?.[1] ?? -100;
         const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numSamples, 1);
         dispatchX = dx;

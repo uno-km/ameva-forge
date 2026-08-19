@@ -85,8 +85,8 @@ class Context:
             current_version = getattr(tensor, "_version", 0)
             if current_version != saved_version:
                 raise RuntimeError(
-                    "Saved tensor was modified in-place after forward execution. "
-                    "Re-run forward before backward."
+                    f"one of the variables needed for gradient computation has been modified by an inplace operation: "
+                    f"[{type(tensor).__name__} with version {current_version} expected version {saved_version}]"
                 )
 
 

@@ -56,7 +56,7 @@ describe('SCRUM-266 ~ SCRUM-270: Native WebGPU Multi-Axis Fused Reduction Archit
     expect(REDUCE_AXES_WGSL).toContain('struct Params');
     expect(REDUCE_AXES_WGSL).toContain('num_out_elements: u32');
     expect(REDUCE_AXES_WGSL).toContain('reduction_size: u32');
-    expect(REDUCE_AXES_WGSL).toContain('axes_mask: array<u32, 8>');
+    expect(REDUCE_AXES_WGSL).toContain('axes_mask0: u32');
     expect(REDUCE_AXES_WGSL).toContain('for (var r = 0u; r < params.reduction_size; r = r + 1u)');
     expect(REDUCE_AXES_WGSL).toContain('@compute @workgroup_size(64)');
   });

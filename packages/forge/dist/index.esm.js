@@ -6451,6 +6451,7 @@ registerTransientPool(() => _globalUniformPool.clear(), (device) => _globalUnifo
 /**
  * Native WebGPU Slice Compute Kernel
  * Computes arbitrary multi-dimensional slice views directly on GPU VRAM.
+ * Fully compliant with W3C WebGPU 16-byte uniform alignment rules using scalar fields.
  */
 const SLICE_WGSL = `
 struct Params {
@@ -6458,15 +6459,75 @@ struct Params {
   rank: u32,
   workgroups_x: u32,
   pad: u32,
-  starts: array<u32, 8>,
-  steps: array<u32, 8>,
-  in_strides: array<u32, 8>,
-  out_strides: array<u32, 8>,
+  start0: u32, start1: u32, start2: u32, start3: u32,
+  start4: u32, start5: u32, start6: u32, start7: u32,
+  step0: u32, step1: u32, step2: u32, step3: u32,
+  step4: u32, step5: u32, step6: u32, step7: u32,
+  in_stride0: u32, in_stride1: u32, in_stride2: u32, in_stride3: u32,
+  in_stride4: u32, in_stride5: u32, in_stride6: u32, in_stride7: u32,
+  out_stride0: u32, out_stride1: u32, out_stride2: u32, out_stride3: u32,
+  out_stride4: u32, out_stride5: u32, out_stride6: u32, out_stride7: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> input: array<f32>;
 @group(0) @binding(2) var<storage, read_write> output: array<f32>;
+
+fn get_start(i: u32) -> u32 {
+  switch(i) {
+    case 0u: { return params.start0; }
+    case 1u: { return params.start1; }
+    case 2u: { return params.start2; }
+    case 3u: { return params.start3; }
+    case 4u: { return params.start4; }
+    case 5u: { return params.start5; }
+    case 6u: { return params.start6; }
+    case 7u: { return params.start7; }
+    default: { return 0u; }
+  }
+}
+
+fn get_step(i: u32) -> u32 {
+  switch(i) {
+    case 0u: { return params.step0; }
+    case 1u: { return params.step1; }
+    case 2u: { return params.step2; }
+    case 3u: { return params.step3; }
+    case 4u: { return params.step4; }
+    case 5u: { return params.step5; }
+    case 6u: { return params.step6; }
+    case 7u: { return params.step7; }
+    default: { return 1u; }
+  }
+}
+
+fn get_in_stride(i: u32) -> u32 {
+  switch(i) {
+    case 0u: { return params.in_stride0; }
+    case 1u: { return params.in_stride1; }
+    case 2u: { return params.in_stride2; }
+    case 3u: { return params.in_stride3; }
+    case 4u: { return params.in_stride4; }
+    case 5u: { return params.in_stride5; }
+    case 6u: { return params.in_stride6; }
+    case 7u: { return params.in_stride7; }
+    default: { return 0u; }
+  }
+}
+
+fn get_out_stride(i: u32) -> u32 {
+  switch(i) {
+    case 0u: { return params.out_stride0; }
+    case 1u: { return params.out_stride1; }
+    case 2u: { return params.out_stride2; }
+    case 3u: { return params.out_stride3; }
+    case 4u: { return params.out_stride4; }
+    case 5u: { return params.out_stride5; }
+    case 6u: { return params.out_stride6; }
+    case 7u: { return params.out_stride7; }
+    default: { return 1u; }
+  }
+}
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -6476,12 +6537,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   var temp = idx;
   var in_idx = 0u;
   for (var i = 0u; i < params.rank; i = i + 1u) {
-    let out_stride = max(params.out_strides[i], 1u);
+    let out_stride = max(get_out_stride(i), 1u);
     let coord = temp / out_stride;
     temp = temp % out_stride;
 
-    let in_coord = params.starts[i] + coord * params.steps[i];
-    in_idx = in_idx + in_coord * params.in_strides[i];
+    let in_coord = get_start(i) + coord * get_step(i);
+    in_idx = in_idx + in_coord * get_in_stride(i);
   }
   output[idx] = input[in_idx];
 }
@@ -6490,6 +6551,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 /**
  * Native WebGPU Slice Backward Compute Kernel
  * Accumulates gradients from sliced output back into the full input gradient tensor.
+ * Fully compliant with W3C WebGPU 16-byte uniform alignment rules using scalar fields.
  */
 const SLICE_BACKWARD_WGSL = `
 struct Params {
@@ -6497,15 +6559,75 @@ struct Params {
   rank: u32,
   workgroups_x: u32,
   pad: u32,
-  starts: array<u32, 8>,
-  steps: array<u32, 8>,
-  in_strides: array<u32, 8>,
-  out_strides: array<u32, 8>,
+  start0: u32, start1: u32, start2: u32, start3: u32,
+  start4: u32, start5: u32, start6: u32, start7: u32,
+  step0: u32, step1: u32, step2: u32, step3: u32,
+  step4: u32, step5: u32, step6: u32, step7: u32,
+  in_stride0: u32, in_stride1: u32, in_stride2: u32, in_stride3: u32,
+  in_stride4: u32, in_stride5: u32, in_stride6: u32, in_stride7: u32,
+  out_stride0: u32, out_stride1: u32, out_stride2: u32, out_stride3: u32,
+  out_stride4: u32, out_stride5: u32, out_stride6: u32, out_stride7: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> grad_output: array<f32>;
 @group(0) @binding(2) var<storage, read_write> grad_x: array<f32>;
+
+fn get_start(i: u32) -> u32 {
+  switch(i) {
+    case 0u: { return params.start0; }
+    case 1u: { return params.start1; }
+    case 2u: { return params.start2; }
+    case 3u: { return params.start3; }
+    case 4u: { return params.start4; }
+    case 5u: { return params.start5; }
+    case 6u: { return params.start6; }
+    case 7u: { return params.start7; }
+    default: { return 0u; }
+  }
+}
+
+fn get_step(i: u32) -> u32 {
+  switch(i) {
+    case 0u: { return params.step0; }
+    case 1u: { return params.step1; }
+    case 2u: { return params.step2; }
+    case 3u: { return params.step3; }
+    case 4u: { return params.step4; }
+    case 5u: { return params.step5; }
+    case 6u: { return params.step6; }
+    case 7u: { return params.step7; }
+    default: { return 1u; }
+  }
+}
+
+fn get_in_stride(i: u32) -> u32 {
+  switch(i) {
+    case 0u: { return params.in_stride0; }
+    case 1u: { return params.in_stride1; }
+    case 2u: { return params.in_stride2; }
+    case 3u: { return params.in_stride3; }
+    case 4u: { return params.in_stride4; }
+    case 5u: { return params.in_stride5; }
+    case 6u: { return params.in_stride6; }
+    case 7u: { return params.in_stride7; }
+    default: { return 0u; }
+  }
+}
+
+fn get_out_stride(i: u32) -> u32 {
+  switch(i) {
+    case 0u: { return params.out_stride0; }
+    case 1u: { return params.out_stride1; }
+    case 2u: { return params.out_stride2; }
+    case 3u: { return params.out_stride3; }
+    case 4u: { return params.out_stride4; }
+    case 5u: { return params.out_stride5; }
+    case 6u: { return params.out_stride6; }
+    case 7u: { return params.out_stride7; }
+    default: { return 1u; }
+  }
+}
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -6515,12 +6637,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   var temp = idx;
   var in_idx = 0u;
   for (var i = 0u; i < params.rank; i = i + 1u) {
-    let out_stride = max(params.out_strides[i], 1u);
+    let out_stride = max(get_out_stride(i), 1u);
     let coord = temp / out_stride;
     temp = temp % out_stride;
 
-    let in_coord = params.starts[i] + coord * params.steps[i];
-    in_idx = in_idx + in_coord * params.in_strides[i];
+    let in_coord = get_start(i) + coord * get_step(i);
+    in_idx = in_idx + in_coord * get_in_stride(i);
   }
   grad_x[in_idx] = grad_output[idx];
 }
@@ -6529,6 +6651,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 /**
  * Native WebGPU Multi-Axis Fused Reduction Kernel
  * Reduces arbitrary multiple dimensions simultaneously in a single 1-Pass GPU dispatch.
+ * Fully compliant with W3C WebGPU 16-byte uniform alignment rules using scalar fields.
  */
 const REDUCE_AXES_WGSL = `
 struct Params {
@@ -6536,15 +6659,75 @@ struct Params {
   reduction_size: u32,
   in_rank: u32,
   workgroups_x: u32,
-  in_shape: array<u32, 8>,
-  in_strides: array<u32, 8>,
-  out_strides: array<u32, 8>,
-  axes_mask: array<u32, 8>,
+  in_shape0: u32, in_shape1: u32, in_shape2: u32, in_shape3: u32,
+  in_shape4: u32, in_shape5: u32, in_shape6: u32, in_shape7: u32,
+  in_stride0: u32, in_stride1: u32, in_stride2: u32, in_stride3: u32,
+  in_stride4: u32, in_stride5: u32, in_stride6: u32, in_stride7: u32,
+  out_stride0: u32, out_stride1: u32, out_stride2: u32, out_stride3: u32,
+  out_stride4: u32, out_stride5: u32, out_stride6: u32, out_stride7: u32,
+  axes_mask0: u32, axes_mask1: u32, axes_mask2: u32, axes_mask3: u32,
+  axes_mask4: u32, axes_mask5: u32, axes_mask6: u32, axes_mask7: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> input: array<f32>;
 @group(0) @binding(2) var<storage, read_write> output: array<f32>;
+
+fn get_in_shape(i: u32) -> u32 {
+  switch(i) {
+    case 0u: { return params.in_shape0; }
+    case 1u: { return params.in_shape1; }
+    case 2u: { return params.in_shape2; }
+    case 3u: { return params.in_shape3; }
+    case 4u: { return params.in_shape4; }
+    case 5u: { return params.in_shape5; }
+    case 6u: { return params.in_shape6; }
+    case 7u: { return params.in_shape7; }
+    default: { return 1u; }
+  }
+}
+
+fn get_in_stride(i: u32) -> u32 {
+  switch(i) {
+    case 0u: { return params.in_stride0; }
+    case 1u: { return params.in_stride1; }
+    case 2u: { return params.in_stride2; }
+    case 3u: { return params.in_stride3; }
+    case 4u: { return params.in_stride4; }
+    case 5u: { return params.in_stride5; }
+    case 6u: { return params.in_stride6; }
+    case 7u: { return params.in_stride7; }
+    default: { return 0u; }
+  }
+}
+
+fn get_out_stride(i: u32) -> u32 {
+  switch(i) {
+    case 0u: { return params.out_stride0; }
+    case 1u: { return params.out_stride1; }
+    case 2u: { return params.out_stride2; }
+    case 3u: { return params.out_stride3; }
+    case 4u: { return params.out_stride4; }
+    case 5u: { return params.out_stride5; }
+    case 6u: { return params.out_stride6; }
+    case 7u: { return params.out_stride7; }
+    default: { return 1u; }
+  }
+}
+
+fn get_axes_mask(i: u32) -> u32 {
+  switch(i) {
+    case 0u: { return params.axes_mask0; }
+    case 1u: { return params.axes_mask1; }
+    case 2u: { return params.axes_mask2; }
+    case 3u: { return params.axes_mask3; }
+    case 4u: { return params.axes_mask4; }
+    case 5u: { return params.axes_mask5; }
+    case 6u: { return params.axes_mask6; }
+    case 7u: { return params.axes_mask7; }
+    default: { return 0u; }
+  }
+}
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -6557,11 +6740,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   var out_dim_idx = 0u;
 
   for (var i = 0u; i < params.in_rank; i = i + 1u) {
-    if (params.axes_mask[i] == 0u) {
-      let out_stride = max(params.out_strides[out_dim_idx], 1u);
+    if (get_axes_mask(i) == 0u) {
+      let out_stride = max(get_out_stride(out_dim_idx), 1u);
       let coord = temp_out / out_stride;
       temp_out = temp_out % out_stride;
-      base_in_idx = base_in_idx + coord * params.in_strides[i];
+      base_in_idx = base_in_idx + coord * get_in_stride(i);
       out_dim_idx = out_dim_idx + 1u;
     }
   }
@@ -6572,11 +6755,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var temp_r = r;
     var red_in_offset = 0u;
     for (var i = 0u; i < params.in_rank; i = i + 1u) {
-      if (params.axes_mask[i] == 1u) {
-        let dim_size = max(params.in_shape[i], 1u);
+      if (get_axes_mask(i) == 1u) {
+        let dim_size = max(get_in_shape(i), 1u);
         let coord = temp_r % dim_size;
         temp_r = temp_r / dim_size;
-        red_in_offset = red_in_offset + coord * params.in_strides[i];
+        red_in_offset = red_in_offset + coord * get_in_stride(i);
       }
     }
     sum_val = sum_val + input[base_in_idx + red_in_offset];
@@ -6859,8 +7042,8 @@ function validateInstruction(inst, idx) {
         'max_axis': { minIn: 1, exactIn: true, minParams: 2, exactParams: false },
         'max_axis_backward': { minIn: 2, exactIn: true, minParams: 2, exactParams: false },
         'dropout': { minIn: 1, exactIn: true, minParams: 2, exactParams: true },
-        'maxpool2d': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
-        'avgpool2d': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
+        'maxpool2d': { minIn: 1, exactIn: true, minParams: 10, exactParams: false },
+        'avgpool2d': { minIn: 1, exactIn: true, minParams: 10, exactParams: false },
         'im2col': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
         'col2im': { minIn: 1, exactIn: true, minParams: 10, exactParams: true },
         'transpose': { minIn: 1, exactIn: true, minParams: 2, exactParams: false },
@@ -7610,7 +7793,7 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 device.queue.writeBuffer(paramsBuffer, 0, p);
             }
             else if (inst.op === 'flash_attention') {
-                const [B, H, N, d] = inst.shape;
+                const [B, H, N_q, d] = inst.shape;
                 if (d > 256) {
                     throw new AMEVAForgeShapeError(`HeadDim ${d} exceeds max supported dimension 256 in FlashAttention`);
                 }
@@ -7618,18 +7801,20 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 const H_kv = inst.params?.[0] ?? H;
                 const scale = inst.params?.[1] ?? (1.0 / Math.sqrt(d));
                 const isCausal = (inst.params?.[2] ?? 0) === 1 ? 1 : 0;
-                const strideQ = N * d;
-                const strideK = N * d;
-                const strideV = N * d;
-                const strideO = N * d;
+                const kShape = (inst.in && inst.in[1] !== undefined && idToShape[inst.in[1]]) ? idToShape[inst.in[1]] : null;
+                const N_kv = inst.params?.[3] ?? (kShape ? kShape[kShape.length - 2] : N_q);
+                const strideQ = N_q * d;
+                const strideK = N_kv * d;
+                const strideV = N_kv * d;
+                const strideO = N_q * d;
                 const buf = new ArrayBuffer(48);
                 const u32view = new Uint32Array(buf);
                 const f32view = new Float32Array(buf);
                 u32view[0] = B;
                 u32view[1] = H;
                 u32view[2] = H_kv;
-                u32view[3] = N; // N_q
-                u32view[4] = N; // N_kv
+                u32view[3] = N_q; // N_q
+                u32view[4] = N_kv; // N_kv
                 u32view[5] = d;
                 f32view[6] = scale;
                 u32view[7] = isCausal;
@@ -7637,7 +7822,7 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 u32view[9] = strideK;
                 u32view[10] = strideV;
                 u32view[11] = strideO;
-                dispatchX = N;
+                dispatchX = N_q;
                 dispatchY = H;
                 dispatchZ = B;
                 device.queue.writeBuffer(paramsBuffer, 0, u32view);
@@ -7829,7 +8014,8 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
             else if (inst.op === 'sparse_cross_entropy') {
                 wgslCode = SPARSE_CROSS_ENTROPY_WGSL;
                 const numSamples = inst.shape[0];
-                const numClasses = inst.params?.[0] ?? 1000;
+                const logitsShape = (inst.in && inst.in[0] !== undefined && idToShape[inst.in[0]]) ? idToShape[inst.in[0]] : null;
+                const numClasses = inst.params?.[0] ?? (logitsShape && logitsShape.length >= 2 ? logitsShape[1] : (inst.shape.length >= 2 ? inst.shape[1] : 1));
                 const ignoreIndex = inst.params?.[1] ?? -100;
                 const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numSamples, 1);
                 dispatchX = dx;

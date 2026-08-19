@@ -56,10 +56,10 @@ describe('SCRUM-261 ~ SCRUM-265: Native WebGPU Slicing Architectural Contract', 
 
   it('validates slice.wgsl structure and parameter uniforms', () => {
     expect(SLICE_WGSL).toContain('struct Params');
-    expect(SLICE_WGSL).toContain('starts: array<u32, 8>');
-    expect(SLICE_WGSL).toContain('steps: array<u32, 8>');
-    expect(SLICE_WGSL).toContain('in_strides: array<u32, 8>');
-    expect(SLICE_WGSL).toContain('out_strides: array<u32, 8>');
+    expect(SLICE_WGSL).toContain('start0: u32');
+    expect(SLICE_WGSL).toContain('step0: u32');
+    expect(SLICE_WGSL).toContain('in_stride0: u32');
+    expect(SLICE_WGSL).toContain('out_stride0: u32');
     expect(SLICE_WGSL).toContain('@compute @workgroup_size(64)');
   });
 

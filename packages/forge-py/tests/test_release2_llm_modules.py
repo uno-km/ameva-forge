@@ -124,3 +124,23 @@ class TestRelease2LLMModules:
         assert out._lazy_op == 'flash_attention'
         assert len(out._parents) == 3
         assert out._lazy_params[2] == 1.0  # is_causal flag
+        assert out._lazy_params[3] == float(N)  # dynamic N_kv
+
+    def test_gpu_sdpa_autograd_training_backward(self):
+        B, H, N, d = 1, 2, 4, 16
+        q = forge.tensor(np.random.randn(B, H, N, d).astype(np.float32), device='gpu', requires_grad=True)
+        k = forge.tensor(np.random.randn(B, H, N, d).astype(np.float32), device='gpu', requires_grad=True)
+        v = forge.tensor(np.random.randn(B, H, N, d).astype(np.float32), device='gpu', requires_grad=True)
+        
+        out = F.scaled_dot_product_attention(q, k, v, is_causal=False)
+        assert out.requires_grad is True
+        
+        loss = out.sum()
+        loss.backward()
+        
+        assert q.grad is not None
+        assert k.grad is not None
+        assert v.grad is not None
+        assert q.grad.shape == q.shape
+        assert k.grad.shape == k.shape
+        assert v.grad.shape == v.shape

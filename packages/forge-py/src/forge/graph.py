@@ -37,6 +37,7 @@ class GraphBuilder:
         # 왜: 그래프 내 각 노드 간의 의존성을 ID 기반으로 연결하기 위함이다.
         # 어떻게: alloc_id 호출 시마다 1씩 증가한다.
         self.next_id = 1
+        self.node_id_map: Dict[Tuple[int, int], int] = {}
 
     def alloc_id(self) -> int:
         """
@@ -154,22 +155,25 @@ class GraphBuilder:
     def add_tensor(self, root: Any) -> int:
         """
         무엇을: Lazy Tensor의 DAG를 탐색하여 위상 정렬 순서대로 GraphBuilder에 노드를 추가한다.
-        왜: 파이썬 텐서 객체로부터 WebGPU 연산 그래프를 한 번에 빌드하기 위함이다.
-        어떻게: build_lazy_topo를 호출하고 각 노드를 add_upload/add_load/add_op로 변환한다.
+        왜: 파이썬 텐서 객체로부터 WebGPU 연산 그래프를 한 번에 빌드하며, 공통 부분식(CSE)을 재사용하기 위함이다.
+        어떻게: build_lazy_topo를 호출하고 (id, version) 키를 통해 중복 노드 생성을 방지한다.
         """
         from .tensor import build_lazy_topo
         topo = build_lazy_topo(root)
-        node_id_map = {}
         for v in topo:
+            key = (id(v), getattr(v, '_version', 0))
+            if key in self.node_id_map:
+                continue
+
             if getattr(v, '_handle', None) is not None:
-                node_id_map[id(v)] = self.add_load(v.shape, v._handle)
+                self.node_id_map[key] = self.add_load(v.shape, v._handle)
             elif getattr(v, '_lazy_op', None) == 'upload' or getattr(v, '_lazy_op', None) is None:
                 data = getattr(v, '_data', None)
-                node_id_map[id(v)] = self.add_upload(v.shape, data)
+                self.node_id_map[key] = self.add_upload(v.shape, data)
             else:
-                in_ids = [node_id_map[id(p)] for p in getattr(v, '_parents', ())]
-                node_id_map[id(v)] = self.add_op(v._lazy_op, v.shape, in_ids, getattr(v, '_lazy_params', None))
-        return node_id_map[id(root)]
+                in_ids = [self.node_id_map[(id(p), getattr(p, '_version', 0))] for p in getattr(v, '_parents', ())]
+                self.node_id_map[key] = self.add_op(v._lazy_op, v.shape, in_ids, getattr(v, '_lazy_params', None))
+        return self.node_id_map[(id(root), getattr(root, '_version', 0))]
 
     def to_dict(self) -> Dict[str, Any]:
         """
