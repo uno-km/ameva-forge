@@ -612,14 +612,14 @@ def swiglu(gate, up):
     from .autograd import _grad_mode
     needs_grad = _grad_mode and (gate.requires_grad or up.requires_grad)
 
-    if not needs_grad and gate.device == 'gpu' and up.device == 'gpu':
+    if gate.device == 'gpu' and up.device == 'gpu':
         from .tensor import Tensor
         return Tensor(shape=gate.shape, dtype=gate.dtype, device='gpu',
                       op='swiglu', parents=(gate, up),
-                      requires_grad=False)
+                      requires_grad=needs_grad)
             
-    from .ops import mul, sigmoid_op
-    swish_g = mul(gate, sigmoid_op(gate))
+    from .ops import mul, sigmoid
+    swish_g = mul(gate, sigmoid(gate))
     return mul(swish_g, up)
 
 def rope(x, base_freq=10000.0, offset_pos=0):
@@ -630,11 +630,11 @@ def rope(x, base_freq=10000.0, offset_pos=0):
     from .autograd import _grad_mode
     needs_grad = _grad_mode and x.requires_grad
 
-    if not needs_grad and x.device == 'gpu':
+    if x.device == 'gpu':
         from .tensor import Tensor
         return Tensor(shape=x.shape, dtype=x.dtype, device='gpu',
                       op='rope', parents=(x,), op_params=[float(base_freq), float(offset_pos)],
-                      requires_grad=False)
+                      requires_grad=needs_grad)
     
     # CPU Reference Math
     from .ops import tensor

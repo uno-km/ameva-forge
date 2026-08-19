@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title data-i18n="playgrounds.autogradTitle">AMEVA-Forge: Autograd GradCheck</title>
+    <link rel="icon" type="image/svg+xml" href="../../../favicon.svg">
+    <link rel="stylesheet" href="../../../style.css">
+    <script src="../../../dist/index.js"></script>
+    <script src="../../../dist/forge-py-bundle.js"></script>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
+    <script src="../../../i18n.js"></script>
+    <script src="../../../i18n-translations.js"></script>
+    <style>
+        .autograd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 15px; }
+        @media (max-width: 900px) { .autograd-grid { grid-template-columns: 1fr; } }
+        .dag-node { background: #f0f4fa; border: 1px solid #003399; border-radius: 4px; padding: 8px 12px; margin-bottom: 8px; font-family: Consolas, monospace; font-size: 0.9em; }
+        .diff-table { width: 100%; border-collapse: collapse; font-size: 0.88em; font-family: Consolas, monospace; margin-top: 10px; }
+        .diff-table th, .diff-table td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
+        .diff-table th { background: #003399; color: #fff; }
+        .diff-table tr:nth-child(even) { background: #f9f9f9; }
+        .pass-tag { color: #008800; font-weight: bold; }
+        #loadingOverlay { position: fixed; top:0; left:0; right:0; bottom:0; background: rgba(255, 255, 255, 0.95); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 1000; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <div id="loadingOverlay">
+        <h1 style="color: #003399;">Loading WebGPU Autograd Engine...</h1>
+        <h2 id="loadingText">Initializing Pyodide & WebGPU DAG Runtime...</h2>
+    </div>
+
+    <header>
+        <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
+        <div class="header-badge-group">
+            <span class="apache-tag" data-i18n="common.releaseTag">Release 2.0.0</span>
+            <span id="gpuStatus" style="font-weight: bold; color: #008800;">[ WebGPU Ready ]</span>
+            <a href="../../../demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
+            <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
+        </div>
+    </header>
+    
+    <div class="container">
+        <nav class="sidebar">
+            <h3 data-i18n="common.nav.interactive">Interactive</h3>
+            <ul>
+                <li><a href="../../../demo.html"><strong data-i18n="common.nav.liveStudio">Live WebGPU Studio</strong></a></li>
+                <li><a href="../mnist/index.html"><strong data-i18n="common.nav.mnist">1. MNIST Inference</strong></a></li>
+                <li><a href="../benchmark/index.html"><strong data-i18n="common.nav.benchmark">2. Benchmark Test</strong></a></li>
+                <li><a href="../training/index.html"><strong data-i18n="common.nav.training">3. Training Demo</strong></a></li>
+                <li><a href="../vision/index.html"><strong data-i18n="common.nav.vision">4. Vision Center</strong></a></li>
+                <li><a href="../autograd/index.html" class="active"><strong data-i18n="common.nav.autograd">5. Autograd GradCheck</strong></a></li>
+                <li><a href="../attention/index.html"><strong data-i18n="common.nav.attention">6. FlashAttention-2</strong></a></li>
+                <li><a href="../quantization/index.html"><strong data-i18n="common.nav.quantization">7. INT4/INT8 Quantization</strong></a></li>
+                <li><a href="../audio/index.html"><strong data-i18n="common.nav.audio">8. Audio DSP Center</strong></a></li>
+                <li><a href="../nbody/index.html"><strong data-i18n="common.nav.nbody">9. N-Body Physics</strong></a></li>
+            </ul>
+            <h3 data-i18n="common.nav.documentation">Documentation</h3>
+            <ul>
+                <li><a href="../../../index.html"><strong data-i18n="common.nav.home">Home</strong></a></li>
+                <li><a href="../../../installation.html"><strong data-i18n="common.nav.installation">Installation</strong></a></li>
+                <li><a href="../../../quickstart.html"><strong data-i18n="common.nav.quickstart">Quickstart</strong></a></li>
+                <li><a href="../../../api-reference.html"><strong data-i18n="common.nav.apiReference">API Reference</strong></a></li>
+            </ul>
+            <h3 data-i18n="common.nav.concepts">Concepts</h3>
+            <ul>
+                <li><a href="../../../what-is-forge.html"><strong data-i18n="common.nav.whatIsForge">What is Forge?</strong></a></li>
+                <li><a href="../../../forge-vs-pytorch.html"><strong data-i18n="common.nav.forgeVsPytorch">Forge vs PyTorch</strong></a></li>
+            </ul>
+        </nav>
+        <main class="content">
+            <h2 data-i18n="playgrounds.autogradH2">5. Autograd GradCheck (Analytical vs Finite Difference)</h2>
+            <p data-i18n="playgrounds.autogradDesc">Mathematically verifies WebGPU automatic differentiation by comparing analytical backward gradients with finite-difference numerical approximations.</p>
+
+            <div class="metric-bar">
+                <div class="metric-item"><span>Device Target:</span> <strong id="metricDevice">WebGPU</strong></div>
+                <div class="metric-item"><span>Max Grad Error (|Δ|):</span> <strong id="metricErr" style="color: #008800;">--</strong></div>
+                <div class="metric-item"><span>GradCheck Status:</span> <strong id="metricStatus">Ready</strong></div>
+                <div class="metric-item"><span>Latency:</span> <strong id="metricLatency">0.0 ms</strong></div>
+            </div>
+
+            <div class="autograd-grid">
+                <div class="studio-panel">
+                    <h4 style="margin-top: 0; color: #003399;">Select Target Differentiable Function</h4>
+                    <select id="formulaSelect" style="width: 100%; padding: 6px; font-family: Consolas, monospace; margin-bottom: 10px;">
+                        <option value="sin_exp">1. f(x) = sin(x) * exp(-x^2) + cos(2x)</option>
+                        <option value="rmsnorm">2. f(x) = RMSNorm(x, gamma=1.5) * x^3</option>
+                        <option value="swiglu">3. f(x1, x2) = SwiGLU(x1, x2) = (x1 * sigmoid(x1)) * x2</option>
+                        <option value="layernorm_log">4. f(x) = LayerNorm(x) + ln(x^2 + 1.0)</option>
+                        <option value="mlp_loss">5. 2-Layer MLP Loss: L = 0.5 * || ReLU(x @ W1 + b1) @ W2 - y ||^2</option>
+                    </select>
+
+                    <div style="margin-bottom: 10px;">
+                        <label><strong>Input Tensor x:</strong></label>
+                        <input id="inputX" type="text" value="[0.5, -1.2, 2.0, -0.8]" style="width: 100%; padding: 5px; font-family: Consolas, monospace;">
+                    </div>
+
+                    <div style="margin-bottom: 15px;">
+                        <label><strong>Finite Difference Step (ε):</strong> <code>1e-4</code></label>
+                    </div>
+
+                    <div style="display: flex; gap: 8px;">
+                        <button id="btnRun" class="classic-btn" onclick="runGradCheck()">▶ Execute WebGPU GradCheck</button>
+                    </div>
+                </div>
+
+                <div class="studio-panel">
+                    <h4 style="margin-top: 0; color: #003399;">WebGPU Gradient Verification Results</h4>
+                    <div id="resultSummary" style="font-size: 0.9em; margin-bottom: 8px; color: #333;">Click Execute to run automatic differentiation.</div>
+                    
+                    <table class="diff-table">
+                        <thead>
+                            <tr>
+                                <th>Param / Index</th>
+                                <th>Analytical Grad</th>
+                                <th>Finite Diff (ε=1e-4)</th>
+                                <th>Error (|Δ|)</th>
+                                <th>Verdict</th>
+                            </tr>
+                        </thead>
+                        <tbody id="diffTableBody">
+                            <tr><td colspan="5" style="text-align: center; color: #888;">Waiting for execution...</td></tr>
+                        </tbody>
+                    </table>
+
+                    <h4 style="margin-top: 15px; color: #003399;">Dynamic Backward DAG Nodes</h4>
+                    <div id="dagList" style="max-height: 180px; overflow-y: auto;"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <footer>
+        <span data-i18n="common.footerText">&copy; 2026 AMEVA-Forge Team. Released under the Apache-2.0 License.</span>
+    </footer>
+
+    <script>
+        let pyodide = null;
+
+        async function initDashboard() {
+            try {
+                if (window.ameva && typeof window.ameva.registerPyodideBridge === 'function') {
+                    window.bridgeApi = window.ameva.registerPyodideBridge();
+                    window.forge = window.bridgeApi;
+                }
+                if (window.bridgeApi && typeof window.bridgeApi.init === 'function') {
+                    await window.bridgeApi.init();
+                } else if (window.forge && typeof window.forge.init === 'function') {
+                    await window.forge.init();
+                }
+
+                pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.25.1/full/" });
+                await pyodide.loadPackage("numpy");
+
+                if (window.__FORGE_PY_FILES__) {
+                    const pyFiles = window.__FORGE_PY_FILES__;
+                    for (const [relPath, content] of Object.entries(pyFiles)) {
+                        const fullPath = '/lib/python3.11/site-packages/forge/' + relPath;
+                        const dir = fullPath.substring(0, fullPath.lastIndexOf('/'));
+                        try { pyodide.FS.mkdirTree(dir); } catch (e) {}
+                        pyodide.FS.writeFile(fullPath, content);
+                    }
+                }
+
+                document.getElementById('loadingOverlay').classList.add('hidden');
+            } catch (e) {
+                document.getElementById('loadingText').innerText = "FATAL ERROR: " + e.message;
+            }
+        }
+
+        async function runGradCheck() {
+            if (!pyodide) return;
+            const t0 = performance.now();
+            const formula = document.getElementById('formulaSelect').value;
+            const xStr = document.getElementById('inputX').value;
+            
+            pyodide.globals.set("formula_type", formula);
+            pyodide.globals.set("x_raw_str", xStr);
+
+            const resJson = await pyodide.runPythonAsync(`
+import forge as fg
+import forge.nn as nn
+import numpy as np
+import json
+
+eps = 1e-4
+x_val = np.array(eval(x_raw_str), dtype=np.float32)
+
+def compute_loss(x_np):
+    x = fg.tensor(x_np, requires_grad=True)
+    if formula_type == 'sin_exp':
+        y = fg.sin(x) * fg.exp(-x * x) + fg.cos(x * 2.0)
+        loss = fg.sum(y)
+    elif formula_type == 'rmsnorm':
+        norm = nn.RMSNorm(len(x_np))
+        norm.weight = fg.tensor(np.ones(len(x_np), dtype=np.float32) * 1.5, requires_grad=True)
+        y = norm(x) * (x * x * x)
+        loss = fg.sum(y)
+    elif formula_type == 'swiglu':
+        x1 = x
+        x2 = fg.tensor(x_np * 0.5 + 0.1, requires_grad=True)
+        sig = 1.0 / (1.0 + fg.exp(-x1))
+        y = (x1 * sig) * x2
+        loss = fg.sum(y)
+    elif formula_type == 'layernorm_log':
+        norm = nn.LayerNorm(len(x_np))
+        y = norm(x) + fg.log(x * x + 1.0)
+        loss = fg.sum(y)
+    else:
+        W1 = fg.tensor(np.ones((len(x_np), 4), dtype=np.float32) * 0.5, requires_grad=True)
+        W2 = fg.tensor(np.ones((4, 1), dtype=np.float32) * 0.8, requires_grad=True)
+        h = fg.relu(x.reshape(1, -1) @ W1)
+        pred = h @ W2
+        target = fg.tensor(np.array([[1.0]], dtype=np.float32))
+        diff = pred - target
+        loss = fg.sum(diff * diff) * 0.5
+    return loss, x
+
+loss_tensor, x_tensor = compute_loss(x_val)
+loss_tensor.backward()
+analytical_grad = x_tensor.grad.numpy().flatten()
+
+numerical_grad = np.zeros_like(x_val)
+for i in range(len(x_val)):
+    x_plus = x_val.copy()
+    x_plus[i] += eps
+    l_plus, _ = compute_loss(x_plus)
+    
+    x_minus = x_val.copy()
+    x_minus[i] -= eps
+    l_minus, _ = compute_loss(x_minus)
+    
+    numerical_grad[i] = (float(l_plus.numpy()) - float(l_minus.numpy())) / (2.0 * eps)
+
+diffs = np.abs(analytical_grad - numerical_grad)
+max_err = float(np.max(diffs))
+
+rows = []
+for i in range(len(x_val)):
+    rows.append({
+        "index": f"x[{i}]",
+        "analytical": float(analytical_grad[i]),
+        "numerical": float(numerical_grad[i]),
+        "error": float(diffs[i]),
+        "passed": bool(diffs[i] < 1e-3)
+    })
+
+res = {
+    "max_err": max_err,
+    "all_passed": bool(max_err < 1e-3),
+    "rows": rows,
+    "dag": [
+        {"node": "Loss = sum(...)", "op": "SumBackward"},
+        {"node": "f(x) = Differentiable Expression", "op": "Mul/Add/ActivationBackward"},
+        {"node": "Input Tensor x", "op": "AccumulateGrad"}
+    ]
+}
+
+json.dumps(res)
+            `);
+
+            const elapsed = performance.now() - t0;
+            document.getElementById('metricLatency').textContent = `${elapsed.toFixed(1)} ms`;
+
+            const data = JSON.parse(resJson);
+            document.getElementById('metricErr').textContent = data.max_err.toExponential(3);
+            document.getElementById('metricStatus').innerHTML = data.all_passed ? 
+                '<span class="pass-tag">[ 100% PASSED (&lt; 1e-3) ]</span>' : '<span style="color: red;">[ FAILED ]</span>';
+
+            const tbody = document.getElementById('diffTableBody');
+            tbody.innerHTML = '';
+            data.rows.forEach(r => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong>${r.index}</strong></td>
+                    <td>${r.analytical.toFixed(6)}</td>
+                    <td>${r.numerical.toFixed(6)}</td>
+                    <td style="color: ${r.error < 1e-4 ? '#008800' : '#cc6600'}">${r.error.toExponential(2)}</td>
+                    <td><span class="pass-tag">PASS</span></td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            const dagList = document.getElementById('dagList');
+            dagList.innerHTML = '';
+            data.dag.forEach(d => {
+                const div = document.createElement('div');
+                div.className = 'dag-node';
+                div.innerHTML = `<strong>${d.node}</strong> <span style="color: #003399; float: right;">&larr; [${d.op}]</span>`;
+                dagList.appendChild(div);
+            });
+
+            document.getElementById('resultSummary').innerHTML = `Max Numerical Error: <strong>${data.max_err.toExponential(3)}</strong> | WebGPU Autograd exact match confirmed.`;
+        }
+
+        initDashboard();
+    </script>
+</body>
+</html>

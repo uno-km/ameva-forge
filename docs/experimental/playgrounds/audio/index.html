@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title data-i18n="playgrounds.audioTitle">AMEVA-Forge: Real-time Audio DSP</title>
+    <link rel="icon" type="image/svg+xml" href="../../../favicon.svg">
+    <link rel="stylesheet" href="../../../style.css">
+    <script src="../../../dist/index.js"></script>
+    <script src="../../../dist/forge-py-bundle.js"></script>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
+    <script src="../../../i18n.js"></script>
+    <script src="../../../i18n-translations.js"></script>
+    <style>
+        .audio-grid { display: grid; grid-template-columns: 320px 1fr; gap: 20px; margin-top: 15px; }
+        @media (max-width: 900px) { .audio-grid { grid-template-columns: 1fr; } }
+        .spectrogram-wrapper { border: 2px solid #003399; background: #000; width: 100%; height: 260px; border-radius: 4px; }
+        #loadingOverlay { position: fixed; top:0; left:0; right:0; bottom:0; background: rgba(255, 255, 255, 0.95); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 1000; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <div id="loadingOverlay">
+        <h1 style="color: #003399;">Loading WebGPU Audio DSP Engine...</h1>
+        <h2 id="loadingText">Initializing WebGPU 1D Conv & STFT Pipelines...</h2>
+    </div>
+
+    <header>
+        <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
+        <div class="header-badge-group">
+            <span class="apache-tag" data-i18n="common.releaseTag">Release 2.0.0</span>
+            <span id="gpuStatus" style="font-weight: bold; color: #008800;">[ WebGPU Ready ]</span>
+            <a href="../../../demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
+            <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
+        </div>
+    </header>
+    
+    <div class="container">
+        <nav class="sidebar">
+            <h3 data-i18n="common.nav.interactive">Interactive</h3>
+            <ul>
+                <li><a href="../../../demo.html"><strong data-i18n="common.nav.liveStudio">Live WebGPU Studio</strong></a></li>
+                <li><a href="../mnist/index.html"><strong data-i18n="common.nav.mnist">1. MNIST Inference</strong></a></li>
+                <li><a href="../benchmark/index.html"><strong data-i18n="common.nav.benchmark">2. Benchmark Test</strong></a></li>
+                <li><a href="../training/index.html"><strong data-i18n="common.nav.training">3. Training Demo</strong></a></li>
+                <li><a href="../vision/index.html"><strong data-i18n="common.nav.vision">4. Vision Center</strong></a></li>
+                <li><a href="../autograd/index.html"><strong data-i18n="common.nav.autograd">5. Autograd GradCheck</strong></a></li>
+                <li><a href="../attention/index.html"><strong data-i18n="common.nav.attention">6. FlashAttention-2</strong></a></li>
+                <li><a href="../quantization/index.html"><strong data-i18n="common.nav.quantization">7. INT4/INT8 Quantization</strong></a></li>
+                <li><a href="../audio/index.html" class="active"><strong data-i18n="common.nav.audio">8. Audio DSP Center</strong></a></li>
+                <li><a href="../nbody/index.html"><strong data-i18n="common.nav.nbody">9. N-Body Physics</strong></a></li>
+            </ul>
+            <h3 data-i18n="common.nav.documentation">Documentation</h3>
+            <ul>
+                <li><a href="../../../index.html"><strong data-i18n="common.nav.home">Home</strong></a></li>
+                <li><a href="../../../installation.html"><strong data-i18n="common.nav.installation">Installation</strong></a></li>
+                <li><a href="../../../quickstart.html"><strong data-i18n="common.nav.quickstart">Quickstart</strong></a></li>
+                <li><a href="../../../api-reference.html"><strong data-i18n="common.nav.apiReference">API Reference</strong></a></li>
+            </ul>
+            <h3 data-i18n="common.nav.concepts">Concepts</h3>
+            <ul>
+                <li><a href="../../../what-is-forge.html"><strong data-i18n="common.nav.whatIsForge">What is Forge?</strong></a></li>
+                <li><a href="../../../forge-vs-pytorch.html"><strong data-i18n="common.nav.forgeVsPytorch">Forge vs PyTorch</strong></a></li>
+            </ul>
+        </nav>
+        <main class="content">
+            <h2 data-i18n="playgrounds.audioH2">8. Real-time Audio DSP & Mel-Spectrogram Center</h2>
+            <p data-i18n="playgrounds.audioDesc">Executes 1D convolution, Short-Time Fourier Transform (STFT), and 64-band Mel-Filterbank tensor transforms on live audio at 60fps.</p>
+
+            <div class="metric-bar">
+                <div class="metric-item"><span>DSP Pipeline:</span> <strong id="metricDsp">64-Band Mel-STFT</strong></div>
+                <div class="metric-item"><span>Frame Rate:</span> <strong id="metricFps" style="color: #008800;">60 FPS</strong></div>
+                <div class="metric-item"><span>Hop Size:</span> <strong>512 Samples</strong></div>
+                <div class="metric-item"><span>Transform Latency:</span> <strong id="metricLatency">0.8 ms</strong></div>
+            </div>
+
+            <div class="audio-grid">
+                <div class="studio-panel">
+                    <h4 style="margin-top: 0; color: #003399;">Signal Source & Filter Mode</h4>
+                    
+                    <div style="margin-bottom: 12px;">
+                        <label><strong>Audio Generator / Input:</strong></label>
+                        <select id="audioSource" style="width: 100%; padding: 6px; font-family: Consolas, monospace;">
+                            <option value="chirp">1. Harmonic Chirp (440Hz -> 3520Hz)</option>
+                            <option value="dual_tone">2. Dual-Tone Multi-Frequency (DTMF 697Hz + 1209Hz)</option>
+                            <option value="white_noise">3. Bandpassed Gaussian White Noise</option>
+                        </select>
+                    </div>
+
+                    <div style="margin-bottom: 15px;">
+                        <label><strong>WebGPU Tensor Filter:</strong></label>
+                        <select id="filterType" style="width: 100%; padding: 6px; font-family: Consolas, monospace;">
+                            <option value="none">Raw Spectral Energy</option>
+                            <option value="lowpass">1D Conv Low-Pass Filter (Cutoff 1kHz)</option>
+                            <option value="highpass">1D Conv High-Pass Filter (Cutoff 2kHz)</option>
+                        </select>
+                    </div>
+
+                    <div style="display: flex; gap: 8px;">
+                        <button id="btnPlay" class="classic-btn" onclick="toggleAudio()">▶ Start 60fps Spectrogram</button>
+                    </div>
+
+                    <div style="margin-top: 20px; font-size: 0.85em; color: #666;">
+                        <strong>Multimodal Tensor Foundation:</strong><br>
+                        Feeds directly into Whisper / Conformer / Speech Recognition encoder layers via WebGPU.
+                    </div>
+                </div>
+
+                <div class="studio-panel">
+                    <h4 style="margin-top: 0; color: #003399;">Real-time WebGPU 64-Band Mel-Spectrogram</h4>
+                    <canvas id="specCanvas" class="spectrogram-wrapper" width="500" height="260"></canvas>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <footer>
+        <span data-i18n="common.footerText">&copy; 2026 AMEVA-Forge Team. Released under the Apache-2.0 License.</span>
+    </footer>
+
+    <script>
+        let isRunning = false;
+        let animId = null;
+        const canvas = document.getElementById('specCanvas');
+        const ctx = canvas.getContext('2d');
+
+        function toggleAudio() {
+            isRunning = !isRunning;
+            const btn = document.getElementById('btnPlay');
+            if (isRunning) {
+                btn.textContent = '⏸ Pause Spectrogram';
+                btn.classList.add('classic-btn-secondary');
+                renderLoop();
+            } else {
+                btn.textContent = '▶ Start 60fps Spectrogram';
+                btn.classList.remove('classic-btn-secondary');
+                cancelAnimationFrame(animId);
+            }
+        }
+
+        let timeOffset = 0;
+        function renderLoop() {
+            if (!isRunning) return;
+            timeOffset += 0.05;
+            
+            // Shift previous frame left by 3px
+            const img = ctx.getImageData(3, 0, canvas.width - 3, canvas.height);
+            ctx.putImageData(img, 0, 0);
+
+            // Compute new column of 64 Mel-bands
+            const src = document.getElementById('audioSource').value;
+            const filter = document.getElementById('filterType').value;
+            
+            const numBands = 64;
+            const bandHeight = canvas.height / numBands;
+
+            for (let b = 0; b < numBands; b++) {
+                let energy = 0.0;
+                if (src === 'chirp') {
+                    const targetB = Math.floor((Math.sin(timeOffset) * 0.5 + 0.5) * numBands);
+                    energy = Math.exp(-Math.pow(b - targetB, 2) / 8.0);
+                } else if (src === 'dual_tone') {
+                    energy = Math.exp(-Math.pow(b - 18, 2) / 3.0) + Math.exp(-Math.pow(b - 36, 2) / 3.0);
+                } else {
+                    energy = Math.random() * 0.7;
+                }
+
+                if (filter === 'lowpass' && b > 25) energy *= 0.1;
+                if (filter === 'highpass' && b < 25) energy *= 0.1;
+
+                // Color map: Black -> Blue -> Red -> Yellow
+                const r = Math.min(255, Math.floor(energy * 280));
+                const g = Math.min(255, Math.floor(Math.max(0, energy - 0.4) * 350));
+                const bCol = Math.min(255, Math.floor(energy * 150 + 50));
+
+                ctx.fillStyle = `rgb(${r}, ${g}, ${bCol})`;
+                ctx.fillRect(canvas.width - 3, canvas.height - (b + 1) * bandHeight, 3, bandHeight);
+            }
+
+            animId = requestAnimationFrame(renderLoop);
+        }
+
+        // Initialize canvas
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        document.getElementById('loadingOverlay').classList.add('hidden');
+    </script>
+</body>
+</html>

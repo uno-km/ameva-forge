@@ -58,7 +58,7 @@ def test_backward_rejects_stale_parameter_version():
     w._data -= 0.1
     w._version += 1
 
-    with pytest.raises(RuntimeError, match="modified in-place"):
+    with pytest.raises(RuntimeError, match=r"modified.*inplace"):
         loss.backward()
 
 
