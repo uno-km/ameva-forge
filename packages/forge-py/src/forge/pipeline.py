@@ -88,8 +88,8 @@ class SentimentAnalysisPipeline:
             tokens = [0]
         inp = tensor([tokens], dtype="int32", device=self.device)
         out = self.classifier(inp)  # [1, L, 2]
-        np_out = await out.numpy_async()
-        np_scores = np_out[:, -1, :]      # [1, 2]
+        pooled = out[:, -1, :]      # [1, 2] Native GPU Slicing
+        np_scores = await pooled.numpy_async()
         
         # Softmax
         exp_s = np.exp(np_scores[0] - np.max(np_scores[0]))

@@ -891,6 +891,8 @@ let ALLOWED_KERNEL_NAMES = new Set([
     "rmsnorm",
     "swiglu",
     "unpack_quant",
+    "slice",
+    "slice_backward",
 ]);
 /**
  * WHAT: 화이트리스트에 허용된 커널 이름들을 새롭게 등록(덮어쓰기)합니다.
@@ -2833,114 +2835,105 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
  * - 2026-08-12T12:23:09+09:00: Docs: Build Apache-style docs and unify tests
  */
 const PAD_WGSL = `
-// 구조체: Params
-// 역할 (WHAT): 텐서 패딩 연산에 필요한 모든 형태(Shape), 보폭(Stride), 설정 변수들을 담고 있는 구조체입니다.
-// 목적 (WHY): 패딩 된 새로운 텐서를 생성하기 위해 원본 텐서의 좌표와 출력 텐서의 좌표를 매핑하는 데 필요한 정보를 제공하기 위함입니다.
-// 동작 방식 (HOW): 각 차원에 대한 크기, 원본/출력 메모리 보폭 정보, 추가할 패딩 값 등을 참조하여 변환된 인덱스를 계산합니다.
 struct Params {
-  // 변수: num_elements
-  // 역할: 패딩이 완료된 최종 출력 텐서의 전체 요소 개수
   num_elements: u32,
-  // 변수: rank
-  // 역할: 텐서의 차원(Rank) 수
   rank: u32,
-  // 변수: pad_val
-  // 역할: 빈 공간에 채워 넣을 상수 값(패딩 값)
   pad_val: f32,
-  // 변수: workgroups_x
-  // 역할: 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수
   workgroups_x: u32,
-  // 변수: in_strides
-  // 역할: 최대 8차원까지 지원하는 원본 입력 텐서의 차원별 메모리 보폭(Stride) 배열
-  in_strides: array<u32, 8>,
-  // 변수: out_strides
-  // 역할: 패딩 적용 후 출력 텐서의 차원별 메모리 보폭 배열
-  out_strides: array<u32, 8>,
-  // 변수: pad_before
-  // 역할: 각 차원의 앞부분(before)에 추가되는 패딩의 크기를 저장하는 배열
-  pad_before: array<u32, 8>,
-  // 변수: in_shape
-  // 역할: 입력 텐서의 원래 차원별 크기(Shape)를 저장하는 배열
-  in_shape: array<u32, 8>,
+  in_stride0: u32, in_stride1: u32, in_stride2: u32, in_stride3: u32,
+  in_stride4: u32, in_stride5: u32, in_stride6: u32, in_stride7: u32,
+  out_stride0: u32, out_stride1: u32, out_stride2: u32, out_stride3: u32,
+  out_stride4: u32, out_stride5: u32, out_stride6: u32, out_stride7: u32,
+  pad_before0: u32, pad_before1: u32, pad_before2: u32, pad_before3: u32,
+  pad_before4: u32, pad_before5: u32, pad_before6: u32, pad_before7: u32,
+  in_shape0: u32, in_shape1: u32, in_shape2: u32, in_shape3: u32,
+  in_shape4: u32, in_shape5: u32, in_shape6: u32, in_shape7: u32,
 };
 
-// 변수: params
-// 역할: 패딩 연산의 메타데이터를 저장하는 유니폼 버퍼
 @group(0) @binding(0) var<uniform> params: Params;
-
-// 변수: input
-// 역할: 패딩 되기 전의 원본 데이터가 저장되어 있는 스토리지 버퍼
 @group(0) @binding(1) var<storage, read> input: array<f32>;
-
-// 변수: output
-// 역할: 패딩 된 결과 데이터가 기록될 스토리지 버퍼
 @group(0) @binding(2) var<storage, read_write> output: array<f32>;
 
-// 함수: main
-// 역할 (WHAT): 출력 텐서의 각 인덱스를 기준으로 원본 인덱스를 역추적하여 값을 복사하거나 패딩 값을 채웁니다.
-// 목적 (WHY): 입력 배열 주변에 원하는 크기와 값으로 여백(패딩)을 추가하여 크기가 확장된 텐서를 반환하기 위함입니다.
-// 동작 방식 (HOW): 각 스레드는 출력 1D 인덱스(idx)를 받아 다차원 좌표(coord)로 변환한 후, 이 좌표가 원본 텐서 영역 내인지 확인하여 원본 값을 쓰거나 pad_val을 채웁니다.
+fn get_out_stride(i: u32) -> u32 {
+  switch (i) {
+    case 0u: { return params.out_stride0; }
+    case 1u: { return params.out_stride1; }
+    case 2u: { return params.out_stride2; }
+    case 3u: { return params.out_stride3; }
+    case 4u: { return params.out_stride4; }
+    case 5u: { return params.out_stride5; }
+    case 6u: { return params.out_stride6; }
+    default: { return params.out_stride7; }
+  }
+}
+
+fn get_in_stride(i: u32) -> u32 {
+  switch (i) {
+    case 0u: { return params.in_stride0; }
+    case 1u: { return params.in_stride1; }
+    case 2u: { return params.in_stride2; }
+    case 3u: { return params.in_stride3; }
+    case 4u: { return params.in_stride4; }
+    case 5u: { return params.in_stride5; }
+    case 6u: { return params.in_stride6; }
+    default: { return params.in_stride7; }
+  }
+}
+
+fn get_pad_before(i: u32) -> u32 {
+  switch (i) {
+    case 0u: { return params.pad_before0; }
+    case 1u: { return params.pad_before1; }
+    case 2u: { return params.pad_before2; }
+    case 3u: { return params.pad_before3; }
+    case 4u: { return params.pad_before4; }
+    case 5u: { return params.pad_before5; }
+    case 6u: { return params.pad_before6; }
+    default: { return params.pad_before7; }
+  }
+}
+
+fn get_in_shape(i: u32) -> u32 {
+  switch (i) {
+    case 0u: { return params.in_shape0; }
+    case 1u: { return params.in_shape1; }
+    case 2u: { return params.in_shape2; }
+    case 3u: { return params.in_shape3; }
+    case 4u: { return params.in_shape4; }
+    case 5u: { return params.in_shape5; }
+    case 6u: { return params.in_shape6; }
+    default: { return params.in_shape7; }
+  }
+}
+
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  // 변수: idx
-  // 역할: 2D 디스패치 그리드로부터 복원한 현재 스레드의 1차원 전역 인덱스
   let idx = global_id.x + global_id.y * params.workgroups_x * 64u;
-  
-  // 조건문: 인덱스 범위 확인
-  // 역할: idx가 결과 텐서의 전체 크기를 넘어서면 실행을 중지하여 유효하지 않은 메모리 접근을 방지합니다.
   if (idx >= params.num_elements) { return; }
 
-  // 변수: temp
-  // 역할: 1차원 인덱스를 다차원 좌표로 분해할 때 남은 인덱스 값을 저장 및 갱신하기 위한 임시 변수
   var temp = idx;
-  // 변수: in_idx
-  // 역할: 역계산된 원본 텐서의 1차원 인덱스를 누적할 변수
   var in_idx = 0u;
-  // 변수: in_bounds
-  // 역할: 현재 계산하는 출력 좌표가 원본 텐서의 범위 안에 속해 있는지를 나타내는 불리언 플래그
   var in_bounds = true;
 
-  // 반복문: for 루프 (차원 탐색)
-  // 역할 (WHAT): 최고 차원부터 최하 차원까지 각 차원의 좌표를 구하고, 이를 이용해 원본 입력 텐서의 플랫(flat) 인덱스를 누적 연산합니다.
-  // 목적 (WHY): N차원(최대 8차원) 데이터를 1차원 배열로 평탄화(Flatten)한 메모리 구조에서 정확한 매핑을 계산하기 위함입니다.
-  // 동작 방식 (HOW): 나누기와 나머지 연산을 사용해 현재 차원의 좌표(coord)를 구한 뒤, 원본 텐서 구간(pad_before ~ pad_before + in_shape)에 속하는지 검사합니다.
   for (var i = 0u; i < params.rank; i = i + 1u) {
-    // 변수: coord
-    // 역할: 출력 텐서의 i번째 차원에 대한 구체적 좌표(인덱스)
-    let out_stride = max(params.out_strides[i], 1u);
+    let out_stride = max(get_out_stride(i), 1u);
     let coord = temp / out_stride;
-    
-    // 변수: temp 갱신
-    // 역할: 다음 하위 차원 계산을 위해 남은 나머지 값을 임시 변수에 대입합니다.
     temp = temp % out_stride;
-    
-    // 조건문: 원본 영역 이탈 확인
-    // 역할: 계산된 해당 차원의 좌표가 패딩 영역(원본 데이터가 없는 곳)인지 판단합니다.
-    if (coord < params.pad_before[i] || coord >= params.pad_before[i] + params.in_shape[i]) {
-      // 변수: in_bounds 갱신
-      // 역할: 영역 바깥이므로 in_bounds를 false로 변경하고 루프를 탈출합니다.
+
+    let pad_b = get_pad_before(i);
+    let in_s = get_in_shape(i);
+    if (coord < pad_b || coord >= pad_b + in_s) {
       in_bounds = false;
       break;
     }
-    
-    // 변수: in_coord
-    // 역할: 출력 텐서 좌표에서 앞부분 패딩(pad_before)을 빼서 원본 텐서 기준의 순수 좌표를 구합니다.
-    let in_coord = coord - params.pad_before[i];
-    
-    // 변수: in_idx 누적
-    // 역할: 구한 원본 좌표에 해당 차원의 보폭(in_strides)을 곱하여 1D 원본 인덱스를 점진적으로 계산합니다.
-    in_idx = in_idx + in_coord * params.in_strides[i];
+
+    let in_coord = coord - pad_b;
+    in_idx = in_idx + in_coord * get_in_stride(i);
   }
 
-  // 조건문: 값 삽입 결정
-  // 역할: 구해진 플래그(in_bounds)를 바탕으로 배열에 원본 데이터를 쓸지, 패딩 값을 쓸지 분기합니다.
   if (in_bounds) {
-    // 변수 output 갱신 (원본)
-    // 역할: 출력 배열에 입력 배열의 데이터를 그대로 복사합니다.
     output[idx] = input[in_idx];
   } else {
-    // 변수 output 갱신 (패딩)
-    // 역할: 출력 배열에 미리 설정해 둔 패딩 상수 값(pad_val)을 삽입합니다.
     output[idx] = params.pad_val;
   }
 }
@@ -2952,54 +2945,83 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
  * - 2026-08-12 12:23:09 +0900: Docs: Build Apache-style docs and unify tests
  */
 const GATHER_WGSL = `
-/**
- * 이 구조체(Params)는 gather 연산에 필요한 형태(shape), 차원(stride), 대상 차원(dim) 정보를 담고 있습니다.
- * 다차원 텐서 인덱싱을 1차원 메모리에서 올바르게 계산하기 위한 정보를 제공하기 위해 존재합니다.
- */
 struct Params {
-  num_elements: u32, // 출력 텐서의 총 원소 개수입니다.
-  dim: u32, // 요소를 수집할(gather) 대상 차원(axis)의 인덱스입니다.
-  rank: u32, // 텐서의 차원 수 (랭크)입니다.
-  workgroups_x: u32, // 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수
-  x_strides: array<u32, 8>, // 원본 입력 텐서의 각 차원별 스트라이드(보폭)입니다.
-  out_strides: array<u32, 8>, // 출력 텐서의 각 차원별 스트라이드(보폭)입니다.
-  x_shape: array<u32, 8>, // 원본 입력 텐서의 모양(각 차원의 크기)입니다.
+  num_elements: u32,
+  dim: u32,
+  rank: u32,
+  workgroups_x: u32,
+  x_stride0: u32, x_stride1: u32, x_stride2: u32, x_stride3: u32,
+  x_stride4: u32, x_stride5: u32, x_stride6: u32, x_stride7: u32,
+  out_stride0: u32, out_stride1: u32, out_stride2: u32, out_stride3: u32,
+  out_stride4: u32, out_stride5: u32, out_stride6: u32, out_stride7: u32,
+  x_shape0: u32, x_shape1: u32, x_shape2: u32, x_shape3: u32,
+  x_shape4: u32, x_shape5: u32, x_shape6: u32, x_shape7: u32,
 };
 
-@group(0) @binding(0) var<uniform> params: Params; // 메타데이터 및 형태 정보가 담긴 유니폼 데이터입니다.
-@group(0) @binding(1) var<storage, read> input: array<f32>; // 수집 대상이 되는 원본 데이터 배열입니다.
-@group(0) @binding(2) var<storage, read> index: array<f32>; // 수집할 인덱스를 지정하는 부동소수점 배열입니다.
-@group(0) @binding(3) var<storage, read_write> output: array<f32>; // 수집된 데이터가 쓰여질 결과 배열입니다.
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> input: array<f32>;
+@group(0) @binding(2) var<storage, read> index: array<f32>;
+@group(0) @binding(3) var<storage, read_write> output: array<f32>;
 
-/**
- * main 함수는 다차원 텐서에서 지정된 축(dim)을 기준으로 index 배열에 명시된 위치의 값들을 가져와 출력 텐서를 생성합니다.
- * PyTorch/NumPy의 gather 연산을 GPU에서 병렬 처리하기 위해 존재하며, 각 스레드는 출력 배열의 한 요소에 대응합니다.
- */
+fn get_out_stride(i: u32) -> u32 {
+  switch (i) {
+    case 0u: { return params.out_stride0; }
+    case 1u: { return params.out_stride1; }
+    case 2u: { return params.out_stride2; }
+    case 3u: { return params.out_stride3; }
+    case 4u: { return params.out_stride4; }
+    case 5u: { return params.out_stride5; }
+    case 6u: { return params.out_stride6; }
+    default: { return params.out_stride7; }
+  }
+}
+
+fn get_x_stride(i: u32) -> u32 {
+  switch (i) {
+    case 0u: { return params.x_stride0; }
+    case 1u: { return params.x_stride1; }
+    case 2u: { return params.x_stride2; }
+    case 3u: { return params.x_stride3; }
+    case 4u: { return params.x_stride4; }
+    case 5u: { return params.x_stride5; }
+    case 6u: { return params.x_stride6; }
+    default: { return params.x_stride7; }
+  }
+}
+
+fn get_x_shape(i: u32) -> u32 {
+  switch (i) {
+    case 0u: { return params.x_shape0; }
+    case 1u: { return params.x_shape1; }
+    case 2u: { return params.x_shape2; }
+    case 3u: { return params.x_shape3; }
+    case 4u: { return params.x_shape4; }
+    case 5u: { return params.x_shape5; }
+    case 6u: { return params.x_shape6; }
+    default: { return params.x_shape7; }
+  }
+}
+
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  let idx = global_id.x + global_id.y * params.workgroups_x * 64u; // 2D 디스패치 선형 인덱스 복원
-  
-  // 현재 처리할 인덱스가 전체 요소 수를 초과하면 실행을 중단합니다.
+  let idx = global_id.x + global_id.y * params.workgroups_x * 64u;
   if (idx >= params.num_elements) { return; }
 
-  var temp = idx; // 다차원 좌표를 계산하기 위해 인덱스를 임시 변수에 복사합니다.
-  var in_idx = 0u; // 입력 텐서에서 실제 참조해야 할 1D 메모리 인덱스를 누적할 변수입니다.
+  var temp = idx;
+  var in_idx = 0u;
 
-  // 출력 텐서의 각 차원(0부터 rank-1까지)에 대해 루프를 돕니다.
-  // 이 루프는 출력 텐서의 1D 인덱스(idx)를 다차원 좌표로 변환하고, 이를 다시 입력 텐서의 1D 인덱스(in_idx)로 매핑합니다.
   for (var i = 0u; i < params.rank; i = i + 1u) {
-    let out_stride = max(params.out_strides[i], 1u);
-    let coord = temp / out_stride; // 현재 차원 i에서의 다차원 좌표 값입니다.
-    temp = temp % out_stride; // 다음 하위 차원 좌표 계산을 위해 나머지를 구합니다.
+    let out_stride = max(get_out_stride(i), 1u);
+    let coord = temp / out_stride;
+    temp = temp % out_stride;
     
-    // 현재 차원이 수집 대상 차원(dim)인 경우, 계산된 좌표 대신 index 배열에서 값을 읽어옵니다.
     if (i == params.dim) {
       let raw_val = index[idx];
       if (raw_val != raw_val) {
         output[idx] = 0.0;
         return;
       }
-      let dim_size = i32(params.x_shape[i]);
+      let dim_size = i32(get_x_shape(i));
       var signed_idx = i32(round(raw_val));
       if (signed_idx < 0) {
         signed_idx = signed_idx + dim_size;
@@ -3009,14 +3031,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
       }
       let valid_idx = u32(signed_idx);
-      in_idx = in_idx + valid_idx * params.x_strides[i];
+      in_idx = in_idx + valid_idx * get_x_stride(i);
     } else {
-      // 수집 대상 차원이 아닌 경우, 출력 텐서와 동일한 좌표를 유지합니다.
-      in_idx = in_idx + coord * params.x_strides[i]; // 동일한 좌표에 원본 텐서의 해당 차원 스트라이드를 곱해 누적합니다.
+      in_idx = in_idx + coord * get_x_stride(i);
     }
   }
 
-  // 최종적으로 계산된 입력 텐서 인덱스(in_idx)의 값을 읽어 출력 텐서의 현재 인덱스(idx)에 저장합니다.
   output[idx] = input[in_idx];
 }
 `;
@@ -3027,115 +3047,96 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
  * - 2026-08-12T12:23:09+09:00: Docs: Build Apache-style docs and unify tests
  */
 const SCATTER_WGSL = `
-// 구조체: Params
-// 역할 (WHAT): 스캐터(Scatter) 연산에 필요한 차원, 보폭 및 타겟 축 정보를 저장하는 구조체입니다.
-// 목적 (WHY): 입력 데이터 텐서와 인덱스 텐서를 조합하여 출력 텐서의 어느 위치에 값을 기록할지 결정하기 위함입니다.
-// 동작 방식 (HOW): 각 차원에 대한 크기(rank), 흩뿌릴 차원(dim), 인덱스/입력의 보폭 정보를 읽어와 좌표를 계산합니다.
 struct Params {
-  // 변수: num_elements
-  // 역할: 처리할 입력 요소들의 전체 개수
   num_elements: u32,
-  // 변수: dim
-  // 역할: 인덱스 값으로 대체되어 흩뿌려질 대상 차원 축
   dim: u32,
-  // 변수: rank
-  // 역할: 텐서가 갖는 전체 차원 수
   rank: u32,
-  // 변수: workgroups_x
-  // 역할: 2D 디스패치 선형 인덱스 복원을 위한 X축 워크그룹 수
   workgroups_x: u32,
-  // 변수: x_strides
-  // 역할: 출력 배열(입력과 동일한 형상을 가지는 베이스)의 각 차원별 메모리 보폭 배열
-  x_strides: array<u32, 8>,
-  // 변수: idx_strides
-  // 역할: 인덱스 텐서의 각 차원별 메모리 보폭 배열
-  idx_strides: array<u32, 8>,
-  // 변수: x_shape
-  // 역할: 출력 텐서의 각 차원별 크기 배열 (인덱스 바운드 검사용)
-  x_shape: array<u32, 8>,
+  x_stride0: u32, x_stride1: u32, x_stride2: u32, x_stride3: u32,
+  x_stride4: u32, x_stride5: u32, x_stride6: u32, x_stride7: u32,
+  idx_stride0: u32, idx_stride1: u32, idx_stride2: u32, idx_stride3: u32,
+  idx_stride4: u32, idx_stride5: u32, idx_stride6: u32, idx_stride7: u32,
+  x_shape0: u32, x_shape1: u32, x_shape2: u32, x_shape3: u32,
+  x_shape4: u32, x_shape5: u32, x_shape6: u32, x_shape7: u32,
 };
 
-// 변수: params
-// 역할: 스캐터 연산의 메타데이터를 담은 유니폼 버퍼
 @group(0) @binding(0) var<uniform> params: Params;
-
-// 변수: index
-// 역할: 흩뿌릴 위치 정보를 가지고 있는 인덱스 배열(읽기 전용 부동소수점 스토리지 버퍼)
 @group(0) @binding(1) var<storage, read> index: array<f32>;
-
-// 변수: src
-// 역할: 출력 배열에 복사할 원본 값을 가지고 있는 소스 배열(읽기 전용 스토리지 버퍼)
 @group(0) @binding(2) var<storage, read> src: array<f32>;
-
-// 변수: output
-// 역할: 원본 값들이 인덱스 배열의 지시에 따라 흩뿌려진 최종 결과물이 저장될 스토리지 버퍼
 @group(0) @binding(3) var<storage, read_write> output: array<f32>;
 
-// 함수: main
-// 역할 (WHAT): 주어진 인덱스 텐서의 값에 따라 소스 데이터를 출력 텐서의 특정 위치에 저장합니다.
-// 목적 (WHY): 특정 차원의 값을 인덱스로 치환하여(Scatter-Elements) 텐서 내 원하는 위치에 데이터를 쓰기 위함입니다.
-// 동작 방식 (HOW): 각 스레드는 1차원 ID를 다차원 좌표로 변환하고, 지정된 축(dim)에 대해서만 원래 좌표 대신 인덱스 텐서의 값을 좌표로 사용하여 출력 위치를 정합니다.
+fn get_idx_stride(i: u32) -> u32 {
+  switch (i) {
+    case 0u: { return params.idx_stride0; }
+    case 1u: { return params.idx_stride1; }
+    case 2u: { return params.idx_stride2; }
+    case 3u: { return params.idx_stride3; }
+    case 4u: { return params.idx_stride4; }
+    case 5u: { return params.idx_stride5; }
+    case 6u: { return params.idx_stride6; }
+    default: { return params.idx_stride7; }
+  }
+}
+
+fn get_x_stride(i: u32) -> u32 {
+  switch (i) {
+    case 0u: { return params.x_stride0; }
+    case 1u: { return params.x_stride1; }
+    case 2u: { return params.x_stride2; }
+    case 3u: { return params.x_stride3; }
+    case 4u: { return params.x_stride4; }
+    case 5u: { return params.x_stride5; }
+    case 6u: { return params.x_stride6; }
+    default: { return params.x_stride7; }
+  }
+}
+
+fn get_x_shape(i: u32) -> u32 {
+  switch (i) {
+    case 0u: { return params.x_shape0; }
+    case 1u: { return params.x_shape1; }
+    case 2u: { return params.x_shape2; }
+    case 3u: { return params.x_shape3; }
+    case 4u: { return params.x_shape4; }
+    case 5u: { return params.x_shape5; }
+    case 6u: { return params.x_shape6; }
+    default: { return params.x_shape7; }
+  }
+}
+
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-  // 변수: idx
-  // 역할: 소스 데이터와 인덱스 데이터의 1차원 메모리 인덱스
   let idx = global_id.x + global_id.y * params.workgroups_x * 64u;
-  
-  // 조건문: 데이터 경계 검사
-  // 역할: 할당된 스레드의 인덱스가 전체 크(num_elements)를 초과하는지 검사합니다.
   if (idx >= params.num_elements) { return; }
 
-  // 변수: temp
-  // 역할: 다차원 좌표로 분리해 나가기 위해 남은 인덱스 수치를 보관하는 임시 변수
   var temp = idx;
-  // 변수: out_idx
-  // 역할: 최종적으로 계산된 출력 배열의 1차원 메모리 인덱스를 누적할 변수
   var out_idx = 0u;
 
-  // 반복문: for 루프 (모든 차원 순회)
-  // 역할 (WHAT): 최상위 차원부터 0번째 차원까지 각 차원의 좌표를 구하고, 이를 이용해 출력 인덱스를 계산합니다.
-  // 목적 (WHY): 1차원 인덱스를 다시 N차원 좌표로 풀고, 특정 차원(dim)에 대해서만 값을 교체하기 위해 필요합니다.
-  // 동작 방식 (HOW): i가 dim과 같을 경우, 계산된 논리적 좌표 대신 index 배열에 있는 값을 가져와서 보폭을 곱하고, 그 외의 경우 원래 좌표에 보폭을 곱합니다.
   for (var i = 0u; i < params.rank; i = i + 1u) {
-    // 변수: coord
-    // 역할: 현재 차원(i)에 해당하는 인덱스 텐서 기준의 다차원 논리 좌표
-    let idx_stride = max(params.idx_strides[i], 1u);
+    let idx_stride = max(get_idx_stride(i), 1u);
     let coord = temp / idx_stride;
-    
-    // 변수: temp 갱신
-    // 역할: 다음 차원 계산을 위해 나머지 값을 임시 변수에 업데이트합니다.
     temp = temp % idx_stride;
     
-    // 조건문: 타겟 차원(dim) 여부 검사
-    // 역할: 현재 처리 중인 차원이 인덱스 값으로 대체할 타겟 차원인지 판단합니다.
     if (i == params.dim) {
       let raw_val = index[idx];
-      // NaN index skip (NaN != NaN)
       if (raw_val != raw_val) {
         return;
       }
-      let dim_size = i32(params.x_shape[i]);
+      let dim_size = i32(get_x_shape(i));
       var signed_idx = i32(round(raw_val));
       if (signed_idx < 0) {
         signed_idx = signed_idx + dim_size;
       }
-      // OOB check: skip execution if index is out of bounds
       if (signed_idx < 0 || signed_idx >= dim_size) {
         return;
       }
       let valid_idx = u32(signed_idx);
-      out_idx = out_idx + valid_idx * params.x_strides[i];
+      out_idx = out_idx + valid_idx * get_x_stride(i);
     } else {
-      // 변수: out_idx 누적 (일반 축)
-      // 역할: 원래 논리적 좌표(coord)에 출력 보폭(x_strides)을 곱해 더합니다.
-      out_idx = out_idx + coord * params.x_strides[i];
+      out_idx = out_idx + coord * get_x_stride(i);
     }
   }
 
-  // 주석: 엄밀한 원자성(Atomic)은 제공하지 않지만 인덱스가 겹치지 않는 단순 스캐터의 경우 정상 동작함.
-  // 변수 output 갱신
-  // 역할: 치환이 완료되어 도출된 출력 인덱스 위치(out_idx)에 소스 배열의 데이터(src[idx])를 저장합니다.
-  // Not strictly atomic, but for simple scatter where indices are unique it's fine.
   output[out_idx] = src[idx];
 }
 `;
@@ -3252,11 +3253,15 @@ struct Params {
   size: u32,
   workgroups_x: u32,
   rank: u32,
-  pad: u32,
-  d_out: array<u32, 8>,
-  eff_s_cond: array<u32, 8>,
-  eff_s_x: array<u32, 8>,
-  eff_s_y: array<u32, 8>,
+  pad0: u32,
+  dim0: u32, dim1: u32, dim2: u32, dim3: u32,
+  dim4: u32, dim5: u32, dim6: u32, dim7: u32,
+  stride_cond0: u32, stride_cond1: u32, stride_cond2: u32, stride_cond3: u32,
+  stride_cond4: u32, stride_cond5: u32, stride_cond6: u32, stride_cond7: u32,
+  stride_x0: u32, stride_x1: u32, stride_x2: u32, stride_x3: u32,
+  stride_x4: u32, stride_x5: u32, stride_x6: u32, stride_x7: u32,
+  stride_y0: u32, stride_y1: u32, stride_y2: u32, stride_y3: u32,
+  stride_y4: u32, stride_y5: u32, stride_y6: u32, stride_y7: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -3276,20 +3281,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   }
 
   var temp = idx;
-  var cond_idx = 0u;
-  var x_idx = 0u;
-  var y_idx = 0u;
+  let c7 = temp % params.dim7; temp = temp / params.dim7;
+  let c6 = temp % params.dim6; temp = temp / params.dim6;
+  let c5 = temp % params.dim5; temp = temp / params.dim5;
+  let c4 = temp % params.dim4; temp = temp / params.dim4;
+  let c3 = temp % params.dim3; temp = temp / params.dim3;
+  let c2 = temp % params.dim2; temp = temp / params.dim2;
+  let c1 = temp % params.dim1; temp = temp / params.dim1;
+  let c0 = temp;
 
-  for (var i: i32 = 7; i >= 0; i = i - 1) {
-    let u_i = u32(i);
-    let dim_size = params.d_out[u_i];
-    let coord = temp % dim_size;
-    temp = temp / dim_size;
-
-    cond_idx = cond_idx + coord * params.eff_s_cond[u_i];
-    x_idx = x_idx + coord * params.eff_s_x[u_i];
-    y_idx = y_idx + coord * params.eff_s_y[u_i];
-  }
+  let cond_idx = c0 * params.stride_cond0 + c1 * params.stride_cond1 + c2 * params.stride_cond2 + c3 * params.stride_cond3 +
+                 c4 * params.stride_cond4 + c5 * params.stride_cond5 + c6 * params.stride_cond6 + c7 * params.stride_cond7;
+  let x_idx    = c0 * params.stride_x0 + c1 * params.stride_x1 + c2 * params.stride_x2 + c3 * params.stride_x3 +
+                 c4 * params.stride_x4 + c5 * params.stride_x5 + c6 * params.stride_x6 + c7 * params.stride_x7;
+  let y_idx    = c0 * params.stride_y0 + c1 * params.stride_y1 + c2 * params.stride_y2 + c3 * params.stride_y3 +
+                 c4 * params.stride_y4 + c5 * params.stride_y5 + c6 * params.stride_y6 + c7 * params.stride_y7;
 
   if (cond[cond_idx] != 0.0) {
     out[idx] = x[x_idx];
@@ -6438,6 +6444,84 @@ const _globalUniformPool = new UniformBufferPool();
 registerTransientPool(() => _globalUniformPool.clear(), (device) => _globalUniformPool.retireSubmitted(device));
 
 /**
+ * Native WebGPU Slice Compute Kernel
+ * Computes arbitrary multi-dimensional slice views directly on GPU VRAM.
+ */
+const SLICE_WGSL = `
+struct Params {
+  num_elements: u32,
+  rank: u32,
+  workgroups_x: u32,
+  pad: u32,
+  starts: array<u32, 8>,
+  steps: array<u32, 8>,
+  in_strides: array<u32, 8>,
+  out_strides: array<u32, 8>,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> input: array<f32>;
+@group(0) @binding(2) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let idx = global_id.x + global_id.y * params.workgroups_x * 64u;
+  if (idx >= params.num_elements) { return; }
+
+  var temp = idx;
+  var in_idx = 0u;
+  for (var i = 0u; i < params.rank; i = i + 1u) {
+    let out_stride = max(params.out_strides[i], 1u);
+    let coord = temp / out_stride;
+    temp = temp % out_stride;
+
+    let in_coord = params.starts[i] + coord * params.steps[i];
+    in_idx = in_idx + in_coord * params.in_strides[i];
+  }
+  output[idx] = input[in_idx];
+}
+`;
+
+/**
+ * Native WebGPU Slice Backward Compute Kernel
+ * Accumulates gradients from sliced output back into the full input gradient tensor.
+ */
+const SLICE_BACKWARD_WGSL = `
+struct Params {
+  num_elements: u32,
+  rank: u32,
+  workgroups_x: u32,
+  pad: u32,
+  starts: array<u32, 8>,
+  steps: array<u32, 8>,
+  in_strides: array<u32, 8>,
+  out_strides: array<u32, 8>,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> grad_output: array<f32>;
+@group(0) @binding(2) var<storage, read_write> grad_x: array<f32>;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+  let idx = global_id.x + global_id.y * params.workgroups_x * 64u;
+  if (idx >= params.num_elements) { return; }
+
+  var temp = idx;
+  var in_idx = 0u;
+  for (var i = 0u; i < params.rank; i = i + 1u) {
+    let out_stride = max(params.out_strides[i], 1u);
+    let coord = temp / out_stride;
+    temp = temp % out_stride;
+
+    let in_coord = params.starts[i] + coord * params.steps[i];
+    in_idx = in_idx + in_coord * params.in_strides[i];
+  }
+  grad_x[in_idx] = grad_output[idx];
+}
+`;
+
+/**
  * Created: 2026-08-12T12:14:52+09:00
  * Modified:
  *   - 2026-08-12T12:59:35+09:00: Feat: Introduce v3.0 features (CNN, Pooling, Dropout, Serialization)
@@ -6462,7 +6546,7 @@ const ALLOWED_OPS = new Set([
     'upload', 'load', 'matmul', 'matmul_tiled', 'batched_matmul', 'relu', 'add', 'mul', 'transpose', 'relu_backward',
     'sub', 'neg', 'div', 'exp', 'log', 'sigmoid', 'tanh', 'sigmoid_backward', 'tanh_backward',
     'fill', 'sum', 'max', 'sum_axis', 'max_axis', 'max_axis_backward', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
-    'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape',
+    'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape', 'slice', 'slice_backward',
     'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant', 'embedding', 'embedding_backward',
     'adam_step', 'sgd_momentum_step', 'sparse_cross_entropy', 'sparse_cross_entropy_backward'
 ]);
@@ -6497,6 +6581,8 @@ function getUniformParamsByteLength(op) {
     switch (op) {
         case 'pad':
         case 'where':
+        case 'slice':
+        case 'slice_backward':
             return 144;
         case 'gather':
         case 'scatter':
@@ -7582,6 +7668,25 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 dispatchX = dx;
                 dispatchY = dy;
                 dispatchZ = 1;
+                device.queue.writeBuffer(paramsBuffer, 0, p);
+            }
+            else if (inst.op === 'slice' || inst.op === 'slice_backward') {
+                wgslCode = inst.op === 'slice' ? SLICE_WGSL : SLICE_BACKWARD_WGSL;
+                const numElements = inst.op === 'slice' ? (byteLength / 4) : ((idToByteLength[inst.in[0]] ?? byteLength) / 4);
+                const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numElements, 64);
+                dispatchX = dx;
+                dispatchY = dy;
+                dispatchZ = 1;
+                const p = new Uint32Array(36);
+                p[0] = numElements;
+                p[1] = inst.params?.[0] ?? 1; // rank
+                p[2] = dx; // workgroups_x
+                p[3] = 0;
+                if (inst.params) {
+                    for (let i = 0; i < 32 && (i + 1) < inst.params.length; i++) {
+                        p[4 + i] = inst.params[1 + i];
+                    }
+                }
                 device.queue.writeBuffer(paramsBuffer, 0, p);
             }
             else if (inst.op === 'adam_step') {

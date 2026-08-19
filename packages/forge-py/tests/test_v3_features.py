@@ -420,6 +420,30 @@ class TestV3Features(unittest.TestCase):
         insts, _ = gb.compile()
         self.assertIn("sparse_cross_entropy_backward", insts)
 
+    def test_gpu_slicing_forward_and_backward(self):
+        from forge.graph import GraphBuilder
+        # Create a 3D GPU tensor [1, 5, 2]
+        x = at.tensor(np.ones((1, 5, 2), dtype=np.float32), device="gpu", requires_grad=True)
+        
+        # Test 1: Slicing last token [:, -1, :]
+        sliced = x[:, -1, :]
+        self.assertEqual(sliced.shape, (1, 2))
+        self.assertEqual(sliced.device, "gpu")
+        self.assertEqual(sliced._op, "slice")
+        
+        # Test 2: Backward pass autograd propagation
+        sliced.backward()
+        self.assertIsNotNone(x.grad)
+        self.assertEqual(x.grad.shape, (1, 5, 2))
+        self.assertEqual(x.grad.device, "gpu")
+        self.assertEqual(x.grad._op, "slice_backward")
+
+        # Test 3: Graph compilation verification
+        gb = GraphBuilder()
+        gb.add_tensor(sliced)
+        insts, _ = gb.compile()
+        self.assertIn("slice", insts)
+
 if __name__ == '__main__':
     unittest.main()
 

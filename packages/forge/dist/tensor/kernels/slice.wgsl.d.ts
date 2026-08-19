@@ -1,0 +1,5 @@
+/**
+ * Native WebGPU Slice Compute Kernel
+ * Computes arbitrary multi-dimensional slice views directly on GPU VRAM.
+ */
+export declare const SLICE_WGSL = "\nstruct Params {\n  num_elements: u32,\n  rank: u32,\n  workgroups_x: u32,\n  pad: u32,\n  starts: array<u32, 8>,\n  steps: array<u32, 8>,\n  in_strides: array<u32, 8>,\n  out_strides: array<u32, 8>,\n};\n\n@group(0) @binding(0) var<uniform> params: Params;\n@group(0) @binding(1) var<storage, read> input: array<f32>;\n@group(0) @binding(2) var<storage, read_write> output: array<f32>;\n\n@compute @workgroup_size(64)\nfn main(@builtin(global_invocation_id) global_id: vec3<u32>) {\n  let idx = global_id.x + global_id.y * params.workgroups_x * 64u;\n  if (idx >= params.num_elements) { return; }\n\n  var temp = idx;\n  var in_idx = 0u;\n  for (var i = 0u; i < params.rank; i = i + 1u) {\n    let out_stride = max(params.out_strides[i], 1u);\n    let coord = temp / out_stride;\n    temp = temp % out_stride;\n\n    let in_coord = params.starts[i] + coord * params.steps[i];\n    in_idx = in_idx + in_coord * params.in_strides[i];\n  }\n  output[idx] = input[in_idx];\n}\n";

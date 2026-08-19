@@ -965,12 +965,64 @@ class TanhFunction(Function):
 def tanh_op(x): return TanhFunction.apply(x)
 
 
+def _resolve_reshape_shape(current_shape: tuple, new_shape: Any) -> tuple:
+    """
+    WHAT: 입력된 reshape 차원에 -1이 포함되어 있을 때 전체 원소 수를 기반으로 실제 차원 크기를 역산합니다.
+    WHY: PyTorch/NumPy의 reshape((-1, 10)) 관례를 CPU뿐만 아니라 GPU에서도 100% 동일하게 지원하기 위함입니다.
+    HOW: -1이 하나만 존재하는지 검사하고, 전체 원소 수를 나머지 차원들의 곱으로 나누어 치환합니다.
+    """
+    if isinstance(new_shape, int):
+        new_shape = (new_shape,)
+    elif isinstance(new_shape, list):
+        new_shape = tuple(new_shape)
+    elif not isinstance(new_shape, tuple):
+        raise AMEVAForgeShapeError(f"new_shape must be int, list, or tuple, got {type(new_shape).__name__}")
+
+    total_elements = 1
+    for s in current_shape:
+        total_elements *= s
+
+    neg_count = new_shape.count(-1)
+    if neg_count > 1:
+        raise AMEVAForgeShapeError(f"Only one dimension can be -1, got {neg_count} in shape {new_shape}")
+
+    if neg_count == 1:
+        other_elements = 1
+        neg_idx = new_shape.index(-1)
+        for i, d in enumerate(new_shape):
+            if i != neg_idx:
+                if not isinstance(d, int) or d <= 0:
+                    raise AMEVAForgeShapeError(f"Invalid dimension size {d} in reshape {new_shape}")
+                other_elements *= d
+        if total_elements % other_elements != 0:
+            raise AMEVAForgeShapeError(
+                f"Cannot reshape tensor of total size {total_elements} into shape {new_shape}"
+            )
+        inferred = total_elements // other_elements
+        resolved = list(new_shape)
+        resolved[neg_idx] = inferred
+        return tuple(resolved)
+
+    # Check non-negative & total size match
+    req_elements = 1
+    for d in new_shape:
+        if not isinstance(d, int) or d < 0:
+            raise AMEVAForgeShapeError(f"Invalid dimension size {d} in reshape {new_shape}")
+        req_elements *= d
+    if total_elements != req_elements:
+        raise AMEVAForgeShapeError(
+            f"Cannot reshape tensor of total size {total_elements} into shape {new_shape}"
+        )
+    return new_shape
+
+
 # WHAT: 텐서의 모양(Shape)을 변경하는 연산 클래스입니다.
 # WHY: 메모리 내 데이터 순서를 유지한 채 차원 구조만 바꿔 호환성을 맞추기 위함입니다.
 # HOW: numpy reshape를 사용하거나 GPU의 경우 메타데이터 갱신 명령(op='reshape')을 보냅니다.
 class ReshapeFunction(Function):
     @staticmethod
     def forward(ctx, x, new_shape):
+        resolved_shape = _resolve_reshape_shape(x.shape, new_shape)
         # WHAT: 원래 차원 형태를 저장합니다.
         # WHY: 역전파 시 그래디언트를 원래 모양으로 되돌려 보내야 하기 때문입니다.
         # HOW: 컨텍스트 속성에 x.shape를 기록합니다.
@@ -979,11 +1031,11 @@ class ReshapeFunction(Function):
             # WHAT: GPU 기반 리쉐이프(Reshape) 처리입니다.
             # WHY: VRAM 내 데이터 이동 없이 메타데이터만 갱신해 비용을 최소화하기 위함입니다.
             # HOW: op_params로 새로운 모양을 전달합니다.
-            return Tensor(shape=new_shape, dtype=x.dtype, device='gpu', op='reshape', parents=(x,),
-                         op_params=list(new_shape))
+            return Tensor(shape=resolved_shape, dtype=x.dtype, device='gpu', op='reshape', parents=(x,),
+                         op_params=list(resolved_shape))
         else:
-            data = _require_cpu_data(x, 'x').reshape(new_shape)
-            return Tensor(shape=new_shape, dtype='float32', device='cpu', data=data)
+            data = _require_cpu_data(x, 'x').reshape(resolved_shape)
+            return Tensor(shape=resolved_shape, dtype='float32', device='cpu', data=data)
     
     @staticmethod
     def backward(ctx, grad_output):
@@ -998,6 +1050,8 @@ class ReshapeFunction(Function):
 def reshape(x, new_shape):
     if isinstance(new_shape, list):
         new_shape = tuple(new_shape)
+    elif isinstance(new_shape, int):
+        new_shape = (new_shape,)
     return ReshapeFunction.apply(x, new_shape)
 
 
@@ -1731,8 +1785,6 @@ class SliceFunction(Function):
         import numpy as np
         
         # WHAT: 슬라이싱 키(key)를 복사하여 컨텍스트에 저장합니다.
-        # WHY: 역전파 시 정확히 같은 위치에 미분값을 더해주어야 하기 때문입니다.
-        # HOW: key의 타입(배열, 튜플 등)에 따라 깊은 복사를 수행합니다.
         if isinstance(key, np.ndarray):
             ctx.key = key.copy()
         elif isinstance(key, tuple):
@@ -1741,43 +1793,103 @@ class SliceFunction(Function):
             ctx.key = key
             
         if x.device == 'gpu':
-            # WHAT: GPU 기반 슬라이싱 에러 처리입니다.
-            # WHY: 현재 GPU 커널에는 복잡한 다차원 슬라이싱 로직이 포팅되어 있지 않기 때문입니다.
-            # HOW: AMEVAForgeDeviceError를 발생시킵니다.
-            raise AMEVAForgeDeviceError(
-                "GPU slicing is not implemented yet. "
-                "A native GPU slicing kernel is required."
+            # --- Native WebGPU Multi-Dimensional Slicing ---
+            raw_keys = key if isinstance(key, tuple) else (key,)
+            # Expand Ellipsis (...)
+            if Ellipsis in raw_keys:
+                e_idx = raw_keys.index(Ellipsis)
+                num_missing = len(x.shape) - (len(raw_keys) - 1)
+                expanded = list(raw_keys[:e_idx]) + [slice(None)] * max(0, num_missing) + list(raw_keys[e_idx+1:])
+                raw_keys = tuple(expanded)
+            
+            rank = len(x.shape)
+            starts = []
+            steps = []
+            full_out_shape = []
+            is_squeezed = []
+            
+            for i in range(rank):
+                dim_size = x.shape[i]
+                if i < len(raw_keys):
+                    k = raw_keys[i]
+                    if isinstance(k, int):
+                        idx = k if k >= 0 else k + dim_size
+                        if idx < 0 or idx >= dim_size:
+                            raise AMEVAForgeShapeError(f"Index {k} is out of bounds for axis {i} with size {dim_size}")
+                        starts.append(idx)
+                        steps.append(1)
+                        full_out_shape.append(1)
+                        is_squeezed.append(True)
+                    elif isinstance(k, slice):
+                        start, stop, step = k.indices(dim_size)
+                        if step == 0:
+                            raise ValueError("slice step cannot be zero")
+                        count = max(0, (stop - start + (step - 1 if step > 0 else step + 1)) // step)
+                        starts.append(start)
+                        steps.append(step)
+                        full_out_shape.append(count)
+                        is_squeezed.append(False)
+                    else:
+                        raise AMEVAForgeShapeError(f"Unsupported key element type: {type(k).__name__}")
+                else:
+                    starts.append(0)
+                    steps.append(1)
+                    full_out_shape.append(dim_size)
+                    is_squeezed.append(False)
+
+            squeezed_shape = tuple(d for d, sq in zip(full_out_shape, is_squeezed) if not sq)
+
+            # Calculate in_strides and out_strides
+            in_strides = [1] * rank
+            for i in range(rank - 2, -1, -1):
+                in_strides[i] = in_strides[i + 1] * x.shape[i + 1]
+                
+            out_strides = [1] * rank
+            for i in range(rank - 2, -1, -1):
+                out_strides[i] = out_strides[i + 1] * full_out_shape[i + 1]
+
+            starts_8 = starts + [0] * (8 - rank)
+            steps_8 = steps + [0] * (8 - rank)
+            in_strides_8 = in_strides + [0] * (8 - rank)
+            out_strides_8 = out_strides + [0] * (8 - rank)
+
+            gpu_op_params = [rank] + starts_8 + steps_8 + in_strides_8 + out_strides_8
+            ctx.gpu_op_params = gpu_op_params
+
+            return Tensor(
+                shape=squeezed_shape,
+                dtype=x.dtype,
+                device='gpu',
+                op='slice',
+                parents=(x,),
+                op_params=gpu_op_params,
+                requires_grad=x.requires_grad
             )
             
         data = _require_cpu_data(x, "x")
-        # WHAT: 데이터를 슬라이싱합니다.
-        # WHY: 사용자가 요청한 범위의 배열을 얻기 위함입니다.
-        # HOW: numpy 인덱싱을 그대로 활용합니다.
         res = data[key]
         res_array = np.asarray(res, dtype=np.float32)
-        
         return Tensor(shape=res_array.shape, dtype=x.dtype, device='cpu', data=res_array)
         
     @staticmethod
     def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor]:
         x, = ctx.saved_tensors
         if x.device == 'gpu':
-            raise AMEVAForgeDeviceError(
-                "GPU slicing backward is not implemented yet. "
-                "A native GPU scatter-add kernel is required."
+            grad_x = Tensor(
+                shape=x.shape,
+                dtype=x.dtype,
+                device='gpu',
+                op='slice_backward',
+                parents=(grad_output,),
+                op_params=ctx.gpu_op_params
             )
+            return (grad_x,)
         
         import numpy as np
-        # WHAT: 원본 크기와 동일한 영(0) 텐서를 생성합니다.
-        # WHY: 역전파된 부분 기울기(grad_data)를 원래 슬라이싱 위치에만 채워넣기 위함입니다.
-        # HOW: np.zeros를 사용합니다.
         grad_x = np.zeros(x.shape, dtype=np.float32)
         grad_data = _require_cpu_data(grad_output, "grad_output")
         
         try:
-            # WHAT: 역전파된 기울기를 누적합(Scatter-Add) 방식으로 반영합니다.
-            # WHY: 슬라이싱된 뷰가 중복된 인덱스를 가질 경우(예: 팬시 인덱싱) 일반 대입(grad_x[key] = grad_data)을 쓰면 덮어씌워지기 때문입니다.
-            # HOW: np.add.at을 사용하여 값을 차곡차곡 더합니다.
             np.add.at(grad_x, ctx.key, grad_data)
         except (IndexError, TypeError, ValueError) as exc:
             raise AMEVAForgeShapeError(f"Slice backward failed for key {ctx.key!r}: {exc}") from exc

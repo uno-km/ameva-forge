@@ -103,6 +103,8 @@ let ALLOWED_KERNEL_NAMES = new Set([
   "rmsnorm",
   "swiglu",
   "unpack_quant",
+  "slice",
+  "slice_backward",
 ]);
 
 /**

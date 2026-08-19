@@ -77,6 +77,8 @@ import { ADAM_STEP_WGSL } from "./kernels/adam_step.wgsl";
 import { SGD_MOMENTUM_STEP_WGSL } from "./kernels/sgd_momentum_step.wgsl";
 import { SPARSE_CROSS_ENTROPY_WGSL } from "./kernels/sparse_cross_entropy.wgsl";
 import { SPARSE_CROSS_ENTROPY_BACKWARD_WGSL } from "./kernels/sparse_cross_entropy_backward.wgsl";
+import { SLICE_WGSL } from "./kernels/slice.wgsl";
+import { SLICE_BACKWARD_WGSL } from "./kernels/slice_backward.wgsl";
 
 /** 
  * WHAT: 그래프 실행기가 처리할 수 있는 모든 허용된 오퍼레이션(op)의 집합입니다.
@@ -87,7 +89,7 @@ const ALLOWED_OPS = new Set([
   'upload', 'load', 'matmul', 'matmul_tiled', 'batched_matmul', 'relu', 'add', 'mul', 'transpose', 'relu_backward',
   'sub', 'neg', 'div', 'exp', 'log', 'sigmoid', 'tanh', 'sigmoid_backward', 'tanh_backward',
   'fill', 'sum', 'max', 'sum_axis', 'max_axis', 'max_axis_backward', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter', 'maxpool2d', 'avgpool2d',
-  'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape',
+  'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape', 'slice', 'slice_backward',
   'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant', 'embedding', 'embedding_backward',
   'adam_step', 'sgd_momentum_step', 'sparse_cross_entropy', 'sparse_cross_entropy_backward'
 ]);
@@ -139,6 +141,8 @@ export function getUniformParamsByteLength(op: string): number {
   switch (op) {
     case 'pad':
     case 'where':
+    case 'slice':
+    case 'slice_backward':
       return 144;
     case 'gather':
     case 'scatter':
@@ -1336,6 +1340,25 @@ async function _executeGraphCore(
         dispatchX = dx;
         dispatchY = dy;
         dispatchZ = 1;
+        device.queue.writeBuffer(paramsBuffer, 0, p);
+      } else if (inst.op === 'slice' || inst.op === 'slice_backward') {
+        wgslCode = inst.op === 'slice' ? SLICE_WGSL : SLICE_BACKWARD_WGSL;
+        const numElements = inst.op === 'slice' ? (byteLength / 4) : ((idToByteLength[inst.in![0]] ?? byteLength) / 4);
+        const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numElements, 64);
+        dispatchX = dx;
+        dispatchY = dy;
+        dispatchZ = 1;
+
+        const p = new Uint32Array(36);
+        p[0] = numElements;
+        p[1] = inst.params?.[0] ?? 1; // rank
+        p[2] = dx; // workgroups_x
+        p[3] = 0;
+        if (inst.params) {
+          for (let i = 0; i < 32 && (i + 1) < inst.params.length; i++) {
+            p[4 + i] = inst.params[1 + i];
+          }
+        }
         device.queue.writeBuffer(paramsBuffer, 0, p);
       } else if (inst.op === 'adam_step') {
         wgslCode = ADAM_STEP_WGSL;

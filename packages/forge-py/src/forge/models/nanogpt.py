@@ -155,8 +155,9 @@ class GPT(nn.Module):
             for _ in range(max_new_tokens):
                 inp = tensor([generated[-self.config.block_size:]], dtype="int32", device=device)
                 logits = self.forward(inp)
-                np_logits = await logits.numpy_async()
-                next_token = int(np_logits[0, -1, :].argmax())
+                last_token_logits = logits[0, -1, :]
+                np_logits = await last_token_logits.numpy_async()
+                next_token = int(np_logits.argmax())
                 generated.append(next_token)
             return generated
 
@@ -164,16 +165,18 @@ class GPT(nn.Module):
         # 1. Prefill Step
         inp = tensor([prompt_tokens], dtype="int32", device=device)
         logits, past_kvs = self.forward(inp, use_cache=True)
-        np_logits = await logits.numpy_async()
-        next_token = int(np_logits[0, -1, :].argmax())
+        last_token_logits = logits[0, -1, :]
+        np_logits = await last_token_logits.numpy_async()
+        next_token = int(np_logits.argmax())
         generated.append(next_token)
 
         # 2. Decode Steps
         for _ in range(1, max_new_tokens):
             inp = tensor([[next_token]], dtype="int32", device=device)
             logits, past_kvs = self.forward(inp, past_key_values=past_kvs, use_cache=True)
-            np_logits = await logits.numpy_async()
-            next_token = int(np_logits[0, -1, :].argmax())
+            last_token_logits = logits[0, -1, :]
+            np_logits = await last_token_logits.numpy_async()
+            next_token = int(np_logits.argmax())
             generated.append(next_token)
 
         return generated
