@@ -177,20 +177,31 @@ def flush_gc(force: bool = False) -> None:
 
 class _HandleCell:
     """
-    WHAT: 실제 핸들과 할당 바이트 크기를 감싸는 레퍼런스 셀 클래스입니다.
-    WHY: C-01 Fix: weakref.finalize 시점에 최신 핸들과 바이트 크기를 안전하게 참조하기 위함입니다.
-    HOW: 슬롯(__slots__)을 사용하여 메모리를 절약하고 속성을 단일화한 클래스를 정의합니다.
+    WHAT: 실제 핸들과 할당 바이트 크기를 감싸고 참조 카운트(Ref Count)를 관리하는 레퍼런스 셀 클래스입니다.
+    WHY: PyTorch c10::StorageImpl 표준을 채택하여, Tensor.detach()나 View 텐서들이 동일한 GPU 버퍼를 안전하게 공유하고,
+         모든 텐서 참조가 완전히 소멸될 때만 단 1회 WebGPU VRAM 버퍼를 해제하여 Use-After-Free와 Double Free를 원천 차단하기 위함입니다.
+    HOW: ref_count 정수를 관리하며, inc_ref()와 dec_ref()를 통해 수명주기를 추적합니다.
     """
-    __slots__ = ('handle', 'byte_length')
+    __slots__ = ('handle', 'byte_length', 'ref_count')
 
     def __init__(self, handle: Optional[str], byte_length: int = 0) -> None:
         """
         WHAT: HandleCell 객체의 생성자입니다.
-        WHY: 객체 생성 시 초기 핸들 값과 예상 바이트 크기를 저장하기 위해 필요합니다.
+        WHY: 객체 생성 시 초기 핸들 값, 예상 바이트 크기, 초기 참조 카운트(1)를 설정하기 위함입니다.
         HOW: 전달받은 인자들을 멤버 변수에 할당합니다.
         """
         self.handle = handle
         self.byte_length = byte_length
+        self.ref_count = 1
+
+    def inc_ref(self) -> None:
+        """참조 카운트를 1 증가시킵니다."""
+        self.ref_count += 1
+
+    def dec_ref(self) -> bool:
+        """참조 카운트를 1 감소시키며, 마지막 참조가 사라졌는지(<= 0) 반환합니다."""
+        self.ref_count -= 1
+        return self.ref_count <= 0
 
 
 class Tensor:
@@ -209,7 +220,8 @@ class Tensor:
         data: Optional[np.ndarray] = None,
         op: Optional[str] = None,
         parents: tuple = (),
-        op_params: Optional[list] = None
+        op_params: Optional[list] = None,
+        handle_cell: Optional['_HandleCell'] = None,
     ):
         """
         WHAT: 텐서 객체를 초기화하는 생성자입니다.
@@ -272,14 +284,17 @@ class Tensor:
 
         # --- 내부 상태 ---
         # WHAT: 실제 텐서 핸들(GPU 등)을 간접 참조하기 위한 래퍼 객체입니다.
-        # WHY: C-01: handle을 _HandleCell로 감싸 finalizer가 항상 최신 handle을 참조하도록 하기 위함입니다.
-        # HOW: _HandleCell 객체를 생성하여 할당합니다.
-        elem_count = 1
-        for d in shape:
-            elem_count *= max(d, 1)
-        dtype_bytes = 2 if dtype in ('float16', 'int16') else 4
-        byte_length = elem_count * dtype_bytes
-        self._handle_cell = _HandleCell(handle, byte_length)
+        # WHY: PyTorch c10::StorageImpl 패턴: handle을 _HandleCell로 감싸고 ref_count를 관리하여 안전한 View/Detach를 지원합니다.
+        # HOW: 전달받은 handle_cell이 있으면 재사용하고, 없으면 새로 생성합니다.
+        if handle_cell is not None:
+            self._handle_cell = handle_cell
+        else:
+            elem_count = 1
+            for d in shape:
+                elem_count *= max(d, 1)
+            dtype_bytes = 2 if dtype in ('float16', 'int16') else 4
+            byte_length = elem_count * dtype_bytes
+            self._handle_cell = _HandleCell(handle, byte_length)
         
         # WHAT: CPU에 저장된 텐서의 실제 데이터(numpy 배열)입니다.
         # WHY: CPU 기반 연산이나 읽어온 데이터를 캐싱하기 위함입니다.
@@ -353,17 +368,18 @@ class Tensor:
     def _finalize_buffer(cell: '_HandleCell') -> None:
         """
         WHAT: 가비지 컬렉터에 의해 호출되는 리소스 해제 콜백 함수입니다.
-        WHY: 텐서 객체가 메모리에서 지워질 때 연결된 GPU 버퍼도 해제하여 메모리 누수를 방지하기 위함입니다.
-        HOW: cell에 저장된 핸들 문자열과 바이트 크기를 _gc_queue와 _gc_queued_bytes에 추가하여 듀얼 임계치로 일괄 해제합니다.
+        WHY: 텐서 객체가 메모리에서 지워질 때 참조 카운트를 감소시키고, 마지막 남은 참조가 사라질 때만 GPU 버퍼를 해제합니다.
+        HOW: cell.dec_ref()가 True일 때만 _gc_queue와 _gc_queued_bytes에 추가하여 듀얼 임계치로 일괄 해제합니다.
         """
         global _gc_queued_bytes
-        handle = cell.handle
-        if handle is not None:
-            _gc_queue.add(handle)
-            _gc_queued_bytes += cell.byte_length
-            cell.handle = None
-            if len(_gc_queue) >= 16 or _gc_queued_bytes >= _GC_BYTE_THRESHOLD:
-                flush_gc()
+        if cell.dec_ref():
+            handle = cell.handle
+            if handle is not None:
+                _gc_queue.add(handle)
+                _gc_queued_bytes += cell.byte_length
+                cell.handle = None
+                if len(_gc_queue) >= 16 or _gc_queued_bytes >= _GC_BYTE_THRESHOLD:
+                    flush_gc()
 
     def _check_disposed(self) -> None:
         # WHAT: 텐서가 이미 해제되었는지 검사하는 내부 함수입니다.
@@ -511,10 +527,13 @@ class Tensor:
     def detach(self) -> 'Tensor':
         """
         WHAT: 연산 그래프에서 분리된 새로운 텐서(View)를 반환합니다.
-        WHY: 기존 데이터/GPU 버퍼를 안전하게 공유하면서 그래디언트 추적(Autograd)을 중단하기 위함입니다.
-        HOW: 동일한 handle, _data, shape, dtype, device를 가지며 requires_grad=False로 초기화된 텐서를 생성합니다.
+        WHY: 기존 데이터/GPU 버퍼 저장소(_handle_cell)를 참조 카운트 기반으로 안전하게 공유하면서 그래디언트 추적(Autograd)을 중단하기 위함입니다.
+        HOW: self._handle_cell의 참조 카운트를 1 올리고 handle_cell로 전달하여 동일 버퍼를 안전하게 바인딩합니다.
         """
         self._check_disposed()
+        if self.device == "gpu" and self._handle_cell is not None:
+            self._handle_cell.inc_ref()
+
         out = Tensor(
             shape=self.shape,
             dtype=self.dtype,
@@ -522,6 +541,7 @@ class Tensor:
             requires_grad=False,
             handle=self._handle,
             data=self._data,
+            handle_cell=self._handle_cell if self.device == "gpu" else None,
         )
         out._disposed = self._disposed
         out._parents = ()
@@ -622,14 +642,17 @@ class Tensor:
         """
         WHAT: 텐서와 연결된 리소스(GPU 버퍼 및 내부 데이터)를 즉시 해제하는 함수입니다.
         WHY: 더 이상 사용하지 않는 메모리를 명시적으로 반환하여 VRAM 초과(OOM) 오류를 막기 위함입니다.
-        HOW: 핸들을 GC 큐에 넣고 내부 데이터 참조와 그래프 연결을 모두 초기화(None/빈 튜플)합니다.
+        HOW: _handle_cell의 참조 카운트를 감소시키고, 마지막 참조일 때만 GC 큐에 등록하여 flush_gc()를 호출합니다.
         """
         if self._disposed:
             return
-        if self.device == "gpu" and self._handle is not None:
-            _gc_queue.add(self._handle)
-            self._handle = None
-            flush_gc()
+        if self.device == "gpu" and self._handle_cell is not None:
+            if self._handle_cell.dec_ref():
+                handle = self._handle_cell.handle
+                if handle is not None:
+                    _gc_queue.add(handle)
+                    self._handle_cell.handle = None
+                    flush_gc()
 
         self._data = None
         self._disposed = True

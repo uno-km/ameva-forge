@@ -527,6 +527,37 @@ class TestV3Features(unittest.TestCase):
         self.assertIsNone(p_cpu.grad)
         self.assertIsNone(p_gpu.grad)
 
+    def test_detach_handle_cell_shared_ref_counting_and_uaf_prevention(self):
+        import gc
+        from forge.tensor import _gc_queue
+        
+        # 1. Create original GPU tensor
+        x = at.Tensor(shape=(4,), dtype="float32", device="gpu", handle="tensor_shared_uaf_test")
+        self.assertEqual(x._handle_cell.ref_count, 1)
+        
+        # 2. Detach to create shared view
+        d = x.detach()
+        self.assertIs(x._handle_cell, d._handle_cell)
+        self.assertEqual(x._handle_cell.ref_count, 2)
+        self.assertEqual(d._handle, "tensor_shared_uaf_test")
+        
+        # 3. Delete original tensor x (simulate parent model being garbage collected)
+        del x
+        gc.collect()
+        
+        # 4. Verify d is STILL ALIVE and its underlying handle is NOT disposed (UAF prevented!)
+        self.assertEqual(d._handle_cell.ref_count, 1)
+        self.assertEqual(d._handle, "tensor_shared_uaf_test")
+        self.assertNotIn("tensor_shared_uaf_test", _gc_queue)
+        
+        # 5. Delete detached tensor d
+        del d
+        gc.collect()
+        
+        # 6. Verify handle is now queued for disposal exactly once (Double Free prevented!)
+        self.assertIn("tensor_shared_uaf_test", _gc_queue)
+        _gc_queue.remove("tensor_shared_uaf_test")
+
 if __name__ == '__main__':
     unittest.main()
 
