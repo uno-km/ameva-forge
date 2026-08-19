@@ -10,7 +10,9 @@
  *      단일 패스로 융합하고, Grouped Query Attention(GQA)과 Causal Masking을 셰이더 내부에서 인라인으로 처리합니다.
  */
 
-export const FLASH_ATTENTION_WGSL = `
+export function getFlashAttentionWGSL(headDim: number = 256): string {
+  const dim = Math.max(64, Math.min(headDim, 256));
+  return `
 struct Params {
   B: u32,             // 총 배치 수
   H: u32,             // 쿼리 헤드 수 (Query Heads)
@@ -33,9 +35,9 @@ struct Params {
 @group(0) @binding(4) var<storage, read_write> o: array<f32>;
 
 // 워크그룹 공유 메모리: 쿼리 벡터(s_q), 키 벡터(s_k), 밸류 벡터(s_v), 내적 트리 리덕션(s_dot)
-var<workgroup> s_q: array<f32, 256>;
-var<workgroup> s_k: array<f32, 256>;
-var<workgroup> s_v: array<f32, 256>;
+var<workgroup> s_q: array<f32, ${dim}>;
+var<workgroup> s_k: array<f32, ${dim}>;
+var<workgroup> s_v: array<f32, ${dim}>;
 var<workgroup> s_dot: array<f32, 64>;
 
 @compute @workgroup_size(64, 1, 1)
@@ -171,3 +173,6 @@ fn main(
   }
 }
 `;
+}
+
+export const FLASH_ATTENTION_WGSL = getFlashAttentionWGSL(256);

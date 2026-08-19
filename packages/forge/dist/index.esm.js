@@ -4225,7 +4225,9 @@ fn main(
  * HOW: Dao et al.의 FlashAttention-2 Online Softmax 알고리즘(Running Max & Running Sum)을 GPU 스레드 레지스터 레벨에서
  *      단일 패스로 융합하고, Grouped Query Attention(GQA)과 Causal Masking을 셰이더 내부에서 인라인으로 처리합니다.
  */
-const FLASH_ATTENTION_WGSL = `
+function getFlashAttentionWGSL(headDim = 256) {
+    const dim = Math.max(64, Math.min(headDim, 256));
+    return `
 struct Params {
   B: u32,             // 총 배치 수
   H: u32,             // 쿼리 헤드 수 (Query Heads)
@@ -4248,9 +4250,9 @@ struct Params {
 @group(0) @binding(4) var<storage, read_write> o: array<f32>;
 
 // 워크그룹 공유 메모리: 쿼리 벡터(s_q), 키 벡터(s_k), 밸류 벡터(s_v), 내적 트리 리덕션(s_dot)
-var<workgroup> s_q: array<f32, 256>;
-var<workgroup> s_k: array<f32, 256>;
-var<workgroup> s_v: array<f32, 256>;
+var<workgroup> s_q: array<f32, ${dim}>;
+var<workgroup> s_k: array<f32, ${dim}>;
+var<workgroup> s_v: array<f32, ${dim}>;
 var<workgroup> s_dot: array<f32, 64>;
 
 @compute @workgroup_size(64, 1, 1)
@@ -4386,6 +4388,8 @@ fn main(
   }
 }
 `;
+}
+const FLASH_ATTENTION_WGSL = getFlashAttentionWGSL(256);
 
 /**
  * 파일 생성일: 2026-08-18
@@ -7606,11 +7610,11 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 device.queue.writeBuffer(paramsBuffer, 0, p);
             }
             else if (inst.op === 'flash_attention') {
-                wgslCode = FLASH_ATTENTION_WGSL;
                 const [B, H, N, d] = inst.shape;
                 if (d > 256) {
                     throw new AMEVAForgeShapeError(`HeadDim ${d} exceeds max supported dimension 256 in FlashAttention`);
                 }
+                wgslCode = getFlashAttentionWGSL(d);
                 const H_kv = inst.params?.[0] ?? H;
                 const scale = inst.params?.[1] ?? (1.0 / Math.sqrt(d));
                 const isCausal = (inst.params?.[2] ?? 0) === 1 ? 1 : 0;
@@ -7710,7 +7714,10 @@ async function _executeGraphCore(instructionsJson, jsInputs) {
                 wgslCode = EMBEDDING_WGSL;
                 const embeddingDim = inst.shape[inst.shape.length - 1];
                 const numTokens = inst.shape.slice(0, -1).reduce((a, b) => a * b, 1);
-                const vocabSize = inst.params?.[2] ?? 1000000;
+                const vocabSize = inst.params?.[2];
+                if (!vocabSize || vocabSize <= 0) {
+                    throw new AMEVAForgeValidationError(`Instruction[${inst.id}] op="embedding": requires valid positive vocab_size parameter (params[2]), got ${vocabSize}`);
+                }
                 // embedding.wgsl은 워크그룹당 1개 토큰을 복사하므로 정확히 numTokens개의 워크그룹 디스패치
                 const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numTokens, 1);
                 const p = new Uint32Array([numTokens, embeddingDim, vocabSize, dx]);

@@ -140,11 +140,11 @@ describe('SCRUM-209 ~ SCRUM-213: FlashAttention-2 Architectural & Numerical Cont
       getBindGroupLayout: jest.fn(() => ({})),
     })),
     createBuffer: jest.fn((desc: any) => ({
-      size: desc?.size ?? 48,
-      usage: desc?.usage,
+      size: desc.size,
+      usage: desc.usage,
       destroy: jest.fn(),
       mapAsync: jest.fn().mockResolvedValue(undefined),
-      getMappedRange: jest.fn(() => new ArrayBuffer(desc?.size ?? 48)),
+      getMappedRange: jest.fn(() => new ArrayBuffer(desc.size)),
       unmap: jest.fn(),
     })),
     createBindGroupLayout: jest.fn(() => ({})),
@@ -156,6 +156,7 @@ describe('SCRUM-209 ~ SCRUM-213: FlashAttention-2 Architectural & Numerical Cont
         dispatchWorkgroups: jest.fn(),
         end: jest.fn()
       })),
+      copyBufferToBuffer: jest.fn(),
       finish: jest.fn(() => ({}))
     })),
     pushErrorScope: jest.fn(),

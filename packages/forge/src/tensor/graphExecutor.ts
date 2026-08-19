@@ -66,7 +66,7 @@ import { WHERE_WGSL } from "./kernels/where.wgsl";
 import { DROPOUT_WGSL } from "./kernels/dropout.wgsl";
 import { PERMUTE_WGSL } from "./kernels/permute.wgsl";
 import { MATMUL_TILED_WGSL } from "./kernels/matmul_tiled.wgsl";
-import { FLASH_ATTENTION_WGSL } from "./kernels/flash_attention.wgsl";
+import { FLASH_ATTENTION_WGSL, getFlashAttentionWGSL } from "./kernels/flash_attention.wgsl";
 import { ROPE_WGSL } from "./kernels/rope.wgsl";
 import { RMSNORM_WGSL } from "./kernels/rmsnorm.wgsl";
 import { SWIGLU_WGSL } from "./kernels/swiglu.wgsl";
@@ -1218,11 +1218,11 @@ async function _executeGraphCore(
         }
         device.queue.writeBuffer(paramsBuffer, 0, p);
       } else if (inst.op === 'flash_attention') {
-        wgslCode = FLASH_ATTENTION_WGSL;
         const [B, H, N, d] = inst.shape;
         if (d > 256) {
           throw new AMEVAForgeShapeError(`HeadDim ${d} exceeds max supported dimension 256 in FlashAttention`);
         }
+        wgslCode = getFlashAttentionWGSL(d);
         const H_kv = inst.params?.[0] ?? H;
         const scale = inst.params?.[1] ?? (1.0 / Math.sqrt(d));
         const isCausal = (inst.params?.[2] ?? 0) === 1 ? 1 : 0;
@@ -1323,7 +1323,10 @@ async function _executeGraphCore(
         wgslCode = EMBEDDING_WGSL;
         const embeddingDim = inst.shape[inst.shape.length - 1];
         const numTokens = inst.shape.slice(0, -1).reduce((a, b) => a * b, 1);
-        const vocabSize = inst.params?.[2] ?? 1000000;
+        const vocabSize = inst.params?.[2];
+        if (!vocabSize || vocabSize <= 0) {
+          throw new AMEVAForgeValidationError(`Instruction[${inst.id}] op="embedding": requires valid positive vocab_size parameter (params[2]), got ${vocabSize}`);
+        }
         // embedding.wgsl은 워크그룹당 1개 토큰을 복사하므로 정확히 numTokens개의 워크그룹 디스패치
         const { dispatchX: dx, dispatchY: dy } = computeDispatch2D(numTokens, 1);
         const p = new Uint32Array([numTokens, embeddingDim, vocabSize, dx]);
