@@ -1,8 +1,53 @@
-﻿import { SLICE_WGSL } from '../src/tensor/kernels/slice.wgsl';
+import { SLICE_WGSL } from '../src/tensor/kernels/slice.wgsl';
 import { SLICE_BACKWARD_WGSL } from '../src/tensor/kernels/slice_backward.wgsl';
 import { getAllowedKernelNames } from '../src/webgpu/shaderGuard';
+import { _setDeviceForTesting } from '../src/webgpu/device';
+import { clearStagingPool } from '../src/webgpu/buffers';
 
 describe('SCRUM-261 ~ SCRUM-265: Native WebGPU Slicing Architectural Contract', () => {
+  const mockDevice: any = {
+    createShaderModule: jest.fn(() => ({})),
+    createComputePipeline: jest.fn(() => ({
+      getBindGroupLayout: jest.fn(() => ({})),
+    })),
+    createBuffer: jest.fn((desc: any) => ({
+      size: desc.size,
+      usage: desc.usage,
+      destroy: jest.fn(),
+      mapAsync: jest.fn().mockResolvedValue(undefined),
+      getMappedRange: jest.fn(() => new ArrayBuffer(desc.size)),
+      unmap: jest.fn(),
+    })),
+    createBindGroupLayout: jest.fn(() => ({})),
+    createBindGroup: jest.fn(() => ({})),
+    createCommandEncoder: jest.fn(() => ({
+      beginComputePass: jest.fn(() => ({
+        setPipeline: jest.fn(),
+        setBindGroup: jest.fn(),
+        dispatchWorkgroups: jest.fn(),
+        end: jest.fn()
+      })),
+      copyBufferToBuffer: jest.fn(),
+      finish: jest.fn(() => ({}))
+    })),
+    pushErrorScope: jest.fn(),
+    popErrorScope: jest.fn().mockResolvedValue(null),
+    queue: {
+      writeBuffer: jest.fn(),
+      submit: jest.fn(),
+      onSubmittedWorkDone: jest.fn().mockResolvedValue(undefined),
+    },
+  };
+
+  beforeEach(() => {
+    _setDeviceForTesting(mockDevice);
+    clearStagingPool();
+  });
+
+  afterAll(() => {
+    _setDeviceForTesting(null);
+  });
+
   it('registers slice and slice_backward in shaderGuard whitelist', () => {
     const allowed = getAllowedKernelNames();
     expect(allowed.has('slice')).toBe(true);

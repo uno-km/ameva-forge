@@ -373,7 +373,7 @@ class Adam(Optimizer):
     async def step_async(self):
         """
         CPU와 GPU parameter를 모두 지원하는 공식 비동기 Adam step.
-        GPU parameter는 1-Pass 융합 adam_step WGSL 커널을 통해 in-place 갱신된다.
+        CPU 파라미터는 로컬 NumPy 벡터 연산으로, GPU 파라미터는 1-Pass 융합 adam_step WGSL 커널을 통해 in-place 갱신된다.
         """
         has_gpu = any(p.grad is not None and p.device == "gpu" for p in self.params)
         if not has_gpu:
@@ -381,12 +381,6 @@ class Adam(Optimizer):
             return
 
         self.t += 1
-        active_devices = self._active_devices()
-        if len(active_devices) > 1:
-            raise AMEVAForgeDeviceError(
-                "Mixed CPU/GPU parameters in one Adam step are not supported. "
-                "Use one optimizer per device."
-            )
 
         from .graph import GraphBuilder
         from .bridge import js_execute_graph
@@ -394,12 +388,34 @@ class Adam(Optimizer):
         builder = GraphBuilder()
         param_out_map = []
         param_entries = []
+        cpu_updates = []
 
         for i, p in enumerate(self.params):
             if p.grad is None:
                 continue
 
             self._validate_param_grad_pair(p)
+
+            if p.device == "cpu":
+                g = _require_cpu_data(p.grad, "p.grad")
+                param_data = _require_cpu_data(p, "p")
+
+                if self.m[i] is None or not isinstance(self.m[i], np.ndarray):
+                    self.m[i] = np.zeros_like(g)
+                    self.v[i] = np.zeros_like(g)
+
+                if self.weight_decay != 0.0:
+                    g = g + self.weight_decay * param_data
+
+                self.m[i] = self.beta1 * self.m[i] + (1 - self.beta1) * g
+                self.v[i] = self.beta2 * self.v[i] + (1 - self.beta2) * (g ** 2)
+
+                m_hat = self.m[i] / (1 - self.beta1 ** self.t)
+                v_hat = self.v[i] / (1 - self.beta2 ** self.t)
+
+                update = m_hat / (np.sqrt(v_hat) + self.eps)
+                cpu_updates.append((p, param_data, update))
+                continue
 
             await p.realize()
             await p.grad.realize()
@@ -444,6 +460,12 @@ class Adam(Optimizer):
                 ],
             )
             param_out_map.append((p, out_id))
+
+        # CPU 계산은 검증이 끝난 뒤 원자적으로 반영한다.
+        for p, param_data, update in cpu_updates:
+            p._data = (param_data - self.lr * update).astype(np.float32)
+            p._version += 1
+            p.grad = None
 
         if param_out_map:
             instructions, inputs = builder.compile()

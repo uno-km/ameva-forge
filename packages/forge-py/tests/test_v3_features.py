@@ -85,11 +85,14 @@ class TestV3Features(unittest.TestCase):
         model.fc.weight._data = None
         model.fc.weight._handle = "tensor_mock_gpu"
         # keep_vars=True returns GPU tensor objects safely
-        sd = model.state_dict(keep_vars=True)
-        self.assertIn("fc.weight", sd)
-        # keep_vars=False raises explicit error on GPU model without CPU data
-        with self.assertRaises(at.AMEVAForgeDeviceError):
-            model.state_dict(keep_vars=False)
+        sd_keep = model.state_dict(keep_vars=True)
+        self.assertIn("fc.weight", sd_keep)
+        self.assertTrue(sd_keep["fc.weight"].requires_grad)
+        # keep_vars=False returns detached GPU tensor objects (PyTorch standard)
+        sd_detach = model.state_dict(keep_vars=False)
+        self.assertIn("fc.weight", sd_detach)
+        self.assertFalse(sd_detach["fc.weight"].requires_grad)
+        self.assertEqual(sd_detach["fc.weight"]._handle, "tensor_mock_gpu")
 
     def test_dropout_eval_mode_autograd_preservation(self):
         # Verify that Dropout(training=False) does not overwrite upstream linear autograd graph
@@ -467,6 +470,62 @@ class TestV3Features(unittest.TestCase):
         gb.add_tensor(a.grad)
         insts, _ = gb.compile()
         self.assertIn("reduce_axes", insts)
+
+    def test_tensor_detach_method(self):
+        x = at.tensor([1.0, 2.0, 3.0], device="cpu", requires_grad=True)
+        y = x * 2.0
+        d = y.detach()
+        self.assertEqual(d.shape, (3,))
+        self.assertFalse(d.requires_grad)
+        self.assertIsNone(d._ctx)
+        self.assertEqual(d._grad_parents, ())
+        self.assertTrue(np.allclose(d.numpy(), [2.0, 4.0, 6.0]))
+
+    def test_autograd_cycle_clearing_after_backward(self):
+        # Verify that all intermediate node DAG parents & context are severed after backward()
+        x = at.tensor([2.0, 4.0], requires_grad=True)
+        h1 = x * 3.0
+        h2 = h1 + 5.0
+        loss = h2.sum()
+        
+        self.assertIsNotNone(loss._ctx)
+        self.assertTrue(len(loss._grad_parents) > 0)
+        
+        loss.backward()
+        
+        # After backward completes, graph references are severed to prevent circular leaks
+        self.assertIsNone(loss._ctx)
+        self.assertEqual(loss._grad_parents, ())
+        self.assertIsNone(h2._ctx)
+        self.assertEqual(h2._grad_parents, ())
+        self.assertIsNone(h1._ctx)
+        self.assertEqual(h1._grad_parents, ())
+        self.assertTrue(np.allclose(x.grad.numpy(), [3.0, 3.0]))
+
+    def test_adam_mixed_cpu_gpu_step_async(self):
+        import asyncio
+        p_cpu = at.tensor([1.0, 2.0], device="cpu", requires_grad=True)
+        p_gpu = at.tensor([3.0, 4.0], device="gpu", requires_grad=True)
+        
+        # Simulate gradients
+        p_cpu.grad = at.tensor([0.1, 0.2], device="cpu")
+        p_gpu.grad = at.tensor([0.3, 0.4], device="gpu")
+        
+        opt = at.optim.Adam([p_cpu, p_gpu], lr=0.01)
+        
+        # Mock js_execute_graph
+        async def run_step():
+            from unittest.mock import patch, AsyncMock
+            p_gpu._handle = "tensor_gpu_handle_adam"
+            p_gpu.grad._handle = "tensor_gpu_grad_adam"
+            opt.m[1] = at.Tensor(shape=(2,), dtype="float32", device="gpu", handle="tensor_gpu_m_adam")
+            opt.v[1] = at.Tensor(shape=(2,), dtype="float32", device="gpu", handle="tensor_gpu_v_adam")
+            with patch('forge.bridge.js_execute_graph', new=AsyncMock(return_value={'5': p_gpu._handle, 5: p_gpu._handle})):
+                await opt.step_async()
+
+        asyncio.run(run_step())
+        self.assertIsNone(p_cpu.grad)
+        self.assertIsNone(p_gpu.grad)
 
 if __name__ == '__main__':
     unittest.main()

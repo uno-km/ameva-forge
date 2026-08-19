@@ -508,6 +508,28 @@ class Tensor:
 
         return out
 
+    def detach(self) -> 'Tensor':
+        """
+        WHAT: 연산 그래프에서 분리된 새로운 텐서(View)를 반환합니다.
+        WHY: 기존 데이터/GPU 버퍼를 안전하게 공유하면서 그래디언트 추적(Autograd)을 중단하기 위함입니다.
+        HOW: 동일한 handle, _data, shape, dtype, device를 가지며 requires_grad=False로 초기화된 텐서를 생성합니다.
+        """
+        self._check_disposed()
+        out = Tensor(
+            shape=self.shape,
+            dtype=self.dtype,
+            device=self.device,
+            requires_grad=False,
+            handle=self._handle,
+            data=self._data,
+        )
+        out._disposed = self._disposed
+        out._parents = ()
+        out._lazy_op = None
+        out._grad_parents = ()
+        out._ctx = None
+        return out
+
     def to(self, device: str) -> 'Tensor':
         """
         WHAT: CPU Tensor를 GPU lazy-upload Tensor로 이동하거나 장치를 변경합니다.
@@ -694,6 +716,11 @@ class Tensor:
                     grads[pid] = add(grads[pid], g)
                 else:
                     grads[pid] = g
+        
+        # PyTorch Autograd Engine 표준: 역전파 완료 즉시 DAG 부모 참조와 Context를 소각하여 순환 참조와 VRAM 누수를 방지
+        for node in topo:
+            node._grad_parents = ()
+            node._ctx = None
         grads.clear()
 
 

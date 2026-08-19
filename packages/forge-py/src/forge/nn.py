@@ -128,45 +128,21 @@ class Module:
     # WHY: 모델의 가중치를 파일로 저장(Serialization)하거나 다른 모델로 복사할 때 사용하기 위함입니다.
     # HOW: OrderedDict를 생성한 후 자신의 파라미터를 추가하고 자식 모듈을 순회하며 상태를 누적합니다.
     def state_dict(self, prefix='', keep_vars=False):
-        # WHAT: 순서가 보장되는 딕셔너리를 임포트하고 생성합니다.
-        # WHY: 파라미터의 구조와 순서를 일정하게 유지하기 위함입니다.
-        # HOW: collections 모듈에서 OrderedDict를 불러와 인스턴스를 생성합니다.
+        """
+        WHAT: 모델의 전체 파라미터 상태를 OrderedDict 형태로 추출하는 메서드입니다.
+        WHY: PyTorch 표준 규격에 따라 모델 가중치를 직렬화하거나 전이학습에 전달하기 위함입니다.
+        HOW: keep_vars=True이면 파라미터 Tensor 객체를 그대로 반환하고, False이면 detach()된 Tensor를 반환합니다.
+        """
         from collections import OrderedDict
         state = OrderedDict()
         
-        # WHAT: 현재 모듈의 파라미터들을 순회하는 루프입니다.
-        # WHY: 상태 사전에 각 파라미터의 이름과 데이터를 저장하기 위함입니다.
-        # HOW: self._params.items()를 통해 이름과 파라미터 객체를 가져옵니다.
         for name, param in self._params.items():
-            # WHAT: 계층적 구조를 반영한 전체 파라미터 식별 키입니다.
-            # WHY: 글로벌 상태 사전 내에서 이름 충돌을 방지하기 위함입니다.
-            # HOW: 전달받은 prefix와 현재 파라미터 name을 결합합니다.
             key = prefix + name
-            
             if keep_vars:
-                # WHAT: Tensor 객체 자체를 보존하여 상태 사전에 저장합니다.
-                # WHY: 그래디언트 정보 등 텐서의 고유 메타데이터가 필요할 때 사용하기 위함입니다.
-                # HOW: key에 param 객체를 그대로 할당합니다.
                 state[key] = param
             else:
-                # WHAT: 파라미터의 실제 수치 데이터(NumPy 배열 등)만 추출하여 저장합니다.
-                # WHY: 모델 저장 시 불필요한 메타데이터를 제외하고 순수 가중치만 저장하기 위함입니다.
-                # HOW: CPU 텐서는 _data 또는 numpy()로 추출하고, GPU 텐서는 _data가 없을 경우 명시적 안내 에러를 발생시킵니다.
-                if param.device == 'cpu':
-                    state[key] = param._data if param._data is not None else param.numpy()
-                elif hasattr(param, '_data') and param._data is not None:
-                    state[key] = param._data
-                else:
-                    from .errors import AMEVAForgeDeviceError
-                    raise AMEVAForgeDeviceError(
-                        f"state_dict(keep_vars=False) cannot synchronously readback GPU parameter '{key}'. "
-                        "Use model.state_dict(keep_vars=True) to retain GPU tensor handles, "
-                        "or transfer model to CPU first: model.to('cpu').state_dict()."
-                    )
+                state[key] = param.detach() if hasattr(param, 'detach') else param
                 
-        # WHAT: 하위 모듈들을 순회하는 루프입니다.
-        # WHY: 트리 구조로 얽힌 모든 파라미터의 상태를 빠짐없이 수집하기 위함입니다.
-        # HOW: self._modules를 반복하며 각 모듈에 대해 재귀적으로 state_dict를 호출하고 결과를 업데이트합니다.
         for name, module in self._modules.items():
             if module is not None:
                 state.update(module.state_dict(prefix + name + '.', keep_vars))
