@@ -1,12 +1,7 @@
 {
-  "total": 181,
-  "passed": 180,
+  "total": 182,
+  "passed": 182,
   "failed": 0,
-  "errors": 1,
-  "details": [
-    {
-      "test": "test_gpu_slicing_forward_and_backward (test_v3_features.TestV3Features.test_gpu_slicing_forward_and_backward)",
-      "traceback": "Traceback (most recent call last):\n  File \"C:\\Users\\GAME\\Desktop\\uno-km\\dev\\AMEVA-Tensor\\packages\\forge-py\\tests\\test_v3_features.py\", line 432, in test_gpu_slicing_forward_and_backward\n    self.assertEqual(sliced._op, \"slice\")\n                     ^^^^^^^^^^\nAttributeError: 'Tensor' object has no attribute '_op'\n"
-    }
-  ]
+  "errors": 0,
+  "details": []
 }

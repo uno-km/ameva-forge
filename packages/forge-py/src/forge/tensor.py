@@ -60,47 +60,15 @@ def build_lazy_topo(root: 'Tensor') -> List['Tensor']:
         # WHY: 모든 부모 노드를 먼저 처리한 뒤에야 현재 노드를 처리(위상 정렬 리스트 추가)할 수 있기 때문입니다.
         # HOW: 현재 인덱스(idx)가 전체 부모 개수보다 작은지 비교합니다.
         if idx < len(parents):
-            # 다음 부모로 진행
-            # WHAT: 현재 노드의 인덱스를 1 증가시켜 스택 상단에 갱신합니다.
-            # WHY: 현재 부모 탐색을 마치고 돌아왔을 때 다음 부모를 이어서 탐색할 수 있게 상태를 저장합니다.
-            # HOW: 스택의 마지막 요소를 새로운 튜플로 교체합니다.
             stack[-1] = (node, idx + 1)
-            
-            # WHAT: 현재 인덱스가 가리키는 부모 노드 객체입니다.
-            # WHY: 이 부모 노드부터 다시 깊이 우선 탐색을 이어나가기 위해서입니다.
-            # HOW: parents 튜플에서 idx로 접근합니다.
             p = parents[idx]
-            
-            # WHAT: 부모 노드의 고유 식별자(메모리 주소)입니다.
-            # WHY: 해당 부모 노드가 이전에 이미 방문된 노드인지 중복 검사를 하기 위함입니다.
-            # HOW: 내장 함수 id()를 사용합니다.
-            pid = id(p)
-            
-            if pid not in visited:
-                # WHAT: 부모 노드의 ID를 방문 완료 집합에 추가합니다.
-                # WHY: 나중에 다른 경로를 통해 이 부모 노드에 도달하더라도 다시 처리하지 않기 위해서입니다.
-                # HOW: set.add() 메서드를 사용합니다.
-                visited.add(pid)
-                
-                # WHAT: 부모 노드를 스택에 추가하여 다음 반복 시에 처리되도록 합니다.
-                # WHY: DFS 특성상 방금 발견한 새로운 노드를 가장 먼저 탐색해야 하기 때문입니다.
-                # HOW: 부모 노드와 초기 인덱스 0을 스택에 푸시(append)합니다.
+            if p is not None and id(p) not in visited:
+                visited.add(id(p))
                 stack.append((p, 0))
         else:
-            # 모든 부모 방문 완료 → post-order 추가
-            # WHAT: 부모를 모두 탐색 완료한 노드를 스택에서 제거합니다.
-            # WHY: 이 노드에 대한 처리(위상 정렬 순서 확정)가 끝났기 때문입니다.
-            # HOW: list.pop()을 호출합니다.
             stack.pop()
-            
-            # WHAT: 탐색을 마친 노드를 결과 리스트에 추가합니다.
-            # WHY: 의존성이 없는 리프 노드부터 순서대로 추가되므로 위상 정렬 순서가 보장됩니다.
-            # HOW: topo.append()를 사용합니다.
             topo.append(node)
 
-    # WHAT: 완성된 위상 정렬 리스트를 반환합니다.
-    # WHY: 이 리스트 순서대로 텐서 연산을 GPU/CPU에 제출하여 실행하기 위함입니다.
-    # HOW: topo 리스트를 리턴합니다.
     return topo
 
 
@@ -108,6 +76,65 @@ def build_lazy_topo(root: 'Tensor') -> List['Tensor']:
 # WHY: 단일 텐서마다 즉각적으로 리소스를 해제(dispose)하면 오버헤드가 크므로, 모아서 일괄 처리(Batch GC)하기 위함입니다.
 # HOW: Python의 set 객체를 전역으로 생성해 중복 핸들 등록을 방지합니다.
 _gc_queue: set = set()
+_gc_queued_bytes: int = 0
+_GC_BYTE_THRESHOLD: int = 32 * 1024 * 1024  # 32 MB
+
+_gc_failures: int = 0
+_gc_next_retry_at: float = 0.0
+
+def flush_gc(force: bool = False) -> None:
+    """
+    WHAT: 보류 중인(큐에 쌓인) 리소스 해제 요청들을 모아 JS/WebGPU 브릿지로 일괄 전달하여 처리하는 함수입니다.
+    WHY: 성능 최적화를 위해 개별 해제 대신 Batch Dispose를 수행하며, 브릿지 일시 지연 시에도 핸들을 유실(drop)하지 않고 지수 백오프로 재시도하기 위함입니다.
+    HOW: 큐에 항목이 있으면 백오프 타임을 체크한 후 js_dispose_batch를 호출하고, 배치 성공 시에만 큐에서 제거합니다.
+    """
+    global _gc_failures, _gc_next_retry_at, _gc_queued_bytes
+    import time
+    import warnings
+    
+    if not _gc_queue:
+        _gc_queued_bytes = 0
+        return
+        
+    now = time.monotonic()
+    if not force and now < _gc_next_retry_at:
+        return
+        
+    handles = list(_gc_queue)
+    try:
+        from .bridge import js_dispose_batch
+        js_dispose_batch(handles)
+        _gc_queue.difference_update(handles)
+        _gc_queued_bytes = 0
+        _gc_failures = 0
+        _gc_next_retry_at = 0.0
+    except Exception as e:
+        _gc_failures += 1
+        delay = min(2.0 ** _gc_failures, 30.0)
+        _gc_next_retry_at = now + delay
+        warnings.warn(
+            f"[AMEVA GC] disposeBatch failed; keeping {len(_gc_queue)} handles queued for retry in {delay:.1f}s: {e}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+
+class _HandleCell:
+    """
+    WHAT: 실제 핸들과 할당 바이트 크기를 감싸는 레퍼런스 셀 클래스입니다.
+    WHY: C-01 Fix: weakref.finalize 시점에 최신 핸들과 바이트 크기를 안전하게 참조하기 위함입니다.
+    HOW: 슬롯(__slots__)을 사용하여 메모리를 절약하고 속성을 단일화한 클래스를 정의합니다.
+    """
+    __slots__ = ('handle', 'byte_length')
+
+    def __init__(self, handle: Optional[str], byte_length: int = 0) -> None:
+        """
+        WHAT: HandleCell 객체의 생성자입니다.
+        WHY: 객체 생성 시 초기 핸들 값과 예상 바이트 크기를 저장하기 위해 필요합니다.
+        HOW: 전달받은 인자들을 멤버 변수에 할당합니다.
+        """
+        self.handle = handle
+        self.byte_length = byte_length
 
 
 _gc_failures: int = 0

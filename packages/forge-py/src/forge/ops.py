@@ -707,56 +707,126 @@ def _broadcast_shapes(a_shape, b_shape):
 # WHAT: 브로드캐스팅으로 인해 확장되었던 그래디언트 텐서를 원래 크기로 되돌리는(축소하는) 함수입니다.
 # WHY: 역전파 시 각 입력 파라미터는 자신의 원래 모양과 똑같은 크기의 미분값을 받아야 하기 때문입니다.
 # HOW: 대상 형상과 비교하여 1이었던 차원은 합산(sum)을 수행하고 필요 없는 차원은 제거합니다.
+# WHAT: 다축 동시 융합 축소(Multi-Axis Fused Reduction) 연산 클래스입니다.
+# WHY: 브로드캐스팅 역전파 및 다차원 합산 시 K번의 순차 디스패치와 중간 VRAM 버퍼 할당을 없애고 단 1회의 1-Pass GPU 디스패치로 완결하기 위함입니다.
+# HOW: WGSL reduce_axes 커널에 다축 마스크와 스트라이드를 넘겨 GPU 레지스터 상에서 다차원 합산을 즉시 수행합니다.
+class ReduceAxesFunction(Function):
+    @staticmethod
+    def forward(ctx, x: Tensor, axes: Tuple[int, ...], keepdims: bool = False) -> Tensor:
+        ctx.save_for_backward(x)
+        ctx.axes = axes
+        ctx.keepdims = keepdims
+        ctx.input_shape = x.shape
+
+        rank = len(x.shape)
+        norm_axes = set()
+        for ax in axes:
+            a = ax if ax >= 0 else ax + rank
+            if a < 0 or a >= rank:
+                raise AMEVAForgeShapeError(f"Axis {ax} out of bounds for tensor of rank {rank}")
+            norm_axes.add(a)
+
+        if len(norm_axes) == 0:
+            return x
+
+        reduction_size = 1
+        for ax in norm_axes:
+            reduction_size *= x.shape[ax]
+
+        out_shape_list = []
+        for i in range(rank):
+            if i in norm_axes:
+                if keepdims:
+                    out_shape_list.append(1)
+            else:
+                out_shape_list.append(x.shape[i])
+        out_shape = tuple(out_shape_list)
+
+        if _should_use_gpu(x):
+            in_strides = [1] * rank
+            for i in range(rank - 2, -1, -1):
+                in_strides[i] = in_strides[i + 1] * x.shape[i + 1]
+
+            unreduced_shape = [x.shape[i] for i in range(rank) if i not in norm_axes]
+            out_strides = [1] * len(unreduced_shape)
+            for i in range(len(unreduced_shape) - 2, -1, -1):
+                out_strides[i] = out_strides[i + 1] * unreduced_shape[i + 1]
+
+            axes_mask = [1 if i in norm_axes else 0 for i in range(rank)]
+
+            in_shape_8 = list(x.shape) + [0] * (8 - rank)
+            in_strides_8 = in_strides + [0] * (8 - rank)
+            out_strides_8 = out_strides + [0] * (8 - len(out_strides))
+            axes_mask_8 = axes_mask + [0] * (8 - rank)
+
+            op_params = [reduction_size, rank] + in_shape_8 + in_strides_8 + out_strides_8 + axes_mask_8
+
+            return Tensor(
+                shape=out_shape,
+                dtype=x.dtype,
+                device='gpu',
+                op='reduce_axes',
+                parents=(x,),
+                op_params=op_params,
+                requires_grad=x.requires_grad
+            )
+        else:
+            data = _require_cpu_data(x, 'x')
+            res = np.sum(data, axis=tuple(sorted(norm_axes)), keepdims=keepdims)
+            res_arr = np.asarray(res, dtype=np.float32)
+            return Tensor(shape=out_shape, dtype=x.dtype, device='cpu', data=res_arr)
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor]:
+        x, = ctx.saved_tensors
+        if not ctx.keepdims:
+            rank = len(x.shape)
+            norm_axes = set(ax if ax >= 0 else ax + rank for ax in ctx.axes)
+            reshaped_grad = []
+            for i in range(rank):
+                if i in norm_axes:
+                    reshaped_grad.append(1)
+                else:
+                    reshaped_grad.append(x.shape[i])
+            grad_output = reshape(grad_output, tuple(reshaped_grad))
+        
+        return (mul(grad_output, ones(x.shape, device=x.device)),)
+
+def reduce_axes_op(x: Tensor, axes, keepdims: bool = False) -> Tensor:
+    if isinstance(axes, int):
+        axes = (axes,)
+    else:
+        axes = tuple(axes)
+    return ReduceAxesFunction.apply(x, axes, keepdims)
+
+
 def _unbroadcast(grad, target_shape):
     if grad.shape == target_shape:
-        # WHAT: 형상이 동일하면 그대로 반환합니다.
-        # WHY: 추가적인 연산 낭비를 막기 위함입니다.
-        # HOW: 조건문 검사 후 곧바로 grad를 리턴합니다.
         return grad
         
-    # WHAT: 확장된 차원들의 위치(인덱스)를 찾아냅니다.
-    # WHY: 어느 축(axis)을 기준으로 합산(sum)하여 원래 모양으로 찌그러뜨릴지 알아내기 위함입니다.
-    # HOW: shape 길이를 비교해 ndim_diff를 구하고 1로 패딩해 비교합니다.
     ndim_diff = len(grad.shape) - len(target_shape)
     padded = (1,) * ndim_diff + target_shape
     
+    axes = []
+    for i, (g, t) in enumerate(zip(grad.shape, padded)):
+        if t == 1 and g != 1:
+            axes.append(i)
+    for i in range(ndim_diff):
+        if i not in axes:
+            axes.append(i)
+    axes = tuple(sorted(set(axes)))
+    
     if grad.device == 'cpu':
-        # WHAT: CPU 환경에서의 언브로드캐스트 처리입니다.
-        # WHY: 넘파이는 여러 축을 한 번에 합산할 수 있는 기능이 있기 때문입니다.
-        # HOW: 축(axes)을 리스트에 모아 np.sum(axis=...)를 호출한 뒤 원래 차원으로 복구(reshape)합니다.
         data = _require_cpu_data(grad, 'grad')
-        axes = []
-        for i, (g, t) in enumerate(zip(grad.shape, padded)):
-            if t == 1 and g != 1:
-                axes.append(i)
-        for i in range(ndim_diff):
-            axes.append(i) if i not in axes else None
-        axes = sorted(set(axes))
-        
-        result = np.sum(data, axis=tuple(axes), keepdims=True)
+        result = np.sum(data, axis=axes, keepdims=True)
         result = result.reshape(target_shape)
         return Tensor(shape=target_shape, dtype='float32', device='cpu', data=result)
     else:
-        # WHAT: GPU 환경에서의 언브로드캐스트 처리입니다.
-        # WHY: GPU 커널 함수는 대개 한 번에 하나의 축만 감소(reduction)시키는 함수를 제공하기 때문입니다.
-        # HOW: 차이 나는 축들을 뒤에서부터 순차적으로 sum_axis 함수를 호출하여 하나씩 줄여나갑니다.
-        result = grad
-        axes = []
-        for i, (g, t) in enumerate(zip(grad.shape, padded)):
-            if t == 1 and g != 1:
-                axes.append(i)
-        for i in range(ndim_diff):
-            if i not in axes:
-                axes.append(i)
-        axes = sorted(set(axes))
-        
-        # WHAT: 인덱스 변화를 막기 위해 뒤에서부터 합산합니다.
-        # WHY: 앞쪽 차원을 먼저 합치면 뒤쪽 축들의 인덱스가 하나씩 밀려 오류가 발생하기 때문입니다.
-        # HOW: reversed(axes)를 순회하며 sum_axis를 호출합니다.
-        for ax in reversed(axes):
-            result = sum_axis(result, axis=ax)
-            
-        return reshape(result, target_shape) if result.shape != target_shape else result
+        # WHAT: 빅테크 표준 1-Pass 다축 융합 리덕션 (reduce_axes) 호출
+        # WHY: K번의 중간 VRAM 할당과 커널 체인 오버헤드를 0으로 소멸시키기 위함입니다.
+        # HOW: reduce_axes_op로 단 1회의 디스패치로 축소한 뒤 필요한 경우 목표 형상으로 정렬합니다.
+        res = reduce_axes_op(grad, axes=axes, keepdims=False)
+        return reshape(res, target_shape) if res.shape != target_shape else res
 
 # WHAT: 모든 요소의 합(Sum)을 구하는 축소 연산(Reduction) 클래스입니다.
 # WHY: 손실값 누적 계산이나 정규화 등 텐서의 전체 합이 필요할 때 사용하기 위함입니다.

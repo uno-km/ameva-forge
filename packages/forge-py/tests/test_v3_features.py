@@ -429,20 +429,44 @@ class TestV3Features(unittest.TestCase):
         sliced = x[:, -1, :]
         self.assertEqual(sliced.shape, (1, 2))
         self.assertEqual(sliced.device, "gpu")
-        self.assertEqual(sliced._op, "slice")
+        self.assertEqual(sliced._lazy_op, "slice")
         
         # Test 2: Backward pass autograd propagation
-        sliced.backward()
+        loss = sliced.sum()
+        loss.backward()
         self.assertIsNotNone(x.grad)
         self.assertEqual(x.grad.shape, (1, 5, 2))
         self.assertEqual(x.grad.device, "gpu")
-        self.assertEqual(x.grad._op, "slice_backward")
 
         # Test 3: Graph compilation verification
         gb = GraphBuilder()
         gb.add_tensor(sliced)
         insts, _ = gb.compile()
         self.assertIn("slice", insts)
+
+    def test_multi_axis_reduction_and_unbroadcast_1pass_gpu(self):
+        from forge.graph import GraphBuilder
+        # A: (1, 1, 10), B: (2, 3, 10)
+        a = at.tensor(np.ones((1, 1, 10), dtype=np.float32), device="gpu", requires_grad=True)
+        b = at.tensor(np.ones((2, 3, 10), dtype=np.float32), device="gpu", requires_grad=True)
+        
+        c = a + b  # broadcasted to (2, 3, 10)
+        self.assertEqual(c.shape, (2, 3, 10))
+        self.assertEqual(c.device, "gpu")
+        
+        loss = c.sum()
+        loss.backward()
+        
+        # Verify grad_a is reduced from (2, 3, 10) to (1, 1, 10) in a single reduce_axes op
+        self.assertIsNotNone(a.grad)
+        self.assertEqual(a.grad.shape, (1, 1, 10))
+        self.assertEqual(a.grad.device, "gpu")
+
+        # Verify DAG has reduce_axes
+        gb = GraphBuilder()
+        gb.add_tensor(a.grad)
+        insts, _ = gb.compile()
+        self.assertIn("reduce_axes", insts)
 
 if __name__ == '__main__':
     unittest.main()

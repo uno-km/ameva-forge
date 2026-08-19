@@ -105,6 +105,7 @@ let ALLOWED_KERNEL_NAMES = new Set([
   "unpack_quant",
   "slice",
   "slice_backward",
+  "reduce_axes",
 ]);
 
 /**
