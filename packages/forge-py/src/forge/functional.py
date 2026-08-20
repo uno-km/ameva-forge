@@ -516,13 +516,13 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
             학습(requires_grad=True) 시 Autograd DAG를 정상 구성하여 역전파 미분 소실을 방지한다.
     """
     from .ops import bmm, transpose, div, full, reshape, dropout, permute, matmul, add, mul
-    from .autograd import _grad_mode
+    from .autograd import is_grad_enabled
     import math
     
     orig_shape = query.shape
     d_k = orig_shape[-1]
     effective_scale = scale if scale is not None else (1.0 / math.sqrt(d_k))
-    needs_grad = _grad_mode and (query.requires_grad or key.requires_grad or value.requires_grad)
+    needs_grad = is_grad_enabled() and (query.requires_grad or key.requires_grad or value.requires_grad)
     
     # 1. 추론 전용 (Inference / no_grad): 초고속 1-Pass Fused WebGPU FlashAttention 커널 디스패치
     if not needs_grad and len(orig_shape) == 4 and query.device == 'gpu' and key.device == 'gpu' and value.device == 'gpu' and dropout_p == 0.0 and attn_mask is None:
@@ -582,8 +582,8 @@ def rms_norm(x, weight=None, eps=1e-5):
     왜: LayerNorm 대비 평균 계산을 생략하여 추론 및 학습 처리 속도를 20~30% 가속한다.
     어떻게: x / sqrt(mean(x^2) + eps) * weight
     """
-    from .autograd import _grad_mode
-    needs_grad = _grad_mode and (x.requires_grad or (weight is not None and weight.requires_grad))
+    from .autograd import is_grad_enabled
+    needs_grad = is_grad_enabled() and (x.requires_grad or (weight is not None and weight.requires_grad))
 
     if not needs_grad and x.device == 'gpu':
         from .tensor import Tensor
@@ -609,8 +609,8 @@ def swiglu(gate, up):
     왜: LLaMA 및 Gemma 등의 최신 FFN 아키텍처 비선형성을 효율적으로 제공하기 위함이다.
     어떻게: (gate * sigmoid(gate)) * up
     """
-    from .autograd import _grad_mode
-    needs_grad = _grad_mode and (gate.requires_grad or up.requires_grad)
+    from .autograd import is_grad_enabled
+    needs_grad = is_grad_enabled() and (gate.requires_grad or up.requires_grad)
 
     if gate.device == 'gpu' and up.device == 'gpu':
         from .tensor import Tensor
@@ -627,8 +627,8 @@ def rope(x, base_freq=10000.0, offset_pos=0):
     무엇을: Rotary Position Embedding (RoPE) 2D 복소수 평면 회전을 수행한다.
     왜: 토큰 위치 정보를 Query와 Key 벡터에 인플레이스로 주입하기 위함이다.
     """
-    from .autograd import _grad_mode
-    needs_grad = _grad_mode and x.requires_grad
+    from .autograd import is_grad_enabled
+    needs_grad = is_grad_enabled() and x.requires_grad
 
     if x.device == 'gpu':
         from .tensor import Tensor

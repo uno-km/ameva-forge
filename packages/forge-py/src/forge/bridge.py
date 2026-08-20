@@ -156,6 +156,27 @@ def js_dispose(handle: str) -> None:
         warnings.warn(f"[AMEVA Bridge] GPU handle disposal failed for {handle}: {e}", RuntimeWarning)
 
 
+def _safe_destroy_proxy(proxy: Any, name: str = "proxy") -> None:
+    """
+    WHAT: Pyodide FFI 프록시 객체를 안전하게 파괴하고 참조를 무효화하는 표준 헬퍼 함수입니다.
+    WHY: 예외를 맹목적으로 무시(pass)하지 않고 진단 정보를 보존하며, 해제 실패 시에도 댕글링 포인터 생성을 막기 위함입니다.
+    HOW: hasattr('destroy') 검사 후 파괴를 시도하되, 실패 시 RuntimeWarning을 남깁니다.
+    """
+    if proxy is None:
+        return
+    try:
+        if hasattr(proxy, 'destroy'):
+            proxy.destroy()
+    except Exception as e:
+        import warnings
+        warnings.warn(
+            f"[AMEVA-Forge FFI Alert] Failed to destroy Pyodide {name} reference: {e}. "
+            f"Reference cleared to prevent use-after-free.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+
 def js_dispose_batch(handles: list) -> None:
     """
     [WHAT] 
@@ -168,28 +189,18 @@ def js_dispose_batch(handles: list) -> None:
     핸들 리스트를 JS 배열로 변환(to_js)한 뒤, 코어에 disposeBatch 메서드가 있으면 한 번에 호출하고, 없으면 fallback으로 순회하며 개별 해제합니다.
     """
     if not handles:
-        # 해제할 핸들 목록이 비어있다면 즉시 반환하여 불필요한 실행을 막습니다.
         return
-    # 전역 JS 브릿지 객체를 가져옵니다.
     core = get_js_core()
-    # 파이썬 객체를 JS 객체로 변환하기 위한 유틸리티를 Pyodide에서 가져옵니다.
     from pyodide.ffi import to_js
     js_handles = to_js(handles)
     try:
         if hasattr(core, 'disposeBatch'):
-            # JS 측에 배치 해제 기능이 존재한다면, 변환된 배열을 넘겨 일괄 해제를 요청합니다.
             core.disposeBatch(js_handles)
         else:
-            # JS 측에 배치 기능이 없다면, 반복문을 돌며 기존 단일 해제 메서드를 사용합니다.
             for h in handles:
-                # 리스트에 담긴 개별 핸들에 대해 순차적으로 해제를 요청합니다.
                 core.dispose(h)
     finally:
-        try:
-            if hasattr(js_handles, 'destroy'):
-                js_handles.destroy()
-        except Exception:
-            pass
+        _safe_destroy_proxy(js_handles, "handles")
 
 
 def _map_js_error(e: Exception) -> None:
@@ -241,23 +252,13 @@ async def js_execute_graph(instructions_json: str, inputs) -> dict:
         raise
     finally:
         if js_inputs is not None:
-            try:
-                if hasattr(js_inputs, 'length'):
-                    for i in range(len(js_inputs)):
-                        try:
-                            elem = js_inputs[i]
-                            if hasattr(elem, 'destroy'):
-                                elem.destroy()
-                        except Exception:
-                            pass
-                if hasattr(js_inputs, 'destroy'):
-                    js_inputs.destroy()
-            except Exception:
-                pass
-        if result_proxy is not None:
-            try:
-                if hasattr(result_proxy, 'destroy'):
-                    result_proxy.destroy()
-            except Exception:
-                pass
+            if hasattr(js_inputs, 'length'):
+                for i in range(len(js_inputs)):
+                    try:
+                        elem = js_inputs[i]
+                        _safe_destroy_proxy(elem, f"input_elem[{i}]")
+                    except Exception:
+                        pass
+            _safe_destroy_proxy(js_inputs, "inputs")
+        _safe_destroy_proxy(result_proxy, "result_proxy")
 

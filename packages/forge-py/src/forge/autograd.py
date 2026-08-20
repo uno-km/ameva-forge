@@ -10,35 +10,61 @@
 from typing import Any, Tuple, Optional, List
 import contextlib
 
-# _grad_mode는 현재 시스템이 그래디언트를 추적하고 있는지 여부를 나타내는 전역 상태 변수입니다.
-# 기본값은 True이며, 그래디언트 계산이 필요한 연산들이 이 값을 참조하여 연산 그래프를 구성할지 결정합니다.
-_grad_mode = True
+import contextvars
+
+# WHAT: 비동기 코루틴 및 멀티스레드 간 격리된 그래디언트 추적 컨텍스트 변수입니다.
+# WHY: 단일 프로세스 내 복수 비동기 작업 간 no_grad() 상태 오염(Race Condition)을 원천 차단하기 위함입니다.
+# HOW: Python 3.7+ 표준 contextvars.ContextVar를 사용하며, 기본값은 True입니다.
+_grad_mode_var: contextvars.ContextVar[bool] = contextvars.ContextVar("forge_grad_mode", default=True)
+
+def is_grad_enabled() -> bool:
+    """현재 컨텍스트의 그래디언트 추적 활성화 여부를 반환합니다."""
+    return _grad_mode_var.get()
+
+def set_grad_enabled(mode: bool) -> None:
+    """현재 컨텍스트의 그래디언트 추적 모드를 설정합니다."""
+    _grad_mode_var.set(mode)
+
+class _GradModeProxy:
+    """하위 호환성을 위한 _grad_mode 프록시 객체입니다."""
+    def __bool__(self) -> bool:
+        return _grad_mode_var.get()
+    def __repr__(self) -> str:
+        return str(_grad_mode_var.get())
+
+_grad_mode = _GradModeProxy()
 
 
 @contextlib.contextmanager
 def no_grad():
     """
     [WHAT] 
-    그래디언트 추적을 임시로 비활성화하는 컨텍스트 매니저입니다.
+    그래디언트 추적을 임시로 비활성화하는 re-entrant 컨텍스트 매니저입니다.
     
     [WHY] 
     추론(Inference) 단계나 그래디언트 업데이트 시 불필요한 메모리 사용과 연산 오버헤드를 방지하기 위해 존재합니다.
     
     [HOW] 
-    진입 시 전역 상태 변수인 _grad_mode의 기존 값을 저장하고 False로 변경한 뒤, 블록이 끝나면 원래 값으로 복원하는 방식으로 동작합니다.
+    ContextVar 토큰(Token) 기반으로 이전 상태를 기억하여 중첩된 컨텍스트에서도 안전하게 복원합니다.
     """
-    # 전역 상태 변수를 수정하기 위해 global 키워드를 사용합니다.
-    global _grad_mode
-    # 현재 _grad_mode 값을 백업 변수인 prev에 저장합니다.
-    prev = _grad_mode
-    # 그래디언트 추적을 비활성화하기 위해 _grad_mode를 False로 설정합니다.
-    _grad_mode = False
+    token = _grad_mode_var.set(False)
     try:
-        # yield를 통해 제어권을 컨텍스트 블록 내부로 넘깁니다.
         yield
     finally:
-        # 컨텍스트 블록의 실행이 끝나거나 예외가 발생하더라도 _grad_mode를 원래 상태로 반드시 복원합니다.
-        _grad_mode = prev
+        _grad_mode_var.reset(token)
+
+
+@contextlib.contextmanager
+def enable_grad():
+    """
+    [WHAT] 
+    그래디언트 추적을 임시로 활성화하는 re-entrant 컨텍스트 매니저입니다.
+    """
+    token = _grad_mode_var.set(True)
+    try:
+        yield
+    finally:
+        _grad_mode_var.reset(token)
 
 
 class Context:
