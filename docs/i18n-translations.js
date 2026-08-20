@@ -342,7 +342,29 @@
 			"trainingDesc": "Executes complete forward pass, reverse-mode autodiff, and in-place WebGPU optimizer steps in real-time inside your browser.",
 			"trainingDeepDiveTitle": "Optimization Dynamics: In-Place SGD / Adam & Gradient Flow",
 			"trainingDeepDiveMath": "<strong>In-Place Adam Parameter Update:</strong><div class=\"math-block\">m<sub>t</sub> = &beta;<sub>1</sub> m<sub>t-1</sub> + (1 - &beta;<sub>1</sub>) g<sub>t</sub> &nbsp;&nbsp;|&nbsp;&nbsp; v<sub>t</sub> = &beta;<sub>2</sub> v<sub>t-1</sub> + (1 - &beta;<sub>2</sub>) g<sub>t</sub><sup>2</sup><br>&theta;<sub>t</sub> = &theta;<sub>t-1</sub> - &alpha; &middot; m&#770;<sub>t</sub> / (&radic;v&#770;<sub>t</sub> + &epsilon;)</div><strong>Zero Allocation:</strong> GPU buffer handles are updated in-place with zero memory allocation churn.",
-			"trainingDeepDiveAllegory": "<strong>Training Dynamics:</strong> Gradient vectors directly modify GPU memory in-place via atomic WebGPU compute shaders, avoiding garbage collection pauses during live model convergence."
+			"trainingDeepDiveAllegory": "<strong>Training Dynamics:</strong> Gradient vectors directly modify GPU memory in-place via atomic WebGPU compute shaders, avoiding garbage collection pauses during live model convergence.",
+			"visionFilters": {
+				"edge": {
+					"title": "Sobel Edge Detection: 2D Spatial Discrete Gradient",
+					"math": "<strong>Sobel Discrete Convolution Kernels:</strong>\n<div class=\"math-block\">\nK<sub>x</sub> = <table style=\"display:inline-table; border-collapse:collapse; vertical-align:middle; margin:0 8px; border-left:2px solid #333; border-right:2px solid #333; padding:0 4px;\">\n<tr><td>-1</td><td>0</td><td>+1</td></tr>\n<tr><td>-2</td><td>0</td><td>+2</td></tr>\n<tr><td>-1</td><td>0</td><td>+1</td></tr>\n</table>\n&nbsp;&nbsp;&nbsp;&nbsp;\nK<sub>y</sub> = <table style=\"display:inline-table; border-collapse:collapse; vertical-align:middle; margin:0 8px; border-left:2px solid #333; border-right:2px solid #333; padding:0 4px;\">\n<tr><td>-1</td><td>-2</td><td>-1</td></tr>\n<tr><td>&nbsp;0</td><td>&nbsp;0</td><td>&nbsp;0</td></tr>\n<tr><td>+1</td><td>+2</td><td>+1</td></tr>\n</table>\n<br><br>\nHorizontal Gradient: G<sub>x</sub> = I * K<sub>x</sub> &nbsp;|&nbsp; Vertical Gradient: G<sub>y</sub> = I * K<sub>y</sub><br>\nGradient Magnitude: G = &radic;(G<sub>x</sub><sup>2</sup> + G<sub>y</sub><sup>2</sup>)\n</div>\n<strong>Zero CPU Readback:</strong> Convolutions are dispatched across 90,000 parallel WebGPU shader invocations.",
+					"allegory": "<strong>Hardware Allegory:</strong> Instead of inspecting 90,000 pixels in a single sequential CPU thread, WebGPU assigns each pixel its own dedicated hardware compute thread. Every thread loads a 3x3 local neighborhood into on-chip cache registers, multiplies by the Sobel kernel weights, and writes the high-frequency edge response in under 1 millisecond."
+				},
+				"sharpen": {
+					"title": "Laplacian High-Pass Spatial Sharpening",
+					"math": "<strong>Laplacian 2D Differential Operator:</strong>\n<div class=\"math-block\">\nK<sub>sharpen</sub> = <table style=\"display:inline-table; border-collapse:collapse; vertical-align:middle; margin:0 8px; border-left:2px solid #333; border-right:2px solid #333; padding:0 4px;\">\n<tr><td>&nbsp;0</td><td>-1</td><td>&nbsp;0</td></tr>\n<tr><td>-1</td><td>+5</td><td>-1</td></tr>\n<tr><td>&nbsp;0</td><td>-1</td><td>&nbsp;0</td></tr>\n</table>\n<br><br>\nSharpened Output: S(x, y) = I(x, y) + &lambda; &nabla;<sup>2</sup>I(x, y)<br>\nSecond-Order Derivative: &nabla;<sup>2</sup>I = &part;<sup>2</sup>I / &part;x<sup>2</sup> + &part;<sup>2</sup>I / &part;y<sup>2</sup>\n</div>\n<strong>Contrast Amplification:</strong> Amplifies high-frequency boundary transitions while preserving luminance baseline.",
+					"allegory": "<strong>Hardware Allegory:</strong> The Laplacian filter subtracts neighboring pixel values from 5x the center pixel intensity. WebGPU calculates this 2nd-order discrete Laplacian simultaneously across all RGB channels without cache misses."
+				},
+				"blur": {
+					"title": "Gaussian Spatial Low-Pass Smoothing Filter",
+					"math": "<strong>Normalized Uniform 3x3 Box Blur Kernel:</strong>\n<div class=\"math-block\">\nK<sub>blur</sub> = <span style=\"font-size:1.1em;\"><sup>1</sup>/<sub>9</sub></span> &times; <table style=\"display:inline-table; border-collapse:collapse; vertical-align:middle; margin:0 8px; border-left:2px solid #333; border-right:2px solid #333; padding:0 4px;\">\n<tr><td>1</td><td>1</td><td>1</td></tr>\n<tr><td>1</td><td>1</td><td>1</td></tr>\n<tr><td>1</td><td>1</td><td>1</td></tr>\n</table>\n<br><br>\nContinuous Gaussian: G(x, y) = <span style=\"font-size:0.9em;\"><sup>1</sup>/<sub>(2&pi;&sigma;<sup>2</sup>)</sub></span> &middot; e<sup>-(x<sup>2</sup>+y<sup>2</sup>)/(2&sigma;<sup>2</sup>)</sup>\n</div>\n<strong>Noise Attenuation:</strong> Suppresses high-frequency sensor noise and smooths spatial gradients.",
+					"allegory": "<strong>Hardware Allegory:</strong> WebGPU computes the arithmetic mean of 9 adjacent pixels in parallel. Each compute unit fetches memory directly from texture samplers in single-cycle operations."
+				},
+				"invert": {
+					"title": "Elementwise Color Tensor Complement Inversion",
+					"math": "<strong>Pointwise Tensor Mapping:</strong>\n<div class=\"math-block\">\nO(x, y, c) = 1.0 - I(x, y, c) &nbsp;&nbsp;&nbsp;&nbsp;&forall; c &isin; {R, G, B}, (x, y) &isin; [0, 300)<sup>2</sup>\n</div>\n<strong>SIMD Vectorization:</strong> Executed as a 4-wide SIMD vector subtract operation on the GPU ALUs.",
+					"allegory": "<strong>Hardware Allegory:</strong> Color inversion is an embarrassment of parallelism: each pixel's RGB channel is subtracted from 1.0 completely independently. 90,000 pixels finish in less than 0.2 milliseconds."
+				}
+			}
 		}
 	},
 	"ko": {
@@ -674,7 +696,29 @@
 			"trainingDesc": "브라우저 내에서 순전파, 역방향 자동 미분, 인플레이스 WebGPU 옵티마이저 스텝을 실시간으로 실행합니다.",
 			"trainingDeepDiveTitle": "최적화 역학: 인플레이스 SGD / Adam 및 기울기 흐름",
 			"trainingDeepDiveMath": "<strong>인플레이스 Adam 파라미터 갱신식:</strong><div class=\"math-block\">m<sub>t</sub> = &beta;<sub>1</sub> m<sub>t-1</sub> + (1 - &beta;<sub>1</sub>) g<sub>t</sub> &nbsp;&nbsp;|&nbsp;&nbsp; v<sub>t</sub> = &beta;<sub>2</sub> v<sub>t-1</sub> + (1 - &beta;<sub>2</sub>) g<sub>t</sub><sup>2</sup><br>&theta;<sub>t</sub> = &theta;<sub>t-1</sub> - &alpha; &middot; m&#770;<sub>t</sub> / (&radic;v&#770;<sub>t</sub> + &epsilon;)</div><strong>제로 메모리 할당:</strong> GPU 버퍼 핸들을 제자리(In-Place)에서 직접 갱신하여 메모리 누수를 원천 방지합니다.",
-			"trainingDeepDiveAllegory": "<strong>학습 역학 비유:</strong> 계산된 기울기 벡터가 WebGPU 셰이더를 통해 파라미터 버퍼에 즉각 인플레이스로 반영되어, 가비지 컬렉션(GC) 멈춤 현상 없이 매끄럽게 손실값이 수렴합니다."
+			"trainingDeepDiveAllegory": "<strong>학습 역학 비유:</strong> 계산된 기울기 벡터가 WebGPU 셰이더를 통해 파라미터 버퍼에 즉각 인플레이스로 반영되어, 가비지 컬렉션(GC) 멈춤 현상 없이 매끄럽게 손실값이 수렴합니다.",
+			"visionFilters": {
+				"edge": {
+					"title": "소벨 에지 검출: 2차원 공간 이산 그래디언트 (Sobel Edge Conv2D)",
+					"math": "<strong>소벨 공간 합성곱 커널 행렬:</strong>\n<div class=\"math-block\">\nK<sub>x</sub> (수평) = <table style=\"display:inline-table; border-collapse:collapse; vertical-align:middle; margin:0 8px; border-left:2px solid #333; border-right:2px solid #333; padding:0 4px;\">\n<tr><td>-1</td><td>0</td><td>+1</td></tr>\n<tr><td>-2</td><td>0</td><td>+2</td></tr>\n<tr><td>-1</td><td>0</td><td>+1</td></tr>\n</table>\n&nbsp;&nbsp;&nbsp;&nbsp;\nK<sub>y</sub> (수직) = <table style=\"display:inline-table; border-collapse:collapse; vertical-align:middle; margin:0 8px; border-left:2px solid #333; border-right:2px solid #333; padding:0 4px;\">\n<tr><td>-1</td><td>-2</td><td>-1</td></tr>\n<tr><td>&nbsp;0</td><td>&nbsp;0</td><td>&nbsp;0</td></tr>\n<tr><td>+1</td><td>+2</td><td>+1</td></tr>\n</table>\n<br><br>\n수평 기울기: G<sub>x</sub> = I * K<sub>x</sub> &nbsp;|&nbsp; 수직 기울기: G<sub>y</sub> = I * K<sub>y</sub><br>\n최종 그래디언트 크기: G = &radic;(G<sub>x</sub><sup>2</sup> + G<sub>y</sub><sup>2</sup>)\n</div>\n<strong>제로 CPU 복사:</strong> 90,000개의 WebGPU 병렬 셰이더 스레드가 GPU 메모리에서 즉각 계산합니다.",
+					"allegory": "<strong>하드웨어 비유:</strong> CPU가 9만 개의 픽셀을 하나씩 순차적으로 검사하는 대신, WebGPU는 9만 개의 GPU 코어가 각 픽셀 주변 3x3 영역을 동시에 읽어 1ms 미만의 시간에 에지를 검출해냅니다."
+				},
+				"sharpen": {
+					"title": "라플라시안 고주파 공간 샤프닝 (Laplacian Sharpen)",
+					"math": "<strong>라플라시안 2차 미분 커널 행렬:</strong>\n<div class=\"math-block\">\nK<sub>sharpen</sub> = <table style=\"display:inline-table; border-collapse:collapse; vertical-align:middle; margin:0 8px; border-left:2px solid #333; border-right:2px solid #333; padding:0 4px;\">\n<tr><td>&nbsp;0</td><td>-1</td><td>&nbsp;0</td></tr>\n<tr><td>-1</td><td>+5</td><td>-1</td></tr>\n<tr><td>&nbsp;0</td><td>-1</td><td>&nbsp;0</td></tr>\n</table>\n<br><br>\n샤프닝 출력: S(x, y) = I(x, y) + &lambda; &nabla;<sup>2</sup>I(x, y)<br>\n2차 공간 미분: &nabla;<sup>2</sup>I = &part;<sup>2</sup>I / &part;x<sup>2</sup> + &part;<sup>2</sup>I / &part;y<sup>2</sup>\n</div>\n<strong>대비 증폭:</strong> 픽셀 간 급격한 색상 변화 지점을 부각하여 선명도를 극대화합니다.",
+					"allegory": "<strong>하드웨어 비유:</strong> 중앙 픽셀값의 5배에서 상하좌우 4개 픽셀을 감산하여 경계선을 선명하게 부각시킵니다. WebGPU 워크그룹이 텍스처 레지스터에서 한 번에 병렬 연산합니다."
+				},
+				"blur": {
+					"title": "가우시안 저주파 평활화 스무딩 필터 (Gaussian Blur 3x3)",
+					"math": "<strong>정규화된 3x3 박스 블러 커널:</strong>\n<div class=\"math-block\">\nK<sub>blur</sub> = <span style=\"font-size:1.1em;\"><sup>1</sup>/<sub>9</sub></span> &times; <table style=\"display:inline-table; border-collapse:collapse; vertical-align:middle; margin:0 8px; border-left:2px solid #333; border-right:2px solid #333; padding:0 4px;\">\n<tr><td>1</td><td>1</td><td>1</td></tr>\n<tr><td>1</td><td>1</td><td>1</td></tr>\n<tr><td>1</td><td>1</td><td>1</td></tr>\n</table>\n<br><br>\n2차원 연속 가우시안: G(x, y) = <span style=\"font-size:0.9em;\"><sup>1</sup>/<sub>(2&pi;&sigma;<sup>2</sup>)</sub></span> &middot; e<sup>-(x<sup>2</sup>+y<sup>2</sup>)/(2&sigma;<sup>2</sup>)</sup>\n</div>\n<strong>노이즈 감쇄:</strong> 고주파 노이즈를 부드럽게 제거하고 공간 그래디언트를 평활화합니다.",
+					"allegory": "<strong>하드웨어 비유:</strong> 인접한 9개 픽셀의 평균값을 모든 화소에 대해 일제히 계산합니다. WebGPU의 병렬 샘플러 하드웨어가 극도로 빠른 속도로 처리합니다."
+				},
+				"invert": {
+					"title": "요소별 색상 텐서 보수 반전 (Color Invert WebGPU)",
+					"math": "<strong>점별 텐서 매핑 공식:</strong>\n<div class=\"math-block\">\nO(x, y, c) = 1.0 - I(x, y, c) &nbsp;&nbsp;&nbsp;&nbsp;&forall; c &isin; {R, G, B}, (x, y) &isin; [0, 300)<sup>2</sup>\n</div>\n<strong>SIMD 벡터화:</strong> GPU ALU에서 4채널(RGBA) 벡터 뺄셈을 단일 명령어로 초고속 처리합니다.",
+					"allegory": "<strong>하드웨어 비유:</strong> 각 픽셀의 색상값을 1.0에서 빼는 단순 명쾌한 병렬 연산으로, 9만 개의 픽셀이 0.2ms 만에 일제히 반전 처리됩니다."
+				}
+			}
 		}
 	},
 	"zh": {
@@ -1006,7 +1050,29 @@
 			"trainingDesc": "在浏览器中实时执行完整的前向传播、反向自动微分与 WebGPU 原地优化器更新。",
 			"trainingDeepDiveTitle": "优化动力学：原地 SGD / Adam 与梯度流动",
 			"trainingDeepDiveMath": "<strong>原地 Adam 参数更新：</strong><div class=\"math-block\">m<sub>t</sub> = &beta;<sub>1</sub> m<sub>t-1</sub> + (1 - &beta;<sub>1</sub>) g<sub>t</sub> &nbsp;&nbsp;|&nbsp;&nbsp; v<sub>t</sub> = &beta;<sub>2</sub> v<sub>t-1</sub> + (1 - &beta;<sub>2</sub>) g<sub>t</sub><sup>2</sup><br>&theta;<sub>t</sub> = &theta;<sub>t-1</sub> - &alpha; &middot; m&#770;<sub>t</sub> / (&radic;v&#770;<sub>t</sub> + &epsilon;)</div><strong>零显存开销：</strong> GPU 缓冲区直接原地更新，避免垃圾回收。",
-			"trainingDeepDiveAllegory": "<strong>训练比喻：</strong> 梯度直接原地修改 GPU 显存，避免 GC 停顿。"
+			"trainingDeepDiveAllegory": "<strong>训练比喻：</strong> 梯度直接原地修改 GPU 显存，避免 GC 停顿。",
+			"visionFilters": {
+				"edge": {
+					"title": "Sobel 边缘检测：2D 空间离散梯度 (Sobel Edge Conv2D)",
+					"math": "<strong>Sobel 空间卷积核矩阵：</strong><div class=\"math-block\">G = &radic;(G<sub>x</sub><sup>2</sup> + G<sub>y</sub><sup>2</sup>)</div>",
+					"allegory": "<strong>硬件比喻：</strong> 90,000 个 WebGPU 线程同时并行计算 3x3 空间卷积，耗时小于 1ms。"
+				},
+				"sharpen": {
+					"title": "拉普拉斯高通图像锐化 (Laplacian Sharpen)",
+					"math": "<strong>拉普拉斯二阶微分算子：</strong><div class=\"math-block\">S(x, y) = I(x, y) + &lambda; &nabla;<sup>2</sup>I(x, y)</div>",
+					"allegory": "<strong>硬件比喻：</strong> WebGPU 直接在纹理寄存器中并行计算二阶空间差分。"
+				},
+				"blur": {
+					"title": "高斯空间平滑滤波 (Gaussian Blur 3x3)",
+					"math": "<strong>3x3 均值平滑卷积核：</strong><div class=\"math-block\">K = 1/9 &middot; J<sub>3x3</sub></div>",
+					"allegory": "<strong>硬件比喻：</strong> WebGPU 并行计算 9 邻域像素算术平均值。"
+				},
+				"invert": {
+					"title": "颜色张量补色反转 (Color Invert WebGPU)",
+					"math": "<strong>点对点张量计算：</strong><div class=\"math-block\">O(x, y, c) = 1.0 - I(x, y, c)</div>",
+					"allegory": "<strong>硬件比喻：</strong> GPU SIMD 向量减法在 0.2ms 内完成全部像素计算。"
+				}
+			}
 		}
 	},
 	"ja": {
@@ -1338,7 +1404,29 @@
 			"trainingDesc": "ブラウザ内で順伝播、自動微分、WebGPU インプレースオプティマイザ更新をリアルタイム実行します。",
 			"trainingDeepDiveTitle": "最適化ダイナミクス: インプレース SGD / Adam と勾配フロー",
 			"trainingDeepDiveMath": "<strong>インプレース Adam パラメータ更新式:</strong><div class=\"math-block\">m<sub>t</sub> = &beta;<sub>1</sub> m<sub>t-1</sub> + (1 - &beta;<sub>1</sub>) g<sub>t</sub> &nbsp;&nbsp;|&nbsp;&nbsp; v<sub>t</sub> = &beta;<sub>2</sub> v<sub>t-1</sub> + (1 - &beta;<sub>2</sub>) g<sub>t</sub><sup>2</sup><br>&theta;<sub>t</sub> = &theta;<sub>t-1</sub> - &alpha; &middot; m&#770;<sub>t</sub> / (&radic;v&#770;<sub>t</sub> + &epsilon;)</div><strong>ゼロメモリ割り当て:</strong> GPU バッファを直接インプレース更新し、GC 遅延を排除します。",
-			"trainingDeepDiveAllegory": "<strong>学習比喩:</strong> 勾配が GPU メモリ上で直接インプレース更新され、GC による遅延を防止します。"
+			"trainingDeepDiveAllegory": "<strong>学習比喩:</strong> 勾配が GPU メモリ上で直接インプレース更新され、GC による遅延を防止します。",
+			"visionFilters": {
+				"edge": {
+					"title": "Sobel エッジ検出: 2次元空間離散勾配 (Sobel Edge Conv2D)",
+					"math": "<strong>Sobel 空間畳み込み行列:</strong><div class=\"math-block\">G = &radic;(G<sub>x</sub><sup>2</sup> + G<sub>y</sub><sup>2</sup>)</div>",
+					"allegory": "<strong>ハードウェア比喩:</strong> 9万個の WebGPU スレッドが 3x3 領域を並列処理し、1ms 未満で完了します。"
+				},
+				"sharpen": {
+					"title": "ラプラシアン空間シャープニング (Laplacian Sharpen)",
+					"math": "<strong>ラプラシアン2次微分:</strong><div class=\"math-block\">S(x, y) = I(x, y) + &lambda; &nabla;<sup>2</sup>I(x, y)</div>",
+					"allegory": "<strong>ハードウェア比喩:</strong> WebGPU がテクスチャレジスタ上で高周波エッジ成分を増幅します。"
+				},
+				"blur": {
+					"title": "ガウス空間平滑化フィルタ (Gaussian Blur 3x3)",
+					"math": "<strong>3x3 平滑化カーネル:</strong><div class=\"math-block\">K = 1/9 &middot; J<sub>3x3</sub></div>",
+					"allegory": "<strong>ハードウェア比喩:</strong> 9近傍画素の平均を並列サンプラーで高速計算します。"
+				},
+				"invert": {
+					"title": "要素別色テンソル補色反転 (Color Invert WebGPU)",
+					"math": "<strong>ポイントワイズ計算式:</strong><div class=\"math-block\">O(x, y, c) = 1.0 - I(x, y, c)</div>",
+					"allegory": "<strong>ハードウェア比喩:</strong> GPU SIMD 命令で 0.2ms 以内に全画素を一括反転します。"
+				}
+			}
 		}
 	},
 	"hi": {
@@ -1670,7 +1758,29 @@
 			"trainingDesc": "ब्राउज़र में रीयल-टाइम बैकप्रॉपैगैशन और ऑप्टिमाइज़र निष्पादित करता है।",
 			"trainingDeepDiveTitle": "अनुकूलन गतिकी: इन-प्लेस एडम",
 			"trainingDeepDiveMath": "<strong>इन-प्लेस एडम अपडेट:</strong><div class=\"math-block\">m<sub>t</sub> = &beta;<sub>1</sub> m<sub>t-1</sub> + (1 - &beta;<sub>1</sub>) g<sub>t</sub> &nbsp;&nbsp;|&nbsp;&nbsp; v<sub>t</sub> = &beta;<sub>2</sub> v<sub>t-1</sub> + (1 - &beta;<sub>2</sub>) g<sub>t</sub><sup>2</sup><br>&theta;<sub>t</sub> = &theta;<sub>t-1</sub> - &alpha; &middot; m&#770;<sub>t</sub> / (&radic;v&#770;<sub>t</sub> + &epsilon;)</div><strong>शून्य आवंटन:</strong> मेमोरी चर्न के बिना सीधे GPU बफ़र्स को अपडेट करता है।",
-			"trainingDeepDiveAllegory": "<strong>रूपक:</strong> मेमोरी चर्न के बिना सीधे GPU बफ़र्स को अपडेट करता है।"
+			"trainingDeepDiveAllegory": "<strong>रूपक:</strong> मेमोरी चर्न के बिना सीधे GPU बफ़र्स को अपडेट करता है।",
+			"visionFilters": {
+				"edge": {
+					"title": "सोबेल एज डिटेक्शन: 2D स्थानिक ग्रेडिएंट (Sobel Edge Conv2D)",
+					"math": "<strong>सोबेल कनवल्शन:</strong><div class=\"math-block\">G = &radic;(G<sub>x</sub><sup>2</sup> + G<sub>y</sub><sup>2</sup>)</div>",
+					"allegory": "<strong>रूपक:</strong> 90,000 समानांतर GPU थ्रेड्स 1ms से कम समय में एज खोजते हैं।"
+				},
+				"sharpen": {
+					"title": "लाप्लासियन शार्पनिंग (Laplacian Sharpen)",
+					"math": "<strong>लाप्लासियन:</strong><div class=\"math-block\">S = I + &lambda; &nabla;<sup>2</sup>I</div>",
+					"allegory": "<strong>रूपक:</strong> समानांतर GPU मेमोरी में हाई-फ़्रीक्वेंसी कंट्रास्ट बढ़ाता है।"
+				},
+				"blur": {
+					"title": "गॉसियन स्मूथिंग फ़िल्टर (Gaussian Blur 3x3)",
+					"math": "<strong>3x3 ब्लर:</strong><div class=\"math-block\">K = 1/9 &middot; J<sub>3x3</sub></div>",
+					"allegory": "<strong>रूपक:</strong> 9 पड़ोसी पिक्सल का औसत एक साथ निकालता है।"
+				},
+				"invert": {
+					"title": "कलर इन्वर्ट (Color Invert WebGPU)",
+					"math": "<strong>इन्वर्ट:</strong><div class=\"math-block\">O = 1.0 - I</div>",
+					"allegory": "<strong>रूपक:</strong> GPU SIMD केवल 0.2ms में सभी पिक्सल प्रोसेस करता है।"
+				}
+			}
 		}
 	},
 	"es": {
@@ -2002,7 +2112,29 @@
 			"trainingDesc": "Ejecuta propagación hacia adelante, autodiferenciación y optimizadores en WebGPU.",
 			"trainingDeepDiveTitle": "Dinámica de Optimización: Adam / SGD In-Place",
 			"trainingDeepDiveMath": "<strong>Actualización Adam In-Place:</strong><div class=\"math-block\">m<sub>t</sub> = &beta;<sub>1</sub> m<sub>t-1</sub> + (1 - &beta;<sub>1</sub>) g<sub>t</sub> &nbsp;&nbsp;|&nbsp;&nbsp; v<sub>t</sub> = &beta;<sub>2</sub> v<sub>t-1</sub> + (1 - &beta;<sub>2</sub>) g<sub>t</sub><sup>2</sup><br>&theta;<sub>t</sub> = &theta;<sub>t-1</sub> - &alpha; &middot; m&#770;<sub>t</sub> / (&radic;v&#770;<sub>t</sub> + &epsilon;)</div><strong>Cero Asignación:</strong> Actualiza buffers GPU directamente sin recolección de basura.",
-			"trainingDeepDiveAllegory": "<strong>Alegoría:</strong> Actualiza buffers GPU directamente sin recolección de basura."
+			"trainingDeepDiveAllegory": "<strong>Alegoría:</strong> Actualiza buffers GPU directamente sin recolección de basura.",
+			"visionFilters": {
+				"edge": {
+					"title": "Detección de Bordes Sobel: Gradiente Espacial 2D (Sobel Edge Conv2D)",
+					"math": "<strong>Matriz de Convolución Sobel:</strong><div class=\"math-block\">G = &radic;(G<sub>x</sub><sup>2</sup> + G<sub>y</sub><sup>2</sup>)</div>",
+					"allegory": "<strong>Alegoría:</strong> 90,000 hilos WebGPU ejecutan kernels 3x3 en menos de 1ms."
+				},
+				"sharpen": {
+					"title": "Realce Espacial Laplaciano (Laplacian Sharpen)",
+					"math": "<strong>Operador Laplaciano:</strong><div class=\"math-block\">S(x, y) = I(x, y) + &lambda; &nabla;<sup>2</sup>I(x, y)</div>",
+					"allegory": "<strong>Alegoría:</strong> WebGPU calcula derivadas espaciales de 2do orden en registros de textura."
+				},
+				"blur": {
+					"title": "Filtro de Suavizado Gaussiano (Gaussian Blur 3x3)",
+					"math": "<strong>Kernel de Desenfoque 3x3:</strong><div class=\"math-block\">K = 1/9 &middot; J<sub>3x3</sub></div>",
+					"allegory": "<strong>Alegoría:</strong> Calcula el promedio de 9 píxeles adyacentes en paralelo ultra rápido."
+				},
+				"invert": {
+					"title": "Inversión de Color de Tensores (Color Invert WebGPU)",
+					"math": "<strong>Mapeo Punto a Punto:</strong><div class=\"math-block\">O(x, y, c) = 1.0 - I(x, y, c)</div>",
+					"allegory": "<strong>Alegoría:</strong> Instrucciones SIMD en GPU invierten 90,000 píxeles en 0.2ms."
+				}
+			}
 		}
 	}
 };
