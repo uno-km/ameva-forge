@@ -770,6 +770,62 @@ def test_fuzz_cumprod_unflatten_cdist_norm_atleast_xd():
     assert at.atleast_2d(sc).shape == (1, 1)
     assert at.atleast_3d(sc).shape == (1, 1, 1)
 
+def test_fuzz_adamw_rmsprop_adagrad_linearlr_lambdalr_multisteplr():
+    """Fuzz test AdamW, RMSprop, Adagrad, LinearLR, LambdaLR, MultiStepLR."""
+    import forge as at
+    from forge import optim
+    
+    # 1. AdamW
+    w = at.tensor(np.array([10.0, 20.0], dtype=np.float32), requires_grad=True)
+    opt_adamw = optim.AdamW([w], lr=0.1, weight_decay=0.01)
+    w.grad = at.tensor(np.array([1.0, 1.0], dtype=np.float32))
+    opt_adamw.step()
+    # verify weight decay and step applied
+    assert w.numpy()[0] < 10.0
+    assert w.grad is None
+    
+    # 2. RMSprop
+    w_rms = at.tensor(np.array([10.0, 20.0], dtype=np.float32), requires_grad=True)
+    opt_rms = optim.RMSprop([w_rms], lr=0.1, alpha=0.9, momentum=0.1)
+    w_rms.grad = at.tensor(np.array([2.0, 2.0], dtype=np.float32))
+    opt_rms.step()
+    assert w_rms.numpy()[0] < 10.0
+    assert w_rms.grad is None
+    
+    # 3. Adagrad
+    w_ada = at.tensor(np.array([10.0, 20.0], dtype=np.float32), requires_grad=True)
+    opt_ada = optim.Adagrad([w_ada], lr=0.1)
+    w_ada.grad = at.tensor(np.array([1.0, 1.0], dtype=np.float32))
+    opt_ada.step()
+    assert w_ada.numpy()[0] < 10.0
+    assert w_ada.grad is None
+    
+    # 4. LinearLR
+    opt = optim.SGD([w], lr=1.0)
+    sched_lin = optim.LinearLR(opt, start_factor=0.2, end_factor=1.0, total_iters=4)
+    # initial step called in __init__: lr = 1.0 * 0.2 = 0.2
+    assert abs(opt.lr - 0.2) < 1e-5
+    sched_lin.step() # epoch 1: factor = 0.2 + 0.8 * (1/4) = 0.4
+    assert abs(opt.lr - 0.4) < 1e-5
+    sched_lin.step() # epoch 2: factor = 0.2 + 0.8 * (2/4) = 0.6
+    assert abs(opt.lr - 0.6) < 1e-5
+    
+    # 5. LambdaLR
+    opt2 = optim.SGD([w], lr=1.0)
+    sched_lam = optim.LambdaLR(opt2, lr_lambda=lambda epoch: 0.95 ** epoch)
+    assert abs(opt2.lr - 1.0) < 1e-5
+    sched_lam.step()
+    assert abs(opt2.lr - 0.95) < 1e-5
+    
+    # 6. MultiStepLR
+    opt3 = optim.SGD([w], lr=1.0)
+    sched_ms = optim.MultiStepLR(opt3, milestones=[2, 4], gamma=0.5)
+    sched_ms.step() # epoch 1
+    assert abs(opt3.lr - 1.0) < 1e-5
+    sched_ms.step() # epoch 2 (hit milestone!)
+    assert abs(opt3.lr - 0.5) < 1e-5
+
+
 
 
 

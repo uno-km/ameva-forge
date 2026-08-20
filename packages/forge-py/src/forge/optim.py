@@ -486,6 +486,91 @@ class Adam(Optimizer):
                 p.grad = None
 
 
+class AdamW(Adam):
+    """
+    WHAT: Decoupled Weight Decay(Loshchilov & Hutter, 2019)가 적용된 AdamW 옵티마이저입니다.
+    WHY: LLM(LLaMA-3, Mistral, GPT-4) 및 Vision Transformer 훈련의 표준 옵티마이저로 사용하기 위함입니다.
+    HOW: Adam을 상속하며 기본 weight_decay=0.01을 적용하여 가중치 감쇠를 독립적으로 연산합니다.
+    """
+    def __init__(self, params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay: float = 0.01):
+        super().__init__(params, lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
+
+
+class RMSprop(Optimizer):
+    """
+    WHAT: RMSprop(Root Mean Square Propagation) 옵티마이저 클래스입니다.
+    WHY: 강화학습 및 시계열 순환 신경망(RNN)에서 그래디언트 제곱의 이동평균을 반영하여 학습률을 적응적으로 조정하기 위함입니다.
+    HOW: square_avg 지수 이동 평균과 모멘텀 버퍼를 통해 파라미터를 갱신합니다.
+    """
+    def __init__(self, params, lr=0.01, alpha=0.99, eps=1e-8, weight_decay: float = 0.0, momentum: float = 0.0):
+        super().__init__(params, lr)
+        self.alpha = float(alpha)
+        self.eps = float(eps)
+        self.weight_decay = float(weight_decay)
+        self.momentum = float(momentum)
+        self.square_avg = [None] * len(self.params)
+        self.momentum_buffer = [None] * len(self.params)
+
+    def step(self):
+        for i, p in enumerate(self.params):
+            if p.grad is None:
+                continue
+            g = _require_cpu_data(p.grad, "p.grad")
+            param_data = _require_cpu_data(p, "p")
+            if self.weight_decay > 0.0:
+                g = g + self.weight_decay * param_data
+            if self.square_avg[i] is None:
+                self.square_avg[i] = np.zeros_like(g)
+            self.square_avg[i] = self.alpha * self.square_avg[i] + (1.0 - self.alpha) * (g ** 2)
+            avg = np.sqrt(self.square_avg[i]) + self.eps
+            if self.momentum > 0.0:
+                if self.momentum_buffer[i] is None:
+                    self.momentum_buffer[i] = np.zeros_like(g)
+                self.momentum_buffer[i] = self.momentum * self.momentum_buffer[i] + g / avg
+                param_data = param_data - self.lr * self.momentum_buffer[i]
+            else:
+                param_data = param_data - self.lr * g / avg
+            p._data = param_data.astype(np.float32)
+            p._version += 1
+            p.grad = None
+
+
+class Adagrad(Optimizer):
+    """
+    WHAT: Adagrad(Adaptive Gradient) 옵티마이저 클래스입니다.
+    WHY: 희소한 특징(Sparse features)이나 임베딩 레이어의 파라미터별 빈도에 반비례하여 학습률을 조정하기 위함입니다.
+    HOW: 과거 그래디언트 제곱합을 누적하여 빈번한 파라미터의 학습률을 점진적으로 낮춥니다.
+    """
+    def __init__(self, params, lr=0.01, lr_decay=0.0, weight_decay=0.0, initial_accumulator_value=0.0, eps=1e-10):
+        super().__init__(params, lr)
+        self.lr_decay = float(lr_decay)
+        self.weight_decay = float(weight_decay)
+        self.initial_accumulator_value = float(initial_accumulator_value)
+        self.eps = float(eps)
+        self.state_step = 0
+        self.sum_squares = [None] * len(self.params)
+
+    def step(self):
+        self.state_step += 1
+        clr = self.lr / (1.0 + (self.state_step - 1) * self.lr_decay)
+        for i, p in enumerate(self.params):
+            if p.grad is None:
+                continue
+            g = _require_cpu_data(p.grad, "p.grad")
+            param_data = _require_cpu_data(p, "p")
+            if self.weight_decay > 0.0:
+                g = g + self.weight_decay * param_data
+            if self.sum_squares[i] is None:
+                self.sum_squares[i] = np.full_like(g, self.initial_accumulator_value)
+            self.sum_squares[i] += g ** 2
+            std = np.sqrt(self.sum_squares[i]) + self.eps
+            param_data = param_data - clr * g / std
+            p._data = param_data.astype(np.float32)
+            p._version += 1
+            p.grad = None
+
+
+
 # WHAT: 파라미터들의 그래디언트 글로벌 L2 노름(Norm)을 제한(Clip)하는 동기 함수입니다.
 # WHY: RNN이나 깊은 신경망에서 그래디언트 폭발(Gradient Exploding) 문제를 방지하여 학습을 안정화하기 위함입니다.
 # HOW: 모든 CPU 그래디언트의 제곱합을 구해 노름을 계산하고, max_norm을 넘으면 그 비율만큼 전체 기울기를 축소합니다.
@@ -755,5 +840,70 @@ class ReduceLROnPlateau:
             # WHY: 새로운 학습률 스케일에서 다시 patience만큼 기회를 주기 위함입니다.
             # HOW: 0으로 초기화합니다.
             self.num_bad_epochs = 0
+
+
+class LinearLR:
+    """
+    WHAT: 지정된 반복 횟수(total_iters) 동안 학습률 계수를 start_factor에서 end_factor로 선형 변화시키는 스케줄러입니다.
+    WHY: 트랜스포머/LLM 훈련 시 학습 초기의 Linear Warmup이나 후반부 Linear Decay를 표준적으로 구현하기 위함입니다.
+    HOW: 에포크마다 선형 보간 계수를 계산하여 base_lr에 곱해 적용합니다.
+    """
+    def __init__(self, optimizer: Optimizer, start_factor: float = 1.0 / 3, end_factor: float = 1.0, total_iters: int = 5, last_epoch: int = -1):
+        self.optimizer = optimizer
+        self.start_factor = float(start_factor)
+        self.end_factor = float(end_factor)
+        self.total_iters = total_iters
+        self.base_lr = optimizer.lr
+        self.last_epoch = last_epoch
+        self.step()
+
+    def step(self, metrics=None):
+        self.last_epoch += 1
+        if self.last_epoch == 0:
+            self.optimizer.lr = self.base_lr * self.start_factor
+        elif self.last_epoch <= self.total_iters:
+            factor = self.start_factor + (self.end_factor - self.start_factor) * (self.last_epoch / self.total_iters)
+            self.optimizer.lr = self.base_lr * factor
+        else:
+            self.optimizer.lr = self.base_lr * self.end_factor
+
+
+class LambdaLR:
+    """
+    WHAT: 사용자 정의 람다 함수(lr_lambda)에 따라 학습률을 조절하는 유연한 스케줄러입니다.
+    WHY: 복합 스케줄링(예: 웜업 + 코사인 감쇄 등 커스텀 수식)을 손쉽게 결합하기 위함입니다.
+    HOW: 매 step마다 lr_lambda(epoch)의 반환값을 base_lr에 곱합니다.
+    """
+    def __init__(self, optimizer: Optimizer, lr_lambda, last_epoch: int = -1):
+        self.optimizer = optimizer
+        self.lr_lambda = lr_lambda
+        self.base_lr = optimizer.lr
+        self.last_epoch = last_epoch
+        self.step()
+
+    def step(self, metrics=None):
+        self.last_epoch += 1
+        self.optimizer.lr = self.base_lr * self.lr_lambda(self.last_epoch)
+
+
+class MultiStepLR:
+    """
+    WHAT: 지정된 마일스톤(milestones) 에포크에 도달할 때마다 학습률에 감마(gamma)를 곱하는 스케줄러입니다.
+    WHY: 전통적인 비전 모델(ResNet) 훈련에서 30, 60, 90 에포크마다 학습률을 단계적으로 10배씩 낮추기 위함입니다.
+    HOW: last_epoch가 milestones 리스트에 포함될 때 gamma를 곱합니다.
+    """
+    def __init__(self, optimizer: Optimizer, milestones: List[int], gamma: float = 0.1, last_epoch: int = -1):
+        self.optimizer = optimizer
+        self.milestones = set(milestones)
+        self.gamma = float(gamma)
+        self.last_epoch = last_epoch
+        if self.last_epoch == -1:
+            self.last_epoch = 0
+
+    def step(self, metrics=None):
+        self.last_epoch += 1
+        if self.last_epoch in self.milestones:
+            self.optimizer.lr *= self.gamma
+
 
 
