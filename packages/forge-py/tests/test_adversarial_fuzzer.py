@@ -220,6 +220,39 @@ def test_fuzz_batch_norm2d_affine_false_and_no_running_stats():
     assert x.grad is not None
     assert not np.isnan(x.grad.numpy()).any()
 
+def test_fuzz_cosine_similarity_clamp_and_maximum():
+    """Fuzz test cosine similarity, clamp, maximum/minimum autograd."""
+    import forge.functional as F
+    import forge.nn as nn
+    
+    # 1. Cosine similarity zero-division defense
+    x1 = tensor(np.zeros((3, 5), dtype=np.float32), requires_grad=True)
+    x2 = tensor(np.zeros((3, 5), dtype=np.float32), requires_grad=True)
+    sim = F.cosine_similarity(x1, x2, dim=1, eps=1e-8)
+    assert sim.shape == (3,)
+    assert not np.isnan(sim.numpy()).any()
+    loss = sim.sum()
+    loss.backward()
+    assert x1.grad is not None
+    assert not np.isnan(x1.grad.numpy()).any()
+    
+    # 2. nn.CosineSimilarity module
+    cos_mod = nn.CosineSimilarity(dim=1)
+    a = tensor(np.random.randn(4, 16).astype(np.float32), requires_grad=True)
+    b = tensor(np.random.randn(4, 16).astype(np.float32), requires_grad=True)
+    res = cos_mod(a, b)
+    assert res.shape == (4,)
+    
+    # 3. Clamp / Maximum / Minimum
+    v = tensor(np.array([-5.0, 0.0, 5.0, 10.0], dtype=np.float32), requires_grad=True)
+    clamped = v.clamp(min_val=0.0, max_val=6.0)
+    np.testing.assert_allclose(clamped.numpy(), np.array([0.0, 0.0, 5.0, 6.0], dtype=np.float32))
+    loss_c = clamped.sum()
+    loss_c.backward()
+    assert v.grad is not None
+    np.testing.assert_allclose(v.grad.numpy(), np.array([0.0, 1.0, 1.0, 0.0], dtype=np.float32))
+
+
 
 
 

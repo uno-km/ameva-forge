@@ -1210,3 +1210,17 @@ class SwiGLU(Module):
         act = swiglu(g, u)
         return self.down_proj(act)
 
+class CosineSimilarity(Module):
+    """
+    무엇을: 두 텐서 간의 코사인 유사도(Cosine Similarity)를 계산하는 신경망 모듈입니다.
+    왜: 샴 네트워크(Siamese Network), 유사도 검색, 대조 손실(Contrastive Loss) 계산을 위함입니다.
+    """
+    def __init__(self, dim: int = 1, eps: float = 1e-8):
+        super().__init__()
+        self.dim = dim
+        self.eps = eps
+        
+    def forward(self, x1: Tensor, x2: Tensor) -> Tensor:
+        from .functional import cosine_similarity
+        return cosine_similarity(x1, x2, dim=self.dim, eps=self.eps)
+

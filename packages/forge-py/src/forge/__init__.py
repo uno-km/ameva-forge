@@ -25,7 +25,8 @@ from .ops import (
     ones_like, zeros_like, zeros, ones, full,  # NL-05: 공개 API에 추가
     to_numpy, to_numpy_async, dispose,
     unsqueeze, squeeze, flatten, permute, max_op, max_axis, var, std, sqrt,
-    cat, where, pad, gather, scatter, dropout, conv2d, max_pool2d, avg_pool2d, bmm
+    cat, where, pad, gather, scatter, dropout, conv2d, max_pool2d, avg_pool2d, bmm,
+    maximum, minimum, clamp
 )
 # 텐서 객체 자체를 정의하는 클래스 및 GC 함수 임포트
 from .tensor import Tensor, flush_gc

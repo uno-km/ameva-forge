@@ -539,6 +539,99 @@ def relu(x: Tensor) -> Tensor:
     return ReLUFunction.apply(x)
 
 
+# WHAT: 요소별 최댓값(Maximum) 연산을 지원하는 자동 미분 클래스입니다.
+# WHY: 두 텐서 간의 상한값을 취하고 서브그래디언트를 올바르게 전파하기 위함입니다.
+class MaximumFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
+        ctx.save_for_backward(a, b)
+        _ensure_same_device(a, b, 'maximum')
+        out_shape = _broadcast_shapes(a.shape, b.shape)
+        ctx.a_shape = a.shape
+        ctx.b_shape = b.shape
+        
+        if _should_use_gpu(a, b):
+            return Tensor(shape=out_shape, dtype='float32', device='gpu', op='maximum', parents=(a, b))
+        else:
+            data_a = _require_cpu_data(a, "a")
+            data_b = _require_cpu_data(b, "b")
+            res = np.maximum(data_a, data_b)
+            return Tensor(shape=out_shape, dtype='float32', device='cpu', data=res)
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, Tensor]:
+        a, b = ctx.saved_tensors
+        if a.device == 'cpu' and b.device == 'cpu':
+            data_a = _require_cpu_data(a, "a")
+            data_b = _require_cpu_data(b, "b")
+            data_g = _require_cpu_data(grad_output, "grad_output")
+            
+            mask_a = (data_a >= data_b).astype(np.float32)
+            mask_b = 1.0 - mask_a
+            
+            grad_a = _unbroadcast(data_g * mask_a, ctx.a_shape)
+            grad_b = _unbroadcast(data_g * mask_b, ctx.b_shape)
+            return (Tensor(shape=ctx.a_shape, dtype='float32', device='cpu', data=grad_a),
+                    Tensor(shape=ctx.b_shape, dtype='float32', device='cpu', data=grad_b))
+        else:
+            return (Tensor(shape=ctx.a_shape, dtype='float32', device='gpu', op='maximum_backward_a', parents=(a, b, grad_output)),
+                    Tensor(shape=ctx.b_shape, dtype='float32', device='gpu', op='maximum_backward_b', parents=(a, b, grad_output)))
+
+def maximum(a: Tensor, b: Tensor) -> Tensor:
+    return MaximumFunction.apply(a, b)
+
+# WHAT: 요소별 최솟값(Minimum) 연산을 지원하는 자동 미분 클래스입니다.
+class MinimumFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, a: Tensor, b: Tensor) -> Tensor:
+        ctx.save_for_backward(a, b)
+        _ensure_same_device(a, b, 'minimum')
+        out_shape = _broadcast_shapes(a.shape, b.shape)
+        ctx.a_shape = a.shape
+        ctx.b_shape = b.shape
+        
+        if _should_use_gpu(a, b):
+            return Tensor(shape=out_shape, dtype='float32', device='gpu', op='minimum', parents=(a, b))
+        else:
+            data_a = _require_cpu_data(a, "a")
+            data_b = _require_cpu_data(b, "b")
+            res = np.minimum(data_a, data_b)
+            return Tensor(shape=out_shape, dtype='float32', device='cpu', data=res)
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, Tensor]:
+        a, b = ctx.saved_tensors
+        if a.device == 'cpu' and b.device == 'cpu':
+            data_a = _require_cpu_data(a, "a")
+            data_b = _require_cpu_data(b, "b")
+            data_g = _require_cpu_data(grad_output, "grad_output")
+            
+            mask_a = (data_a <= data_b).astype(np.float32)
+            mask_b = 1.0 - mask_a
+            
+            grad_a = _unbroadcast(data_g * mask_a, ctx.a_shape)
+            grad_b = _unbroadcast(data_g * mask_b, ctx.b_shape)
+            return (Tensor(shape=ctx.a_shape, dtype='float32', device='cpu', data=grad_a),
+                    Tensor(shape=ctx.b_shape, dtype='float32', device='cpu', data=grad_b))
+        else:
+            return (Tensor(shape=ctx.a_shape, dtype='float32', device='gpu', op='minimum_backward_a', parents=(a, b, grad_output)),
+                    Tensor(shape=ctx.b_shape, dtype='float32', device='gpu', op='minimum_backward_b', parents=(a, b, grad_output)))
+
+def minimum(a: Tensor, b: Tensor) -> Tensor:
+    return MinimumFunction.apply(a, b)
+
+def clamp(x: Tensor, min_val: Optional[float] = None, max_val: Optional[float] = None) -> Tensor:
+    """Clamps all elements in input into the range [min_val, max_val]."""
+    out = x
+    if min_val is not None:
+        min_t = full(x.shape, float(min_val), device=x.device)
+        out = maximum(out, min_t)
+    if max_val is not None:
+        max_t = full(x.shape, float(max_val), device=x.device)
+        out = minimum(out, max_t)
+    return out
+
+
 # WHAT: 뺄셈 연산을 지원하는 자동 미분 클래스입니다.
 # WHY: 텐서 간의 차이를 구하고 역전파 시 미분값을 적절히 분배하기 위함입니다.
 # HOW: a - b를 계산하고, backward 시 a에는 grad_output을, b에는 -grad_output을 줍니다.

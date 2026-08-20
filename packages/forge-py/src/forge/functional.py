@@ -390,6 +390,25 @@ def mse_loss(predictions, targets):
     sq = mul(diff, diff)
     return mean_op(sq)
 
+def cosine_similarity(x1, x2, dim: int = 1, eps: float = 1e-8):
+    """
+    무엇을: 두 텐서 x1과 x2 간의 코사인 유사도(Cosine Similarity)를 계산한다.
+    왜: 임베딩 벡터 간 유사도 측정, 벡터 검색(RAG), 대조 학습(Contrastive Learning)을 지원하기 위함이다.
+    어떻게: dim 축에 대해 내적을 구하고 L2 노름 제곱에 eps^2 클램프를 적용한 후 sqrt로 나누어 0-벡터 미분 NaN을 영구 방어한다.
+    """
+    from .ops import sum_axis, mul, sqrt, div, maximum, full
+    dot = sum_axis(mul(x1, x2), axis=dim)
+    w1 = sum_axis(mul(x1, x1), axis=dim)
+    w2 = sum_axis(mul(x2, x2), axis=dim)
+    
+    eps_sq1 = full(w1.shape, eps * eps, device=x1.device)
+    eps_sq2 = full(w2.shape, eps * eps, device=x2.device)
+    norm1 = sqrt(maximum(w1, eps_sq1))
+    norm2 = sqrt(maximum(w2, eps_sq2))
+    
+    denom = mul(norm1, norm2)
+    return div(dot, denom)
+
 def _move_tensor_state(dst, src) -> None:
     """
     WHAT: src 텐서의 상태와 지연 연산 그래프를 dst 텐서로 안전하게 이동(Move)합니다.

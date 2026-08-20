@@ -1041,7 +1041,27 @@ class Tensor:
         """In-place zero out the tensor."""
         return self.fill_(0.0)
 
+    def clamp(self, min_val=None, max_val=None):
+        """Clamps all elements in input into the range [min_val, max_val]."""
+        self._check_disposed()
+        from .ops import clamp
+        return clamp(self, min_val, max_val)
 
+    def maximum(self, other):
+        """Element-wise maximum of self and other."""
+        self._check_disposed()
+        from .ops import maximum, tensor
+        if isinstance(other, (int, float)):
+            other = tensor(float(other), device=self.device, dtype=self.dtype)
+        return maximum(self, other)
+
+    def minimum(self, other):
+        """Element-wise minimum of self and other."""
+        self._check_disposed()
+        from .ops import minimum, tensor
+        if isinstance(other, (int, float)):
+            other = tensor(float(other), device=self.device, dtype=self.dtype)
+        return minimum(self, other)
 
     def sum(self):
         """
