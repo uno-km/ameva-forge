@@ -1,0 +1,42 @@
+name: Publish AMEVA-Forge to PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  pypi-publish:
+    name: Build & Upload ameva-forge to PyPI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Build & Twine
+        run: |
+          python -m pip install --upgrade pip build twine
+
+      - name: Build Distribution Packages (sdist & wheel)
+        run: |
+          cd packages/forge-py
+          python -m build
+
+      - name: Verify Package Metadata with Twine
+        run: |
+          twine check packages/forge-py/dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/forge-py/dist/
+          skip-existing: true\n

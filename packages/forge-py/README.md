@@ -181,16 +181,23 @@ AMEVA-Forge packages a single bundled JavaScript distribution (`forge-py-bundle.
 
 ---
 
-## The AMEVA Foundation (아메바 재단)
+## 🌍 The AMEVA Foundation (아메바 재단)
 
-**AMEVA-Forge** is an open-source initiative directed by the **AMEVA Foundation** (아메바 재단).
+**AMEVA-Forge** is an open-source deep learning initiative created and governed by the **AMEVA Foundation** (아메바 재단).
 
-### Our Mission
-The AMEVA Foundation is dedicated to the **democratisation of client-side artificial intelligence**. We envision a decentralized web where deep learning inference, fine-tuning, and scientific computation occur directly on user devices—eliminating centralized server costs, safeguarding user data sovereignty, and providing zero-latency neural capabilities everywhere.
+### 🎯 Our Mission & Zero-Server Paradigm
+The AMEVA Foundation is dedicated to the **democratisation of client-side artificial intelligence and edge computing**. We envision a decentralized web where deep learning training, fine-tuning, and neural inference occur directly on user devices (browsers, laptops, tablets, and smartphones)—eliminating massive cloud server costs, safeguarding user data sovereignty with zero network leakage, and providing zero-latency neural intelligence everywhere.
+
+### 🌟 Core Foundation Initiatives
+- 🌐 **AMEVA-Forge Tensor Engine**: High-performance WebGPU tensor computation & reverse-mode autograd engine.
+- 🎙️ **On-Device Whisper STT**: Real-time acoustic FFT signal processing & speech recognition running locally in browser.
+- 🤖 **Decentralized LLM Transformers**: Zero-install character and subword transformer models with zero cloud dependency.
+- 🔒 **Privacy-First AI Sovereignty**: Sovereign on-device machine learning where private data never leaves client silicon.
 
 * **Foundation Portal**: [https://uno-km.github.io/ameva-forge/](https://uno-km.github.io/ameva-forge/)
 * **Official Repository**: [https://github.com/uno-km/ameva-forge](https://github.com/uno-km/ameva-forge)
-* **Issue Tracker & Governance**: [https://github.com/uno-km/ameva-forge/issues](https://github.com/uno-km/ameva-forge/issues)
+* **Community & Governance**: [https://github.com/uno-km/ameva-forge/issues](https://github.com/uno-km/ameva-forge/issues)
+* **Sponsorship & Research Partnerships**: [https://github.com/uno-km](https://github.com/uno-km)
 
 ---
 

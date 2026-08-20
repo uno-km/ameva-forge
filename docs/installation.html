@@ -49,16 +49,19 @@
             <h2 data-i18n="installation.h2">Installation & Setup</h2>
             <p data-i18n="installation.desc">AMEVA-Forge supports multiple execution targets: pure Python (CPython for testing/prototyping), TypeScript/JavaScript for web apps, and in-browser Pyodide with WebGPU.</p>
 
-            <h3 data-i18n="installation.sec1Title">1. Python Package Installation (Pip & Wheel)</h3>
-            <p data-i18n="installation.sec1Desc">Install the Python package directly via Git or from pre-built wheel:</p>
-            <pre><code># Option A: Install directly from GitHub
+            <h3 data-i18n="installation.sec1Title">1. Python Package Installation (PyPI & Pip)</h3>
+            <p data-i18n="installation.sec1Desc">Install the official package from PyPI, or from pre-built wheel:</p>
+            <pre><code># Official PyPI Release (Recommended)
+pip install ameva-forge
+
+# Option B: Install directly from GitHub
 pip install git+https://github.com/uno-km/ameva-forge.git#subdirectory=packages/forge-py
 
-# Option B: Download pre-built wheel artifact
-# Download: https://uno-km.github.io/ameva-forge/pkg/forge-0.1.0-py3-none-any.whl
-pip install forge-0.1.0-py3-none-any.whl
+# Option C: Download pre-built wheel artifact
+# Download: https://uno-km.github.io/ameva-forge/pkg/ameva_forge-0.1.0-py3-none-any.whl
+pip install ameva_forge-0.1.0-py3-none-any.whl
 
-# Option C: Local editable development mode
+# Option D: Local editable development mode
 pip install -e packages/forge-py</code></pre>
 
             <h3 data-i18n="installation.sec2Title">2. NPM Package for Node / Webpack</h3>
