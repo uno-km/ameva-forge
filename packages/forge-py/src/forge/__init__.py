@@ -35,7 +35,8 @@ from .ops import (
     conv1d, pixel_shuffle, pixel_unshuffle, interpolate,
     stack, chunk, split, unbind,
     multinomial, randint, bernoulli, normal,
-    roll, repeat_interleave, meshgrid, diag, diagonal, trace, outer
+    roll, repeat_interleave, meshgrid, diag, diagonal, trace, outer,
+    masked_fill, index_select, masked_select, nonzero, take_along_dim
 )
 any = any_op
 all = all_op

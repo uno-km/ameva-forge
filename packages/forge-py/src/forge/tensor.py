@@ -1419,6 +1419,47 @@ class Tensor:
         from .ops import trace
         return trace(self)
 
+    def masked_fill(self, mask: 'Tensor', value: Union[float, int, 'Tensor']):
+        """Fills elements of tensor with value where mask is True."""
+        self._check_disposed()
+        from .ops import masked_fill
+        return masked_fill(self, mask=mask, value=value)
+
+    def masked_fill_(self, mask: 'Tensor', value: Union[float, int, 'Tensor']):
+        """In-place version of masked_fill."""
+        self._check_disposed()
+        from .ops import _require_cpu_data
+        data_x = _require_cpu_data(self, "self")
+        data_m = _require_cpu_data(mask, "mask").astype(bool)
+        val = value.item() if isinstance(value, Tensor) else float(value)
+        data_x[data_m] = val
+        self._version += 1
+        return self
+
+    def index_select(self, dim: int, index: 'Tensor'):
+        """Indexes the tensor along dim using index."""
+        self._check_disposed()
+        from .ops import index_select
+        return index_select(self, dim=dim, index=index)
+
+    def masked_select(self, mask: 'Tensor'):
+        """Indexes the tensor using boolean mask."""
+        self._check_disposed()
+        from .ops import masked_select
+        return masked_select(self, mask=mask)
+
+    def nonzero(self, as_tuple: bool = False):
+        """Returns indices of non-zero elements."""
+        self._check_disposed()
+        from .ops import nonzero
+        return nonzero(self, as_tuple=as_tuple)
+
+    def take_along_dim(self, indices: 'Tensor', dim: int):
+        """Selects values from tensor at 1-D indices along dim."""
+        self._check_disposed()
+        from .ops import take_along_dim
+        return take_along_dim(self, indices=indices, dim=dim)
+
     def __getitem__(self, key):
         """
         WHAT: 인덱싱 또는 슬라이싱 문법(예: tensor[0:2])을 사용하여 텐서의 부분 배열을 추출합니다.

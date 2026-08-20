@@ -681,6 +681,55 @@ def test_fuzz_roll_repeat_interleave_meshgrid_diag_outer_autograd():
     np.testing.assert_allclose(v1.grad.numpy(), np.array([12.0, 12.0]))
     np.testing.assert_allclose(v2.grad.numpy(), np.array([3.0, 3.0, 3.0]))
 
+def test_fuzz_masked_fill_index_select_masked_select_nonzero_take_along_dim():
+    """Fuzz test masked_fill, index_select, masked_select, nonzero, take_along_dim with Autograd."""
+    import forge as at
+    
+    # 1. masked_fill & backward
+    scores = at.tensor(np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32), requires_grad=True)
+    mask = at.tensor(np.array([[False, True], [True, False]], dtype=bool))
+    filled = scores.masked_fill(mask, -1e9)
+    assert filled.numpy()[0, 1] == -1e9
+    assert filled.numpy()[1, 0] == -1e9
+    loss = (filled * 2.0).sum()
+    loss.backward()
+    np.testing.assert_allclose(scores.grad.numpy(), np.array([[2.0, 0.0], [0.0, 2.0]], dtype=np.float32))
+    
+    # 2. index_select & backward
+    x = at.tensor(np.arange(12, dtype=np.float32).reshape(3, 4), requires_grad=True)
+    idx = at.tensor(np.array([0, 2], dtype=np.int64))
+    sel = x.index_select(dim=0, index=idx)
+    assert sel.shape == (2, 4)
+    loss_sel = (sel * 3.0).sum()
+    loss_sel.backward()
+    expected_grad = np.array([
+        [3.0, 3.0, 3.0, 3.0],
+        [0.0, 0.0, 0.0, 0.0],
+        [3.0, 3.0, 3.0, 3.0]
+    ], dtype=np.float32)
+    np.testing.assert_allclose(x.grad.numpy(), expected_grad)
+    
+    # 3. masked_select & backward
+    m_in = at.tensor(np.array([10.0, 20.0, 30.0, 40.0], dtype=np.float32), requires_grad=True)
+    bool_mask = at.tensor(np.array([True, False, True, False], dtype=bool))
+    ms = m_in.masked_select(bool_mask)
+    assert ms.shape == (2,)
+    (ms * 5.0).sum().backward()
+    np.testing.assert_allclose(m_in.grad.numpy(), np.array([5.0, 0.0, 5.0, 0.0], dtype=np.float32))
+    
+    # 4. nonzero
+    nz_t = at.tensor(np.array([[0, 1], [2, 0]], dtype=np.int32))
+    nz_indices = nz_t.nonzero()
+    np.testing.assert_allclose(nz_indices.numpy(), np.array([[0, 1], [1, 0]], dtype=np.int64))
+    
+    # 5. take_along_dim
+    t_in = at.tensor(np.array([[10, 20, 30], [40, 50, 60]], dtype=np.float32), requires_grad=True)
+    gather_idx = at.tensor(np.array([[2, 0], [1, 2]], dtype=np.int64))
+    t_out = t_in.take_along_dim(gather_idx, dim=1)
+    assert t_out.shape == (2, 2)
+    np.testing.assert_allclose(t_out.numpy(), np.array([[30.0, 10.0], [50.0, 60.0]]))
+
+
 
 
 

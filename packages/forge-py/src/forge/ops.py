@@ -3638,3 +3638,121 @@ def outer(input: Tensor, vec2: Tensor) -> Tensor:
     return input.unsqueeze(1) * vec2.unsqueeze(0)
 
 
+class MaskedFillFunction(Function):
+    @staticmethod
+    def forward(ctx, input: Tensor, mask: Tensor, value: Union[float, int, Tensor]) -> Tensor:
+        data_x = _require_cpu_data(input, "input")
+        data_m = _require_cpu_data(mask, "mask").astype(bool)
+        val = value.item() if isinstance(value, Tensor) else float(value)
+        out_data = np.copy(data_x)
+        out_data[data_m] = val
+        ctx.save_for_backward(mask)
+        return Tensor(shape=out_data.shape, dtype=input.dtype, device=input.device, data=out_data)
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, None, None]:
+        mask, = ctx.saved_tensors
+        data_g = _require_cpu_data(grad_output, "grad_output")
+        data_m = _require_cpu_data(mask, "mask").astype(bool)
+        grad_x = np.copy(data_g)
+        grad_x[data_m] = 0.0
+        return Tensor(shape=grad_x.shape, dtype=grad_output.dtype, device=grad_output.device, data=grad_x), None, None
+
+def masked_fill(input: Tensor, mask: Tensor, value: Union[float, int, Tensor]) -> Tensor:
+    """Fills elements of input tensor with value where mask is True."""
+    return MaskedFillFunction.apply(input, mask, value)
+
+
+class IndexSelectFunction(Function):
+    @staticmethod
+    def forward(ctx, input: Tensor, dim: int, index: Tensor) -> Tensor:
+        data_x = _require_cpu_data(input, "input")
+        data_idx = _require_cpu_data(index, "index").astype(np.int64)
+        rank = len(data_x.shape)
+        norm_dim = dim if dim >= 0 else dim + rank
+        res = np.take(data_x, data_idx, axis=norm_dim)
+        ctx.save_for_backward(index)
+        ctx.dim = norm_dim
+        ctx.input_shape = input.shape
+        return Tensor(shape=res.shape, dtype=input.dtype, device=input.device, data=res)
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, None, None]:
+        index, = ctx.saved_tensors
+        data_g = _require_cpu_data(grad_output, "grad_output")
+        data_idx = _require_cpu_data(index, "index").astype(np.int64)
+        dim = ctx.dim
+        input_shape = ctx.input_shape
+        grad_x = np.zeros(input_shape, dtype=data_g.dtype)
+        np.add.at(grad_x, [slice(None)] * dim + [data_idx], data_g)
+        return Tensor(shape=grad_x.shape, dtype=grad_output.dtype, device=grad_output.device, data=grad_x), None, None
+
+def index_select(input: Tensor, dim: int, index: Tensor) -> Tensor:
+    """Returns a new tensor which indexes the input tensor along dimension dim using the entries in index."""
+    return IndexSelectFunction.apply(input, dim, index)
+
+
+class MaskedSelectFunction(Function):
+    @staticmethod
+    def forward(ctx, input: Tensor, mask: Tensor) -> Tensor:
+        data_x = _require_cpu_data(input, "input")
+        data_m = _require_cpu_data(mask, "mask").astype(bool)
+        res = data_x[data_m]
+        ctx.save_for_backward(mask)
+        ctx.input_shape = input.shape
+        return Tensor(shape=res.shape, dtype=input.dtype, device=input.device, data=res)
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, None]:
+        mask, = ctx.saved_tensors
+        data_g = _require_cpu_data(grad_output, "grad_output")
+        data_m = _require_cpu_data(mask, "mask").astype(bool)
+        grad_x = np.zeros(ctx.input_shape, dtype=data_g.dtype)
+        grad_x[data_m] = data_g
+        return Tensor(shape=grad_x.shape, dtype=grad_output.dtype, device=grad_output.device, data=grad_x), None
+
+def masked_select(input: Tensor, mask: Tensor) -> Tensor:
+    """Returns a new 1D tensor which indexes the input tensor according to the boolean mask."""
+    return MaskedSelectFunction.apply(input, mask)
+
+
+def nonzero(input: Tensor, as_tuple: bool = False) -> Union[Tensor, Tuple[Tensor, ...]]:
+    """Returns the indices of all non-zero elements of input."""
+    data = _require_cpu_data(input, "input")
+    nz = np.nonzero(data)
+    if as_tuple:
+        return tuple(Tensor(shape=idx.shape, dtype="int64", device=input.device, data=idx.astype(np.int64)) for idx in nz)
+    else:
+        stacked = np.stack(nz, axis=-1).astype(np.int64)
+        return Tensor(shape=stacked.shape, dtype="int64", device=input.device, data=stacked)
+
+
+class TakeAlongDimFunction(Function):
+    @staticmethod
+    def forward(ctx, input: Tensor, indices: Tensor, dim: int) -> Tensor:
+        data_x = _require_cpu_data(input, "input")
+        data_idx = _require_cpu_data(indices, "indices").astype(np.int64)
+        rank = len(data_x.shape)
+        norm_dim = dim if dim >= 0 else dim + rank
+        res = np.take_along_axis(data_x, data_idx, axis=norm_dim)
+        ctx.save_for_backward(indices)
+        ctx.dim = norm_dim
+        ctx.input_shape = input.shape
+        return Tensor(shape=res.shape, dtype=input.dtype, device=input.device, data=res)
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, None, None]:
+        indices, = ctx.saved_tensors
+        data_g = _require_cpu_data(grad_output, "grad_output")
+        data_idx = _require_cpu_data(indices, "indices").astype(np.int64)
+        dim = ctx.dim
+        grad_x = np.zeros(ctx.input_shape, dtype=data_g.dtype)
+        np.put_along_axis(grad_x, data_idx, data_g, axis=dim)
+        return Tensor(shape=grad_x.shape, dtype=grad_output.dtype, device=grad_output.device, data=grad_x), None, None
+
+def take_along_dim(input: Tensor, indices: Tensor, dim: int) -> Tensor:
+    """Selects values from input at the 1-D indices along the given dim."""
+    return TakeAlongDimFunction.apply(input, indices, dim)
+
+
+
