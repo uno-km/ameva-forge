@@ -11,9 +11,9 @@
 # WHAT: typing 모듈에서 List 타입을 임포트합니다.
 # WHY: 타입 힌팅을 통해 코드의 가독성을 높이고 정적 분석을 용이하게 하기 위함입니다.
 # HOW: 반환 값 등의 타입 명시에 사용됩니다.
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Any, Sequence, Union
 from collections import OrderedDict
-from .tensor import Tensor
+from .tensor import Tensor, Parameter
 from .errors import AMEVAForgeUnsupportedOperationError, AMEVAForgeValidationError
 
 # WHAT: 내부 연산 모듈에서 다양한 수학적 연산 함수들을 임포트합니다.
@@ -401,58 +401,222 @@ class ReplicationPad2d(Module):
 # WHY: 복잡한 네트워크 구조를 리스트 형태로 쉽게 정의하고 한 번의 forward 호출로 연속 처리를 가능하게 하기 위함입니다.
 # HOW: 초기화 시 인자로 받은 계층들을 내부 딕셔너리에 순서대로 저장하고 순전파 시 차례대로 통과시킵니다.
 class Sequential(Module):
-    # WHAT: Sequential 인스턴스를 초기화하는 메서드입니다.
-    # WHY: 사용자가 제공한 다수의 계층 인스턴스들을 모듈 트리에 등록하기 위함입니다.
-    # HOW: 위치 인자(layers)들을 받아 순회하며 문자열로 된 인덱스를 키로 _modules에 저장합니다.
+    """
+    무엇을: 여러 신경망 계층들을 순차적으로 이어붙여 단일 모듈로 캡슐화하는 컨테이너 클래스입니다.
+    왜: 일련의 레이어를 체인 형태로 결합하여 순전파를 한 번에 실행하기 위함입니다.
+    HOW: *layers 인자를 _modules에 저장하고 차례로 호출합니다.
+    """
     def __init__(self, *layers):
         super().__init__()
-        # WHAT: 전달된 계층들을 순회하며 등록하는 루프입니다.
-        # WHY: 순서를 보장하면서 각 레이어 모듈을 자식 모듈로 관리하기 위함입니다.
-        # HOW: enumerate를 사용해 인덱스를 얻고, 문자열로 변환하여 키로 사용합니다.
-        for i, layer in enumerate(layers):
-            self._modules[str(i)] = layer
-    
-    # WHAT: Sequential 모듈의 순전파 연산입니다.
-    # WHY: 등록된 계층들을 순서대로 통과시켜 최종 결과를 얻기 위함입니다.
-    # HOW: _modules에 저장된 하위 모듈들을 차례로 호출하며 이전 출력값을 다음 입력값으로 갱신합니다.
+        if len(layers) == 1 and isinstance(layers[0], OrderedDict):
+            for key, module in layers[0].items():
+                self._modules[key] = module
+        elif len(layers) == 1 and isinstance(layers[0], (list, tuple)):
+            for i, layer in enumerate(layers[0]):
+                self._modules[str(i)] = layer
+        else:
+            for i, layer in enumerate(layers):
+                self._modules[str(i)] = layer
+
     def forward(self, x):
         for module in self._modules.values():
             x = module(x)
         return x
 
-    def __getitem__(self, idx):
+    def append(self, module: Module) -> 'Sequential':
+        self._modules[str(len(self._modules))] = module
+        return self
+
+    def extend(self, modules: Sequence[Module]) -> 'Sequential':
+        for m in modules:
+            self.append(m)
+        return self
+
+    def __getitem__(self, idx: Union[int, slice]):
+        if isinstance(idx, slice):
+            return Sequential(*list(self._modules.values())[idx])
+        if idx < 0:
+            idx += len(self._modules)
         return list(self._modules.values())[idx]
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._modules)
+
+    def __iter__(self):
+        return iter(self._modules.values())
 
 
 class ModuleList(Module):
     """
     Holds submodules in a list.
     """
-    def __init__(self, modules=None):
+    def __init__(self, modules: Optional[Sequence[Module]] = None):
         super().__init__()
         if modules is not None:
             for i, module in enumerate(modules):
                 self._modules[str(i)] = module
 
-    def append(self, module):
+    def append(self, module: Module) -> 'ModuleList':
         self._modules[str(len(self._modules))] = module
         return self
 
-    def __getitem__(self, idx):
+    def extend(self, modules: Sequence[Module]) -> 'ModuleList':
+        for m in modules:
+            self.append(m)
+        return self
+
+    def __getitem__(self, idx: Union[int, slice]):
         if isinstance(idx, slice):
-            return list(self._modules.values())[idx]
+            return ModuleList(list(self._modules.values())[idx])
         if idx < 0:
             idx += len(self._modules)
         return self._modules[str(idx)]
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._modules)
 
     def __iter__(self):
         return iter(self._modules.values())
+
+
+class ModuleDict(Module):
+    """
+    Holds submodules in a dictionary.
+    """
+    def __init__(self, modules: Optional[Dict[str, Module]] = None):
+        super().__init__()
+        if modules is not None:
+            self.update(modules)
+
+    def __getitem__(self, key: str) -> Module:
+        return self._modules[key]
+
+    def __setitem__(self, key: str, module: Module) -> None:
+        self._modules[key] = module
+
+    def __delitem__(self, key: str) -> None:
+        del self._modules[key]
+
+    def __len__(self) -> int:
+        return len(self._modules)
+
+    def __iter__(self):
+        return iter(self._modules)
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._modules
+
+    def clear(self) -> None:
+        self._modules.clear()
+
+    def pop(self, key: str) -> Module:
+        v = self._modules[key]
+        del self._modules[key]
+        return v
+
+    def keys(self):
+        return self._modules.keys()
+
+    def items(self):
+        return self._modules.items()
+
+    def values(self):
+        return self._modules.values()
+
+    def update(self, modules: Any) -> None:
+        if isinstance(modules, (dict, ModuleDict)):
+            for k, m in modules.items():
+                self._modules[k] = m
+        else:
+            for k, m in modules:
+                self._modules[k] = m
+
+
+class ParameterList(Module):
+    """
+    Holds parameters in a list.
+    """
+    def __init__(self, parameters: Optional[Sequence[Any]] = None):
+        super().__init__()
+        if parameters is not None:
+            for i, p in enumerate(parameters):
+                self._params[str(i)] = p if isinstance(p, Parameter) else Parameter(p)
+
+    def append(self, parameter: Any) -> 'ParameterList':
+        idx = str(len(self._params))
+        self._params[idx] = parameter if isinstance(parameter, Parameter) else Parameter(parameter)
+        return self
+
+    def extend(self, parameters: Sequence[Any]) -> 'ParameterList':
+        for p in parameters:
+            self.append(p)
+        return self
+
+    def __getitem__(self, idx: Union[int, slice]):
+        if isinstance(idx, slice):
+            return list(self._params.values())[idx]
+        if idx < 0:
+            idx += len(self._params)
+        return self._params[str(idx)]
+
+    def __len__(self) -> int:
+        return len(self._params)
+
+    def __iter__(self):
+        return iter(self._params.values())
+
+
+class ParameterDict(Module):
+    """
+    Holds parameters in a dictionary.
+    """
+    def __init__(self, parameters: Optional[Dict[str, Any]] = None):
+        super().__init__()
+        if parameters is not None:
+            self.update(parameters)
+
+    def __getitem__(self, key: str) -> Tensor:
+        return self._params[key]
+
+    def __setitem__(self, key: str, parameter: Any) -> None:
+        self._params[key] = parameter if isinstance(parameter, Parameter) else Parameter(parameter)
+
+    def __delitem__(self, key: str) -> None:
+        del self._params[key]
+
+    def __len__(self) -> int:
+        return len(self._params)
+
+    def __iter__(self):
+        return iter(self._params)
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._params
+
+    def clear(self) -> None:
+        self._params.clear()
+
+    def pop(self, key: str) -> Tensor:
+        v = self._params[key]
+        del self._params[key]
+        return v
+
+    def keys(self):
+        return self._params.keys()
+
+    def items(self):
+        return self._params.items()
+
+    def values(self):
+        return self._params.values()
+
+    def update(self, parameters: Any) -> None:
+        if isinstance(parameters, (dict, ParameterDict)):
+            for k, p in parameters.items():
+                self[k] = p
+        else:
+            for k, p in parameters:
+                self[k] = p
 
 
 class MSELoss(Module):

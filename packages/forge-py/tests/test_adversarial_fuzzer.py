@@ -589,6 +589,50 @@ def test_fuzz_multinomial_randint_bernoulli_normal_sampling():
     assert norm.shape == (100,)
     np.testing.assert_allclose(norm.numpy().mean(), 5.0, atol=0.1)
 
+def test_fuzz_parameter_and_module_containers():
+    """Fuzz test nn.Parameter, Sequential, ModuleDict, ParameterList, ParameterDict."""
+    import forge as at
+    import forge.nn as nn
+    
+    # 1. Parameter auto requires_grad
+    p = nn.Parameter(np.zeros((3, 3), dtype=np.float32))
+    assert p.requires_grad == True
+    assert isinstance(p, at.Tensor)
+    
+    # 2. Sequential append, slice, iter
+    seq = nn.Sequential(nn.Linear(4, 8), nn.ReLU())
+    seq.append(nn.Linear(8, 2))
+    assert len(seq) == 3
+    assert len(list(iter(seq))) == 3
+    sub_seq = seq[0:2]
+    assert len(sub_seq) == 2
+    
+    x = at.tensor(np.ones((2, 4), dtype=np.float32), requires_grad=True)
+    out = seq(x)
+    assert out.shape == (2, 2)
+    out.sum().backward()
+    assert x.grad is not None
+    
+    # 3. ModuleDict
+    mdict = nn.ModuleDict({
+        'fc1': nn.Linear(4, 4),
+        'act': nn.ReLU()
+    })
+    assert 'fc1' in mdict
+    assert len(mdict.parameters()) > 0
+    
+    # 4. ParameterList
+    plist = nn.ParameterList([nn.Parameter(np.ones(4)), nn.Parameter(np.ones(4))])
+    plist.append(nn.Parameter(np.ones(4)))
+    assert len(plist) == 3
+    assert len(plist.parameters()) == 3
+    
+    # 5. ParameterDict
+    pdict = nn.ParameterDict({'w': nn.Parameter(np.ones(4))})
+    pdict['b'] = nn.Parameter(np.zeros(4))
+    assert len(pdict.parameters()) == 2
+
+
 
 
 

@@ -1428,3 +1428,56 @@ class Tensor:
             f'device={self.device}, requires_grad={self.requires_grad}, '
             f'handle={self._handle}>'
         )
+
+
+class Parameter(Tensor):
+    """
+    WHAT: 신경망 모듈(nn.Module)의 학습 가능한 가중치 및 편향을 나타내는 파라미터 텐서 서브클래스입니다.
+    WHY: PyTorch 1:1 표준 규격을 준수하여 모듈 속성 할당 시 자동으로 파라미터 목록에 등록되도록 하기 위함입니다.
+    HOW: Tensor를 상속받으며 기본적으로 requires_grad=True를 설정합니다.
+    """
+    def __init__(self, data=None, requires_grad: bool = True):
+        if isinstance(data, Tensor):
+            super().__init__(
+                shape=data.shape,
+                dtype=data.dtype,
+                device=data.device,
+                requires_grad=requires_grad,
+                data=data._data,
+                handle=data.handle,
+                op=data._op,
+                parents=data._parents,
+                op_params=data._op_params,
+                handle_cell=getattr(data, '_handle_cell', None)
+            )
+            self._ctx = data._ctx
+            self._grad = data._grad
+            self._grad_parents = getattr(data, '_grad_parents', ())
+        elif data is not None:
+            arr = np.asarray(data)
+            dtype = str(arr.dtype)
+            if dtype not in ('float32', 'float64', 'float16', 'int32', 'bool'):
+                dtype = 'float32'
+                arr = arr.astype(np.float32)
+            super().__init__(
+                shape=arr.shape,
+                dtype=dtype,
+                device='cpu',
+                requires_grad=requires_grad,
+                data=arr
+            )
+        else:
+            arr = np.array(0.0, dtype=np.float32)
+            super().__init__(
+                shape=(),
+                dtype='float32',
+                device='cpu',
+                requires_grad=requires_grad,
+                data=arr
+            )
+
+    def __repr__(self) -> str:
+        if getattr(self, '_disposed', False):
+            return '<Parameter (disposed)>'
+        return f'Parameter containing:\n{super().__repr__()}'
+

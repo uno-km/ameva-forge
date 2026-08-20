@@ -39,7 +39,7 @@ from .ops import (
 any = any_op
 all = all_op
 # 텐서 객체 자체를 정의하는 클래스 및 GC 함수 임포트
-from .tensor import Tensor, flush_gc
+from .tensor import Tensor, Parameter, flush_gc
 # 자동 미분 기능 관련 모듈 임포트
 from .autograd import no_grad, enable_grad, is_grad_enabled, set_grad_enabled, set_max_graph_nodes
 # 디버그 모드를 설정하고 가져오는 유틸리티 함수 임포트
@@ -74,7 +74,8 @@ from .ops import sigmoid, tanh_op as tanh, reshape, sum_axis, gelu, silu, leaky_
 from . import nn
 from .nn import (
     BatchNorm2d, Dropout, LayerNorm, MultiheadAttention, TransformerEncoderLayer,
-    PositionalEncoding, RNNCell, LSTMCell, RNN, LSTM, RMSNorm, RotaryEmbedding, SwiGLU, ModuleList,
+    PositionalEncoding, RNNCell, LSTMCell, RNN, LSTM, RMSNorm, RotaryEmbedding, SwiGLU,
+    Sequential, ModuleList, ModuleDict, ParameterList, ParameterDict, Parameter,
     GELU, SiLU, LeakyReLU, ELU, CosineSimilarity,
     Identity, ConstantPad2d, ZeroPad2d, ReflectionPad2d, ReplicationPad2d,
     AdaptiveAvgPool2d, AdaptiveMaxPool2d,
