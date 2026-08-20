@@ -9,7 +9,7 @@ Modified:
 이 파일은 핵심 텐서 자료구조와 지연 평가(Lazy Evaluation), 자동 미분(Autograd)을 위한 그래프 구성 기능을 구현합니다.
 """
 # 타입 힌트를 위한 타이핑 모듈 임포트
-from typing import Any, Tuple, Optional, List
+from typing import Any, Tuple, Optional, List, Sequence, Union
 # 넘파이 배열 조작을 위한 임포트
 import numpy as np
 # 패키지 내부 커스텀 에러 클래스 임포트
@@ -744,8 +744,8 @@ class Tensor:
         """
         self._check_disposed()
         from .ops import add, tensor
-        if isinstance(other, (int, float)):
-            other = tensor(float(other), device=self.device, dtype=self.dtype)
+        if not isinstance(other, Tensor):
+            other = tensor(other, device=self.device, dtype=self.dtype)
         return add(self, other)
 
     def __radd__(self, other):
@@ -764,8 +764,8 @@ class Tensor:
         """
         self._check_disposed()
         from .ops import sub, tensor
-        if isinstance(other, (int, float)):
-            other = tensor(float(other), device=self.device, dtype=self.dtype)
+        if not isinstance(other, Tensor):
+            other = tensor(other, device=self.device, dtype=self.dtype)
         return sub(self, other)
 
     def __rsub__(self, other):
@@ -776,8 +776,8 @@ class Tensor:
         """
         self._check_disposed()
         from .ops import sub, tensor
-        if isinstance(other, (int, float)):
-            other = tensor(float(other), device=self.device, dtype=self.dtype)
+        if not isinstance(other, Tensor):
+            other = tensor(other, device=self.device, dtype=self.dtype)
         return sub(other, self)
 
     def __mul__(self, other):
@@ -788,8 +788,8 @@ class Tensor:
         """
         self._check_disposed()
         from .ops import mul, tensor
-        if isinstance(other, (int, float)):
-            other = tensor(float(other), device=self.device, dtype=self.dtype)
+        if not isinstance(other, Tensor):
+            other = tensor(other, device=self.device, dtype=self.dtype)
         return mul(self, other)
 
     def __rmul__(self, other):
@@ -808,8 +808,8 @@ class Tensor:
         """
         self._check_disposed()
         from .ops import div, tensor
-        if isinstance(other, (int, float)):
-            other = tensor(float(other), device=self.device, dtype=self.dtype)
+        if not isinstance(other, Tensor):
+            other = tensor(other, device=self.device, dtype=self.dtype)
         return div(self, other)
 
     def __rtruediv__(self, other):
@@ -820,8 +820,8 @@ class Tensor:
         """
         self._check_disposed()
         from .ops import div, tensor
-        if isinstance(other, (int, float)):
-            other = tensor(float(other), device=self.device, dtype=self.dtype)
+        if not isinstance(other, Tensor):
+            other = tensor(other, device=self.device, dtype=self.dtype)
         return div(other, self)
 
     def __neg__(self):
@@ -1388,6 +1388,36 @@ class Tensor:
         self._check_disposed()
         from .ops import bernoulli
         return bernoulli(self, p=p)
+
+    def roll(self, shifts: Union[int, Sequence[int]], dims: Optional[Union[int, Sequence[int]]] = None):
+        """Roll the tensor along the given dimension(s)."""
+        self._check_disposed()
+        from .ops import roll
+        return roll(self, shifts=shifts, dims=dims)
+
+    def repeat_interleave(self, repeats: int, dim: Optional[int] = None):
+        """Repeats elements of a tensor."""
+        self._check_disposed()
+        from .ops import repeat_interleave
+        return repeat_interleave(self, repeats=repeats, dim=dim)
+
+    def diag(self, diagonal: int = 0):
+        """Construct a diagonal matrix or extract diagonal from a 2D tensor."""
+        self._check_disposed()
+        from .ops import diag
+        return diag(self, diagonal=diagonal)
+
+    def diagonal(self, offset: int = 0, dim1: int = 0, dim2: int = 1):
+        """Returns a partial view of input with its diagonal elements."""
+        self._check_disposed()
+        from .ops import diagonal
+        return diagonal(self, offset=offset, dim1=dim1, dim2=dim2)
+
+    def trace(self):
+        """Returns the sum of the elements of the diagonal of the input 2D matrix."""
+        self._check_disposed()
+        from .ops import trace
+        return trace(self)
 
     def __getitem__(self, key):
         """

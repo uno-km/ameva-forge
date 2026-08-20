@@ -3527,3 +3527,114 @@ def normal(mean: float = 0.0, std: float = 1.0, size: Tuple[int, ...] = (), devi
     arr = np.random.normal(loc=mean, scale=std, size=size).astype(np.float32)
     return Tensor(shape=size, dtype=dtype, device=device, requires_grad=requires_grad, data=arr)
 
+
+class RollFunction(Function):
+    @staticmethod
+    def forward(ctx, input: Tensor, shifts: Union[int, Sequence[int]], dims: Optional[Union[int, Sequence[int]]] = None) -> Tensor:
+        data = _require_cpu_data(input, "input")
+        shifted = np.roll(data, shift=shifts, axis=dims)
+        ctx.shifts = shifts
+        ctx.dims = dims
+        return Tensor(shape=shifted.shape, dtype=input.dtype, device=input.device, data=shifted)
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, None, None]:
+        data = _require_cpu_data(grad_output, "grad_output")
+        shifts = ctx.shifts
+        dims = ctx.dims
+        if isinstance(shifts, (int, float)):
+            inv_shifts = -shifts
+        else:
+            inv_shifts = tuple(-s for s in shifts)
+        rev_grad = np.roll(data, shift=inv_shifts, axis=dims)
+        return Tensor(shape=rev_grad.shape, dtype=grad_output.dtype, device=grad_output.device, data=rev_grad), None, None
+
+def roll(input: Tensor, shifts: Union[int, Sequence[int]], dims: Optional[Union[int, Sequence[int]]] = None) -> Tensor:
+    """Roll the tensor along the given dimension(s)."""
+    return RollFunction.apply(input, shifts, dims)
+
+
+class RepeatInterleaveFunction(Function):
+    @staticmethod
+    def forward(ctx, input: Tensor, repeats: int, dim: Optional[int] = None) -> Tensor:
+        data = _require_cpu_data(input, "input")
+        res = np.repeat(data, repeats=repeats, axis=dim)
+        ctx.repeats = repeats
+        ctx.dim = dim
+        ctx.input_shape = input.shape
+        return Tensor(shape=res.shape, dtype=input.dtype, device=input.device, data=res)
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, None, None]:
+        data = _require_cpu_data(grad_output, "grad_output")
+        repeats = ctx.repeats
+        dim = ctx.dim
+        input_shape = ctx.input_shape
+        if dim is None:
+            res = data.reshape(-1, repeats).sum(axis=-1).reshape(input_shape)
+        else:
+            rank = len(input_shape)
+            norm_dim = dim if dim >= 0 else dim + rank
+            new_shape = list(input_shape[:norm_dim]) + [input_shape[norm_dim], repeats] + list(input_shape[norm_dim+1:])
+            res = data.reshape(new_shape).sum(axis=norm_dim + 1)
+        return Tensor(shape=res.shape, dtype=grad_output.dtype, device=grad_output.device, data=res), None, None
+
+def repeat_interleave(input: Tensor, repeats: int, dim: Optional[int] = None) -> Tensor:
+    """Repeats elements of a tensor."""
+    return RepeatInterleaveFunction.apply(input, repeats, dim)
+
+
+def meshgrid(*tensors: Tensor, indexing: str = "ij") -> Tuple[Tensor, ...]:
+    """Creates grids of coordinates specified by 1D inputs."""
+    if len(tensors) == 1 and isinstance(tensors[0], (list, tuple)):
+        tensors = tuple(tensors[0])
+    arrays = [_require_cpu_data(t, "tensor") for t in tensors]
+    grids = np.meshgrid(*arrays, indexing=indexing)
+    return tuple(Tensor(shape=g.shape, dtype=t.dtype, device=t.device, data=g) for g, t in zip(grids, tensors))
+
+
+class DiagFunction(Function):
+    @staticmethod
+    def forward(ctx, input: Tensor, diagonal: int = 0) -> Tensor:
+        data = _require_cpu_data(input, "input")
+        res = np.diag(data, k=diagonal)
+        ctx.input_shape = input.shape
+        ctx.diagonal = diagonal
+        return Tensor(shape=res.shape, dtype=input.dtype, device=input.device, data=res)
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, None]:
+        data = _require_cpu_data(grad_output, "grad_output")
+        input_shape = ctx.input_shape
+        diagonal = ctx.diagonal
+        if len(input_shape) == 1:
+            res = np.diag(data, k=diagonal)
+        else:
+            res = np.zeros(input_shape, dtype=data.dtype)
+            diag_idx = np.diag_indices(min(input_shape[0], input_shape[1]))
+            res[diag_idx] = data
+        return Tensor(shape=res.shape, dtype=grad_output.dtype, device=grad_output.device, data=res), None
+
+def diag(input: Tensor, diagonal: int = 0) -> Tensor:
+    """Construct a diagonal matrix or extract diagonal from a 2D tensor."""
+    return DiagFunction.apply(input, diagonal)
+
+def diagonal(input: Tensor, offset: int = 0, dim1: int = 0, dim2: int = 1) -> Tensor:
+    """Returns a partial view of input with its diagonal elements with respect to dim1 and dim2."""
+    data = _require_cpu_data(input, "input")
+    res = np.diagonal(data, offset=offset, axis1=dim1, axis2=dim2)
+    return Tensor(shape=res.shape, dtype=input.dtype, device=input.device, data=np.ascontiguousarray(res))
+
+def trace(input: Tensor) -> Tensor:
+    """Returns the sum of the elements of the diagonal of the input 2D matrix."""
+    if len(input.shape) != 2:
+        raise AMEVAForgeShapeError(f"trace expects a 2D matrix, got shape {input.shape}")
+    return diag(input).sum()
+
+def outer(input: Tensor, vec2: Tensor) -> Tensor:
+    """Outer product of input and vec2."""
+    if len(input.shape) != 1 or len(vec2.shape) != 1:
+        raise AMEVAForgeShapeError(f"outer expects 1D tensors, got shapes {input.shape} and {vec2.shape}")
+    return input.unsqueeze(1) * vec2.unsqueeze(0)
+
+

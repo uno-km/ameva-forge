@@ -632,6 +632,56 @@ def test_fuzz_parameter_and_module_containers():
     pdict['b'] = nn.Parameter(np.zeros(4))
     assert len(pdict.parameters()) == 2
 
+def test_fuzz_roll_repeat_interleave_meshgrid_diag_outer_autograd():
+    """Fuzz test roll, repeat_interleave, meshgrid, diag, diagonal, trace, outer with Autograd."""
+    import forge as at
+    
+    # 1. roll & backward
+    x = at.tensor(np.arange(12, dtype=np.float32).reshape(3, 4), requires_grad=True)
+    r = x.roll(shifts=(1, -1), dims=(0, 1))
+    assert r.shape == (3, 4)
+    loss = (r * 2.0).sum()
+    loss.backward()
+    np.testing.assert_allclose(x.grad.numpy(), np.full((3, 4), 2.0))
+    
+    # 2. repeat_interleave & backward
+    y = at.tensor(np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32), requires_grad=True)
+    rep = y.repeat_interleave(3, dim=1)
+    assert rep.shape == (2, 6)
+    loss_rep = (rep * np.arange(12, dtype=np.float32).reshape(2, 6)).sum()
+    loss_rep.backward()
+    # Gradient sum of weights [0, 1, 2] -> 3, [3, 4, 5] -> 12, etc.
+    np.testing.assert_allclose(y.grad.numpy(), np.array([[3.0, 12.0], [21.0, 30.0]], dtype=np.float32))
+    
+    # 3. meshgrid
+    x_coords = at.tensor(np.array([1.0, 2.0], dtype=np.float32))
+    y_coords = at.tensor(np.array([3.0, 4.0, 5.0], dtype=np.float32))
+    grid_x, grid_y = at.meshgrid(x_coords, y_coords, indexing="ij")
+    assert grid_x.shape == (2, 3)
+    assert grid_y.shape == (2, 3)
+    
+    # 4. diag, diagonal, trace
+    d_vec = at.tensor(np.array([1.0, 2.0, 3.0], dtype=np.float32), requires_grad=True)
+    mat = at.diag(d_vec)
+    assert mat.shape == (3, 3)
+    tr = mat.trace()
+    tr.backward()
+    np.testing.assert_allclose(d_vec.grad.numpy(), np.ones(3, dtype=np.float32))
+    
+    mat2 = at.tensor(np.arange(9, dtype=np.float32).reshape(3, 3))
+    diag_vals = mat2.diagonal()
+    np.testing.assert_allclose(diag_vals.numpy(), np.array([0.0, 4.0, 8.0]))
+    
+    # 5. outer product
+    v1 = at.tensor(np.array([1.0, 2.0], dtype=np.float32), requires_grad=True)
+    v2 = at.tensor(np.array([3.0, 4.0, 5.0], dtype=np.float32), requires_grad=True)
+    out_prod = at.outer(v1, v2)
+    assert out_prod.shape == (2, 3)
+    out_prod.sum().backward()
+    np.testing.assert_allclose(v1.grad.numpy(), np.array([12.0, 12.0]))
+    np.testing.assert_allclose(v2.grad.numpy(), np.array([3.0, 3.0, 3.0]))
+
+
 
 
 

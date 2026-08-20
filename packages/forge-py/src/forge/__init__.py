@@ -34,7 +34,8 @@ from .ops import (
     isnan, isinf, isfinite, isclose, allclose, any_op, all_op,
     conv1d, pixel_shuffle, pixel_unshuffle, interpolate,
     stack, chunk, split, unbind,
-    multinomial, randint, bernoulli, normal
+    multinomial, randint, bernoulli, normal,
+    roll, repeat_interleave, meshgrid, diag, diagonal, trace, outer
 )
 any = any_op
 all = all_op
