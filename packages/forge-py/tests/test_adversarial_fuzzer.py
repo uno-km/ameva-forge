@@ -516,6 +516,48 @@ def test_fuzz_conv1d_and_pixel_transformation_modules():
     assert out_high.shape == (1, 1, 4, 4)
     np.testing.assert_allclose(out_high.numpy()[0, 0, 0:2, 0:2], np.full((2, 2), 1.0))
 
+def test_fuzz_stack_chunk_split_unbind_and_autograd():
+    """Fuzz test stack, chunk, split, unbind with Autograd."""
+    import forge as at
+    
+    # 1. stack
+    a = at.tensor(np.array([1.0, 2.0], dtype=np.float32), requires_grad=True)
+    b = at.tensor(np.array([3.0, 4.0], dtype=np.float32), requires_grad=True)
+    c = at.tensor(np.array([5.0, 6.0], dtype=np.float32), requires_grad=True)
+    st = at.stack([a, b, c], dim=0)
+    assert st.shape == (3, 2)
+    loss = (st * 2.0).sum()
+    loss.backward()
+    np.testing.assert_allclose(a.grad.numpy(), np.full(2, 2.0))
+    np.testing.assert_allclose(b.grad.numpy(), np.full(2, 2.0))
+    np.testing.assert_allclose(c.grad.numpy(), np.full(2, 2.0))
+    
+    # 2. chunk & SwiGLU-style splitting
+    x = at.tensor(np.arange(12, dtype=np.float32).reshape(2, 6), requires_grad=True)
+    c1, c2 = x.chunk(2, dim=-1)
+    assert c1.shape == (2, 3)
+    assert c2.shape == (2, 3)
+    loss_chunk = (c1 * 3.0 + c2 * 5.0).sum()
+    loss_chunk.backward()
+    expected_grad = np.array([[3.0, 3.0, 3.0, 5.0, 5.0, 5.0], [3.0, 3.0, 3.0, 5.0, 5.0, 5.0]], dtype=np.float32)
+    np.testing.assert_allclose(x.grad.numpy(), expected_grad)
+    
+    # 3. split
+    y = at.tensor(np.ones((4, 10), dtype=np.float32))
+    s1, s2, s3 = y.split([2, 3, 5], dim=1)
+    assert s1.shape == (4, 2)
+    assert s2.shape == (4, 3)
+    assert s3.shape == (4, 5)
+    
+    # 4. unbind
+    z = at.tensor(np.arange(6, dtype=np.float32).reshape(3, 2))
+    u0, u1, u2 = z.unbind(dim=0)
+    assert u0.shape == (2,)
+    assert u1.shape == (2,)
+    assert u2.shape == (2,)
+    np.testing.assert_allclose(u0.numpy(), np.array([0.0, 1.0]))
+
+
 
 
 

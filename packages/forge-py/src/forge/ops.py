@@ -26,7 +26,7 @@ import numpy as np
 # WHAT: typing 모듈에서 타입 힌팅을 위한 요소들을 임포트합니다.
 # WHY: 함수의 인자와 반환값 타입을 명시하여 코드의 안정성과 가독성을 높이기 위함입니다.
 # HOW: Any, Tuple, Optional 등을 사용해 타입을 어노테이션합니다.
-from typing import Any, Tuple, Optional
+from typing import Any, Tuple, Optional, Sequence, List, Union
 
 # WHAT: 내부 모듈에서 Tensor 클래스를 임포트합니다.
 # WHY: 모든 연산 함수의 입력 및 출력 기본 단위로 텐서를 사용하기 위함입니다.
@@ -3400,4 +3400,77 @@ def interpolate(input: Tensor, size: Optional[Any] = None, scale_factor: Optiona
         return Tensor(shape=(N, C, out_h, out_w), dtype=input.dtype, device='cpu', data=out_data.astype(np.float32), requires_grad=input.requires_grad)
     else:
         raise NotImplementedError(f"Interpolation mode {mode!r} is not yet supported; use 'nearest'.")
+
+
+def stack(tensors: Sequence[Tensor], dim: int = 0) -> Tensor:
+    """Concatenates a sequence of tensors along a new dimension."""
+    if not tensors:
+        raise ValueError("stack expects a non-empty sequence of tensors")
+    first_shape = tensors[0].shape
+    for i, t in enumerate(tensors[1:], 1):
+        if t.shape != first_shape:
+            raise AMEVAForgeShapeError(f"stack: all tensors must have the same shape, got {first_shape} and {t.shape} at index {i}")
+    rank = len(first_shape) + 1
+    norm_dim = dim if dim >= 0 else dim + rank
+    if not (0 <= norm_dim < rank):
+        raise IndexError(f"Dimension out of range (expected to be in range of [{-rank}, {rank - 1}], but got {dim})")
+    unsqueezed = [t.unsqueeze(norm_dim) for t in tensors]
+    return cat(unsqueezed, dim=norm_dim)
+
+def split(tensor: Tensor, split_size_or_sections: Union[int, Sequence[int]], dim: int = 0) -> Tuple[Tensor, ...]:
+    """Splits the tensor into chunks along dim."""
+    rank = len(tensor.shape)
+    norm_dim = dim if dim >= 0 else dim + rank
+    dim_size = tensor.shape[norm_dim]
+    if isinstance(split_size_or_sections, int):
+        split_size = split_size_or_sections
+        if split_size <= 0:
+            raise ValueError(f"split_size must be greater than 0, got {split_size}")
+        sections = []
+        rem = dim_size
+        while rem > 0:
+            s = min(split_size, rem)
+            sections.append(s)
+            rem -= s
+    else:
+        sections = list(split_size_or_sections)
+        if sum(sections) != dim_size:
+            raise ValueError(f"split: sum of sections ({sum(sections)}) must match dim size ({dim_size})")
+            
+    results = []
+    cur = 0
+    for s in sections:
+        slices = [slice(None)] * rank
+        slices[norm_dim] = slice(cur, cur + s)
+        results.append(tensor[tuple(slices)])
+        cur += s
+    return tuple(results)
+
+def chunk(input: Tensor, chunks: int, dim: int = 0) -> Tuple[Tensor, ...]:
+    """Splits a tensor into a specific number of chunks along dim."""
+    if chunks <= 0:
+        raise ValueError(f"chunk: chunks must be greater than 0, got {chunks}")
+    rank = len(input.shape)
+    norm_dim = dim if dim >= 0 else dim + rank
+    dim_size = input.shape[norm_dim]
+    chunk_size = (dim_size + chunks - 1) // chunks
+    if chunk_size == 0:
+        chunk_size = 1
+    splits = []
+    for start in range(0, dim_size, chunk_size):
+        end = min(start + chunk_size, dim_size)
+        splits.append(end - start)
+    return split(input, splits, dim=norm_dim)
+
+def unbind(input: Tensor, dim: int = 0) -> Tuple[Tensor, ...]:
+    """Removes a tensor dimension by returning a tuple of all slices along dim."""
+    rank = len(input.shape)
+    norm_dim = dim if dim >= 0 else dim + rank
+    dim_size = input.shape[norm_dim]
+    results = []
+    for idx in range(dim_size):
+        slices = [slice(None)] * rank
+        slices[norm_dim] = idx
+        results.append(input[tuple(slices)])
+    return tuple(results)
 

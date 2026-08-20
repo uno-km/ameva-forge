@@ -32,7 +32,8 @@ from .ops import (
     binary_cross_entropy_with_logits, smooth_l1_loss, kl_div, l1_loss,
     topk, sort, argsort, TopKResult, SortResult,
     isnan, isinf, isfinite, isclose, allclose, any_op, all_op,
-    conv1d, pixel_shuffle, pixel_unshuffle, interpolate
+    conv1d, pixel_shuffle, pixel_unshuffle, interpolate,
+    stack, chunk, split, unbind
 )
 any = any_op
 all = all_op

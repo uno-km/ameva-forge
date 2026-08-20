@@ -1359,6 +1359,24 @@ class Tensor:
         from .ops import all_op
         return all_op(self, dim=dim, keepdim=keepdim)
 
+    def chunk(self, chunks: int, dim: int = 0):
+        """Splits a tensor into a specific number of chunks along dim."""
+        self._check_disposed()
+        from .ops import chunk
+        return chunk(self, chunks=chunks, dim=dim)
+
+    def split(self, split_size_or_sections, dim: int = 0):
+        """Splits the tensor into chunks along dim."""
+        self._check_disposed()
+        from .ops import split
+        return split(self, split_size_or_sections=split_size_or_sections, dim=dim)
+
+    def unbind(self, dim: int = 0):
+        """Removes a tensor dimension by returning a tuple of all slices along dim."""
+        self._check_disposed()
+        from .ops import unbind
+        return unbind(self, dim=dim)
+
     def __getitem__(self, key):
         """
         WHAT: 인덱싱 또는 슬라이싱 문법(예: tensor[0:2])을 사용하여 텐서의 부분 배열을 추출합니다.
