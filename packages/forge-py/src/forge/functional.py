@@ -258,20 +258,33 @@ class CrossEntropyFunction(Function):
             pred_data = _require_cpu_data(predictions, 'pred')
             target_data = _require_cpu_data(targets, 'targets').astype(np.int64)
             
-            max_val = np.max(pred_data, axis=-1, keepdims=True)
+            # 1. 수치 안정화 LogSoftmax (Finite-Masked)
+            finite_mask = np.isfinite(pred_data)
+            has_finite = np.any(finite_mask, axis=-1, keepdims=True)
+            safe_data = np.where(finite_mask, pred_data, -1e30)
+            max_val = np.where(has_finite, np.max(safe_data, axis=-1, keepdims=True), 0.0)
+            
             shifted = pred_data - max_val
-            log_sum_exp = np.log(np.sum(np.exp(shifted), axis=-1, keepdims=True))
-            log_probs = shifted - log_sum_exp
+            exp_shifted = np.where(finite_mask, np.exp(shifted), 0.0)
+            sum_exp = np.sum(exp_shifted, axis=-1, keepdims=True)
+            log_sum_exp = np.where(sum_exp > 0.0, np.log(np.maximum(sum_exp, 1e-12)), 0.0)
+            log_probs = np.where(finite_mask, shifted - log_sum_exp, -1e30)
             
             n = pred_data.shape[0]
-            # 무엇을: 배치 내의 정답 레이블에 해당하는 확률만 추출해 평균 음수 값을 취한다.
-            # 왜: NLLLoss (Negative Log Likelihood Loss) 연산을 수행하기 위함이다.
-            # 어떻게: numpy의 인덱싱 기법(fancy indexing)을 활용한다.
-            loss = -np.mean(log_probs[np.arange(n), target_data])
+            # 2. ignore_index=-100 및 범위 유효성 마스킹
+            valid_mask = (target_data != -100) & (target_data >= 0) & (target_data < pred_data.shape[-1])
+            valid_count = max(int(np.sum(valid_mask)), 1)
             
-            probs = np.exp(log_probs)
+            safe_targets = np.where(valid_mask, target_data, 0)
+            selected_log_probs = log_probs[np.arange(n), safe_targets]
+            masked_loss = np.where(valid_mask, -selected_log_probs, 0.0)
+            loss = np.sum(masked_loss) / valid_count
+            
+            probs = np.where(finite_mask, np.exp(log_probs), 0.0)
             ctx.probs = Tensor(shape=probs.shape, dtype='float32', device='cpu', data=probs)
             ctx.target_data = target_data
+            ctx.valid_mask = valid_mask
+            ctx.valid_count = valid_count
             return Tensor(shape=(), dtype='float32', device='cpu', data=np.array(loss, dtype=np.float32))
         else:
             from .ops import tensor, sum_op, div, _require_cpu_data
@@ -312,10 +325,17 @@ class CrossEntropyFunction(Function):
         if predictions.device == 'cpu':
             probs_data = ctx.probs.numpy()
             target_data = ctx.target_data
+            valid_mask = ctx.valid_mask
+            valid_count = ctx.valid_count
             n = probs_data.shape[0]
+            
             grad_pred = probs_data.copy()
-            grad_pred[np.arange(n), target_data] -= 1.0
-            grad_pred = grad_pred / n
+            safe_targets = np.where(valid_mask, target_data, 0)
+            grad_pred[np.arange(n), safe_targets] -= 1.0
+            
+            # ignore_index=-100 토큰 위치의 기울기를 0으로 무효화
+            grad_pred = np.where(valid_mask[:, None], grad_pred, 0.0)
+            grad_pred = grad_pred / valid_count
             
             if grad_output.shape != ():
                 grad_pred = grad_pred * grad_output.numpy()
@@ -340,10 +360,17 @@ class CrossEntropyFunction(Function):
 
 def cross_entropy(predictions, targets):
     """
-    WHAT: 크로스 엔트로피 손실을 계산하며, 1D 정수 라벨 및 2D 확률 분포(Soft Target)를 모두 지원합니다.
-    WHY: 일반 분류뿐만 아니라 Label Smoothing, Knowledge Distillation(지식 증류) 등의 최신 LLM/Vision 학습을 지원하기 위함입니다.
-    HOW: targets의 차원이 1D이면 고속 sparse_cross_entropy로, predictions와 동일한 2D이면 Soft Target 공식(-sum(y * log_softmax(z)))으로 디스패치합니다.
+    WHAT: 크로스 엔트로피 손실을 계산하며, 1D/2D/3D 정수 라벨 및 확률 분포(Soft Target)를 모두 지원합니다.
+    WHY: 일반 분류뿐만 아니라 LLM 넥스트 토큰 예측(3D shape: [B, T, V]), Label Smoothing, Knowledge Distillation을 완벽 지원하기 위함입니다.
     """
+    # 3D LLM Sequence Logits [B, T, C]와 [B, T] Targets 처리
+    if len(predictions.shape) == 3 and len(targets.shape) == 2:
+        from .ops import reshape
+        B, T, C = predictions.shape
+        flat_preds = reshape(predictions, (B * T, C))
+        flat_targets = reshape(targets, (B * T,))
+        return CrossEntropyFunction.apply(flat_preds, flat_targets)
+
     if len(targets.shape) == len(predictions.shape) and len(targets.shape) == 2:
         from .ops import mul, sum_axis, mean_op, neg
         log_p = log_softmax(predictions, axis=-1)

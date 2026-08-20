@@ -32,6 +32,7 @@ src/forge/models/nanogpt.py
 src/forge/rl/__init__.py
 src/forge/rl/cartpole.py
 tests/test_activation_functions.py
+tests/test_adversarial_fuzzer.py
 tests/test_arithmetic_ops.py
 tests/test_autograd.py
 tests/test_benchmark.py

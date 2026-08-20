@@ -65,3 +65,29 @@ def test_fuzz_non_differentiable_dtypes():
     for dt in invalid_dtypes:
         with pytest.raises(AMEVAForgeValidationError):
             tensor([1, 2, 3], dtype=dt, requires_grad=True)
+
+def test_fuzz_cross_entropy_ignore_index_and_3d():
+    """Fuzz test CrossEntropy with ignore_index=-100 and 3D LLM shapes."""
+    # 1. 2D with ignore_index=-100
+    preds = tensor(np.random.randn(4, 10).astype(np.float32), requires_grad=True)
+    targets = tensor(np.array([2, -100, 5, -100], dtype=np.int32))
+    
+    loss = cross_entropy(preds, targets)
+    assert not np.isnan(loss.numpy())
+    loss.backward()
+    assert preds.grad is not None
+    assert not np.isnan(preds.grad.numpy()).any()
+    # Gradient for rows with target=-100 should be 0.0
+    grad_np = preds.grad.numpy()
+    np.testing.assert_allclose(grad_np[1], np.zeros_like(grad_np[1]), atol=1e-6)
+    np.testing.assert_allclose(grad_np[3], np.zeros_like(grad_np[3]), atol=1e-6)
+
+    # 2. 3D LLM [Batch=2, Seq=3, Vocab=8]
+    preds_3d = tensor(np.random.randn(2, 3, 8).astype(np.float32), requires_grad=True)
+    targets_2d = tensor(np.array([[1, 2, -100], [0, -100, 7]], dtype=np.int32))
+    loss_3d = cross_entropy(preds_3d, targets_2d)
+    assert not np.isnan(loss_3d.numpy())
+    loss_3d.backward()
+    assert preds_3d.grad is not None
+    assert not np.isnan(preds_3d.grad.numpy()).any()
+
