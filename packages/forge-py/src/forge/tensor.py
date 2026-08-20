@@ -1317,6 +1317,48 @@ class Tensor:
         from .ops import argsort
         return argsort(self, dim=dim, descending=descending, stable=stable)
 
+    def isnan(self):
+        """Returns a boolean tensor indicating NaN values."""
+        self._check_disposed()
+        from .ops import isnan
+        return isnan(self)
+
+    def isinf(self):
+        """Returns a boolean tensor indicating Infinite values."""
+        self._check_disposed()
+        from .ops import isinf
+        return isinf(self)
+
+    def isfinite(self):
+        """Returns a boolean tensor indicating Finite values."""
+        self._check_disposed()
+        from .ops import isfinite
+        return isfinite(self)
+
+    def isclose(self, other, rtol: float = 1e-05, atol: float = 1e-08, equal_nan: bool = False):
+        """Returns a boolean tensor indicating elements within tolerance."""
+        self._check_disposed()
+        from .ops import isclose
+        return isclose(self, other, rtol=rtol, atol=atol, equal_nan=equal_nan)
+
+    def allclose(self, other, rtol: float = 1e-05, atol: float = 1e-08, equal_nan: bool = False) -> bool:
+        """Checks if all elements are within tolerance."""
+        self._check_disposed()
+        from .ops import allclose
+        return allclose(self, other, rtol=rtol, atol=atol, equal_nan=equal_nan)
+
+    def any(self, dim: Optional[int] = None, keepdim: bool = False):
+        """Tests if any element evaluates to True."""
+        self._check_disposed()
+        from .ops import any_op
+        return any_op(self, dim=dim, keepdim=keepdim)
+
+    def all(self, dim: Optional[int] = None, keepdim: bool = False):
+        """Tests if all elements evaluate to True."""
+        self._check_disposed()
+        from .ops import all_op
+        return all_op(self, dim=dim, keepdim=keepdim)
+
     def __getitem__(self, key):
         """
         WHAT: 인덱싱 또는 슬라이싱 문법(예: tensor[0:2])을 사용하여 텐서의 부분 배열을 추출합니다.

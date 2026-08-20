@@ -462,6 +462,29 @@ def test_fuzz_topk_sort_argsort_and_autograd():
     loss_s.backward()
     np.testing.assert_allclose(y.grad.numpy(), np.ones(3, dtype=np.float32))
 
+def test_fuzz_predicate_inspection_isnan_isclose_allclose():
+    """Fuzz test isnan, isinf, isfinite, isclose, allclose, any, all."""
+    import forge as at
+    
+    # 1. isnan, isinf, isfinite
+    t = at.tensor(np.array([1.0, float('nan'), float('inf'), float('-inf'), 0.0], dtype=np.float32))
+    assert t.isnan().numpy().tolist() == [False, True, False, False, False]
+    assert t.isinf().numpy().tolist() == [False, False, True, True, False]
+    assert t.isfinite().numpy().tolist() == [True, False, False, False, True]
+    
+    # 2. isclose & allclose
+    a = at.tensor(np.array([1.0, 2.0, 3.0], dtype=np.float32))
+    b = at.tensor(np.array([1.000001, 2.0, 3.00001], dtype=np.float32))
+    assert at.allclose(a, b, atol=1e-4)
+    assert not at.allclose(a, b, rtol=0.0, atol=1e-7)
+    assert a.isclose(b, atol=1e-4).all().numpy()
+    
+    # 3. any & all
+    c = at.tensor(np.array([[True, False], [True, True]]))
+    assert c.any().numpy() == True
+    assert c.all(dim=1).numpy().tolist() == [False, True]
+
+
 
 
 

@@ -3335,3 +3335,47 @@ def argsort(input: Tensor, dim: int = -1, descending: bool = False, stable: bool
     """Returns the indices that sort a tensor along a given dimension in ascending order by value."""
     return sort(input, dim=dim, descending=descending, stable=stable).indices
 
+
+def isnan(input: Tensor) -> Tensor:
+    """Returns a new tensor with boolean elements representing if each element of input is NaN or not."""
+    data = _require_cpu_data(input, "input")
+    res = np.isnan(data)
+    return Tensor(shape=res.shape, dtype="bool", device="cpu", data=res, requires_grad=False)
+
+def isinf(input: Tensor) -> Tensor:
+    """Returns a new tensor with boolean elements representing if each element of input is infinite (positive or negative) or not."""
+    data = _require_cpu_data(input, "input")
+    res = np.isinf(data)
+    return Tensor(shape=res.shape, dtype="bool", device="cpu", data=res, requires_grad=False)
+
+def isfinite(input: Tensor) -> Tensor:
+    """Returns a new tensor with boolean elements representing if each element of input is finite or not."""
+    data = _require_cpu_data(input, "input")
+    res = np.isfinite(data)
+    return Tensor(shape=res.shape, dtype="bool", device="cpu", data=res, requires_grad=False)
+
+def isclose(input: Tensor, other: Any, rtol: float = 1e-05, atol: float = 1e-08, equal_nan: bool = False) -> Tensor:
+    """Returns a new tensor with boolean elements representing if each element of input is 'close' to corresponding element of other."""
+    d1 = _require_cpu_data(input, "input")
+    d2 = _require_cpu_data(other, "other") if isinstance(other, Tensor) else np.array(other, dtype=np.float32)
+    res = np.isclose(d1, d2, rtol=rtol, atol=atol, equal_nan=equal_nan)
+    return Tensor(shape=res.shape, dtype="bool", device="cpu", data=res, requires_grad=False)
+
+def allclose(input: Tensor, other: Any, rtol: float = 1e-05, atol: float = 1e-08, equal_nan: bool = False) -> bool:
+    """This function checks if all input and other satisfy the condition: |input - other| <= atol + rtol * |other|."""
+    d1 = _require_cpu_data(input, "input")
+    d2 = _require_cpu_data(other, "other") if isinstance(other, Tensor) else np.array(other, dtype=np.float32)
+    return bool(np.allclose(d1, d2, rtol=rtol, atol=atol, equal_nan=equal_nan))
+
+def any_op(input: Tensor, dim: Optional[int] = None, keepdim: bool = False) -> Tensor:
+    """Tests if any element in input evaluates to True."""
+    data = _require_cpu_data(input, "input")
+    res = np.any(data, axis=dim, keepdims=keepdim)
+    return Tensor(shape=res.shape if isinstance(res, np.ndarray) else (), dtype="bool", device="cpu", data=res if isinstance(res, np.ndarray) else np.array(res, dtype=bool), requires_grad=False)
+
+def all_op(input: Tensor, dim: Optional[int] = None, keepdim: bool = False) -> Tensor:
+    """Tests if all elements in input evaluate to True."""
+    data = _require_cpu_data(input, "input")
+    res = np.all(data, axis=dim, keepdims=keepdim)
+    return Tensor(shape=res.shape if isinstance(res, np.ndarray) else (), dtype="bool", device="cpu", data=res if isinstance(res, np.ndarray) else np.array(res, dtype=bool), requires_grad=False)
+
