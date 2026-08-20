@@ -284,6 +284,76 @@ def full(
     arr = np.full(shape, fill_value, dtype=np.float32)
     return tensor(arr, device="cpu", dtype=dtype, requires_grad=requires_grad)
 
+def arange(start: float, end: Optional[float] = None, step: float = 1.0, dtype: str = "float32", device: str = "cpu", requires_grad: bool = False) -> Tensor:
+    """Returns a 1-D tensor of size [(end - start) / step] with values from start to end with step."""
+    if end is None:
+        start, end = 0.0, float(start)
+    np_dtype = np.int32 if dtype == "int32" else np.float32
+    arr = np.arange(start, end, step, dtype=np_dtype)
+    return tensor(arr, device=device, dtype=dtype, requires_grad=requires_grad)
+
+def eye(n: int, m: Optional[int] = None, dtype: str = "float32", device: str = "cpu", requires_grad: bool = False) -> Tensor:
+    """Returns a 2-D tensor with ones on the diagonal and zeros elsewhere."""
+    arr = np.eye(n, M=m, dtype=np.float32)
+    return tensor(arr, device=device, dtype=dtype, requires_grad=requires_grad)
+
+def linspace(start: float, end: float, steps: int, dtype: str = "float32", device: str = "cpu", requires_grad: bool = False) -> Tensor:
+    """Creates a one-dimensional tensor of size steps whose values are evenly spaced from start to end, inclusive."""
+    arr = np.linspace(start, end, steps, dtype=np.float32)
+    return tensor(arr, device=device, dtype=dtype, requires_grad=requires_grad)
+
+class TriuFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, x: Tensor, diagonal: int = 0) -> Tensor:
+        ctx.diagonal = diagonal
+        ctx.save_for_backward(x)
+        if x.device == "cpu":
+            data = _require_cpu_data(x, "x")
+            res = np.triu(data, k=diagonal)
+            return Tensor(shape=x.shape, dtype=x.dtype, device="cpu", data=res)
+        else:
+            return Tensor(shape=x.shape, dtype=x.dtype, device="gpu", op="triu", parents=(x,), op_params=[float(diagonal)])
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, None]:
+        x, = ctx.saved_tensors
+        if x.device == "cpu":
+            data_g = _require_cpu_data(grad_output, "grad_output")
+            mask = np.triu(np.ones_like(data_g), k=ctx.diagonal)
+            return (Tensor(shape=x.shape, dtype="float32", device="cpu", data=data_g * mask), None)
+        else:
+            return (Tensor(shape=x.shape, dtype="float32", device="gpu", op="triu", parents=(grad_output,), op_params=[float(ctx.diagonal)]), None)
+
+def triu(x: Tensor, diagonal: int = 0) -> Tensor:
+    """Returns the upper triangular part of a matrix (2-D tensor) or batch of matrices."""
+    return TriuFunction.apply(x, diagonal)
+
+class TrilFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, x: Tensor, diagonal: int = 0) -> Tensor:
+        ctx.diagonal = diagonal
+        ctx.save_for_backward(x)
+        if x.device == "cpu":
+            data = _require_cpu_data(x, "x")
+            res = np.tril(data, k=diagonal)
+            return Tensor(shape=x.shape, dtype=x.dtype, device="cpu", data=res)
+        else:
+            return Tensor(shape=x.shape, dtype=x.dtype, device="gpu", op="tril", parents=(x,), op_params=[float(diagonal)])
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, None]:
+        x, = ctx.saved_tensors
+        if x.device == "cpu":
+            data_g = _require_cpu_data(grad_output, "grad_output")
+            mask = np.tril(np.ones_like(data_g), k=ctx.diagonal)
+            return (Tensor(shape=x.shape, dtype="float32", device="cpu", data=data_g * mask), None)
+        else:
+            return (Tensor(shape=x.shape, dtype="float32", device="gpu", op="tril", parents=(grad_output,), op_params=[float(ctx.diagonal)]), None)
+
+def tril(x: Tensor, diagonal: int = 0) -> Tensor:
+    """Returns the lower triangular part of a matrix (2-D tensor) or batch of matrices."""
+    return TrilFunction.apply(x, diagonal)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 수학 연산 (Function 기반 autograd)

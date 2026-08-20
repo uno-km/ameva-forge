@@ -26,7 +26,8 @@ from .ops import (
     to_numpy, to_numpy_async, dispose,
     unsqueeze, squeeze, flatten, permute, max_op, max_axis, var, std, sqrt,
     cat, where, pad, gather, scatter, dropout, conv2d, max_pool2d, avg_pool2d, bmm,
-    maximum, minimum, clamp
+    maximum, minimum, clamp,
+    arange, eye, linspace, triu, tril
 )
 # 텐서 객체 자체를 정의하는 클래스 및 GC 함수 임포트
 from .tensor import Tensor, flush_gc

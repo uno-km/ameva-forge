@@ -274,6 +274,33 @@ def test_fuzz_clip_grad_norm_generator_and_p_norms():
     assert inf_norm == 10.0
     np.testing.assert_allclose(p2.grad.numpy(), np.array([2.0], dtype=np.float32), atol=1e-5)
 
+def test_fuzz_tensor_creation_and_triangular_ops():
+    """Fuzz test arange, eye, linspace, triu, tril autograd & masks."""
+    import forge as at
+    
+    # 1. arange
+    r1 = at.arange(5)
+    np.testing.assert_allclose(r1.numpy(), np.array([0, 1, 2, 3, 4], dtype=np.float32))
+    r2 = at.arange(2, 10, 2)
+    np.testing.assert_allclose(r2.numpy(), np.array([2, 4, 6, 8], dtype=np.float32))
+    
+    # 2. eye
+    i_mat = at.eye(3)
+    np.testing.assert_allclose(i_mat.numpy(), np.eye(3, dtype=np.float32))
+    
+    # 3. linspace
+    ls = at.linspace(0.0, 1.0, 5)
+    np.testing.assert_allclose(ls.numpy(), np.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype=np.float32))
+    
+    # 4. triu & tril autograd
+    mat = tensor(np.ones((3, 3), dtype=np.float32), requires_grad=True)
+    u = mat.triu(diagonal=1)
+    np.testing.assert_allclose(u.numpy(), np.array([[0, 1, 1], [0, 0, 1], [0, 0, 0]], dtype=np.float32))
+    loss_u = u.sum()
+    loss_u.backward()
+    np.testing.assert_allclose(mat.grad.numpy(), np.array([[0, 1, 1], [0, 0, 1], [0, 0, 0]], dtype=np.float32))
+
+
 
 
 

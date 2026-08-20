@@ -1063,6 +1063,18 @@ class Tensor:
             other = tensor(float(other), device=self.device, dtype=self.dtype)
         return minimum(self, other)
 
+    def triu(self, diagonal: int = 0):
+        """Returns the upper triangular part of a matrix or batch of matrices."""
+        self._check_disposed()
+        from .ops import triu
+        return triu(self, diagonal)
+
+    def tril(self, diagonal: int = 0):
+        """Returns the lower triangular part of a matrix or batch of matrices."""
+        self._check_disposed()
+        from .ops import tril
+        return tril(self, diagonal)
+
     def sum(self):
         """
         WHAT: 텐서 내 모든 요소들의 합을 계산합니다.
