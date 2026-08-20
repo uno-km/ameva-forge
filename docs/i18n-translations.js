@@ -324,7 +324,13 @@
 			"nbodyDeepDiveAllegory": "<strong>Physical Allegory:</strong> Standard Euler integration leads to runaway energy drift causing galaxies to explode. Symplectic tensor integration conserves phase-space volume, guaranteeing perpetual stable orbital dynamics across 10,000 interacting stellar bodies.",
 			"mnistDeepDiveTitle": "Pattern Recognition: Bounding-Box Centering & Softmax Classification",
 			"mnistDeepDiveMath": "<strong>Multi-Layer Perceptron:</strong> \\( z_1 = \\text{ReLU}(x W_1 + b_1), \\quad \\hat{y} = \\text{Softmax}(z_1 W_2 + b_2) \\)<br><strong>Numerical Stable Softmax:</strong> \\( \\text{Softmax}(u)_i = \\frac{e^{u_i - \\max(u)}}{\\sum_{j=0}^{9} e^{u_j - \\max(u)}} \\)<br><strong>MNIST Standardization:</strong> \\( \\text{Crop} \\to \\text{Aspect-Preserving Resize}(20\\text{px}) \\to \\text{CenterPad}(28 \\times 28) \\)",
-			"mnistDeepDiveAllegory": "<strong>Visual Cortex Intuition:</strong> Regardless of where or how large a user draws a digit, the bounding-box normalizer centers the stroke's center-of-mass into the canonical 28x28 receptor field, matching real biological visual invariance."
+			"mnistDeepDiveAllegory": "<strong>Visual Cortex Intuition:</strong> Regardless of where or how large a user draws a digit, the bounding-box normalizer centers the stroke's center-of-mass into the canonical 28x28 receptor field, matching real biological visual invariance.",
+			"benchmarkTitle": "AMEVA-Forge: Benchmark & Hardware Profiler",
+			"benchmarkH2": "2. Hardware Benchmark & Unit Test Suite",
+			"benchmarkDesc": "Profiles real-time WebGPU compute throughput (GFLOPS) vs CPU NumPy and executes in-browser Python validation test scripts.",
+			"benchmarkDeepDiveTitle": "Computational Throughput: Roofline Model & Shared Memory Tiling",
+			"benchmarkDeepDiveMath": "<strong>Theoretical Peak FLOPs:</strong> \\( \\text{FLOPs} = 2 \\times M \\times N \\times K \\)<br><strong>Tiled GEMM Kernel:</strong> \\( 16 \\times 16 \\) workgroups loaded into local cache \\( \\text{var<workgroup>} \\), eliminating global memory read stalls.<br><strong>Memory Bandwidth:</strong> Achieves >30 GB/s on-chip throughput via WebGPU Staging Buffer Pool.",
+			"benchmarkDeepDiveAllegory": "<strong>Hardware Allegory:</strong> Rather than streaming individual matrix numbers from slow DRAM across the PCIe bus, WebGPU compute shaders load whole 16x16 tiles into blazing fast on-chip shared memory, executing 256 parallel multiply-accumulate operations in lockstep."
 		}
 	},
 	"ko": {
@@ -638,7 +644,13 @@
 			"nbodyDeepDiveAllegory": "<strong>물리학적 비유:</strong> 일반 오일러 적분은 시간이 지나면 에너지가 누적되어 은하가 폭발하지만, 텐서 기반 심플렉틱 적분은 위상 공간의 체적을 보존하여 10,000개 입자의 궤도가 영구적으로 안정적인 궤도 운동을 유지합니다.",
 			"mnistDeepDiveTitle": "패턴 인식: 바운딩 박스 정규화 및 소프트맥스 분류",
 			"mnistDeepDiveMath": "<strong>다층 퍼셉트론 분류기:</strong> \\( z_1 = \\text{ReLU}(x W_1 + b_1), \\quad \\hat{y} = \\text{Softmax}(z_1 W_2 + b_2) \\)<br><strong>수치 안정 소프트맥스:</strong> \\( \\text{Softmax}(u)_i = \\frac{e^{u_i - \\max(u)}}{\\sum_{j=0}^{9} e^{u_j - \\max(u)}} \\)<br><strong>MNIST 표준 규격화:</strong> \\( \\text{Crop} \\to \\text{종횡비 보존 축소}(20\\text{px}) \\to \\text{중앙 패딩}(28 \\times 28) \\)",
-			"mnistDeepDiveAllegory": "<strong>시각 피질 직관:</strong> 캔버스 어디에 어떤 크기로 숫자를 그리든, 바운딩 박스 정규화기가 무게 중심을 28x28 수용장에 정렬하여 인간 시각 피질의 불변성(Invariance)과 동일한 95%+ 초고정밀 인식을 수행합니다."
+			"mnistDeepDiveAllegory": "<strong>시각 피질 직관:</strong> 캔버스 어디에 어떤 크기로 숫자를 그리든, 바운딩 박스 정규화기가 무게 중심을 28x28 수용장에 정렬하여 인간 시각 피질의 불변성(Invariance)과 동일한 95%+ 초고정밀 인식을 수행합니다.",
+			"benchmarkTitle": "AMEVA-Forge: 벤치마크 및 하드웨어 프로파일러",
+			"benchmarkH2": "2. 하드웨어 벤치마크 및 단위 테스트 스위트",
+			"benchmarkDesc": "실시간 WebGPU 연산 처리량(GFLOPS)과 CPU NumPy를 비교 프로파일링하고, 브라우저 내 Python 검증 테스트 스크립트를 즉각 실행합니다.",
+			"benchmarkDeepDiveTitle": "연산 처리량 물리학: 루프라인 모델 및 공유 메모리 타일링",
+			"benchmarkDeepDiveMath": "<strong>이론적 최대 FLOPs:</strong> \\( \\text{FLOPs} = 2 \\times M \\times N \\times K \\)<br><strong>타일드 GEMM 커널:</strong> \\( 16 \\times 16 \\) 워크그룹을 온칩 로컬 캐시 \\( \\text{var<workgroup>} \\)에 적재하여 전역 메모리 읽기 지연을 원천 차단합니다.<br><strong>메모리 대역폭:</strong> WebGPU 스테이징 버퍼 풀을 통해 30 GB/s 이상의 초고속 온칩 처리량을 달성합니다.",
+			"benchmarkDeepDiveAllegory": "<strong>하드웨어 비유:</strong> 느린 전역 메모리(DRAM)에서 숫자를 하나씩 가져오는 대신, 256개 WebGPU 스레드가 16x16 행렬 타일을 초고속 온칩 공유 메모리에 한 번에 올려놓고 동기화 배리어 없이 즉석에서 곱셈-누적(FMA)을 동시 수행합니다."
 		}
 	},
 	"zh": {
@@ -952,7 +964,13 @@
 			"nbodyDeepDiveAllegory": "<strong>物理比喻：</strong> 辛积分器克服了经典欧拉法能量发散导致的星系崩溃，保证物理天体模拟的永久稳定性。",
 			"mnistDeepDiveTitle": "模式识别：边界框归一化与 Softmax 分类",
 			"mnistDeepDiveMath": "<strong>多层感知机：</strong> \\( z_1 = \\text{ReLU}(x W_1 + b_1), \\quad \\hat{y} = \\text{Softmax}(z_1 W_2 + b_2) \\)<br><strong>标准归一化：</strong> 裁剪边界框并保持宽高比居中缩放到 28x28。",
-			"mnistDeepDiveAllegory": "<strong>视觉直觉：</strong> 自动对齐手写笔迹的重心，实现如同生物视觉皮层的位置和尺度不变性识别。"
+			"mnistDeepDiveAllegory": "<strong>视觉直觉：</strong> 自动对齐手写笔迹的重心，实现如同生物视觉皮层的位置和尺度不变性识别。",
+			"benchmarkTitle": "AMEVA-Forge: 基准测试与硬件分析器",
+			"benchmarkH2": "2. 硬件基准测试与单元测试套件",
+			"benchmarkDesc": "实时对比 WebGPU 计算吞吐量 (GFLOPS) 与 CPU NumPy，并在浏览器中执行 Python 验证测试脚本。",
+			"benchmarkDeepDiveTitle": "计算吞吐量：Roofline 模型与共享内存分块",
+			"benchmarkDeepDiveMath": "<strong>理论峰值 FLOPs：</strong> \\( \\text{FLOPs} = 2 \\times M \\times N \\times K \\)<br><strong>分块 GEMM 内核：</strong> 将 \\( 16 \\times 16 \\) 工作组加载到片上高速共享内存中，消除全局内存读取停顿。",
+			"benchmarkDeepDiveAllegory": "<strong>硬件比喻：</strong> 256 个 WebGPU 线程将 16x16 矩阵块加载到片上高速缓存中，实现超高带宽的并行矩阵乘法。"
 		}
 	},
 	"ja": {
@@ -1266,7 +1284,13 @@
 			"nbodyDeepDiveAllegory": "<strong>物理的比喩:</strong> 従来オイラー法のエネルギー発散を防ぎ、星系の永続的かつ滑らかな公転運動を実現します。",
 			"mnistDeepDiveTitle": "パターン認識: バウンディングボックス正規化と Softmax 分類",
 			"mnistDeepDiveMath": "<strong>多層パーセプトロン:</strong> \\( z_1 = \\text{ReLU}(x W_1 + b_1), \\quad \\hat{y} = \\text{Softmax}(z_1 W_2 + b_2) \\)",
-			"mnistDeepDiveAllegory": "<strong>視覚直感:</strong> 手書き文字の重心を 28x28 フレーム中央へ正規化し、生物の視覚受容野と同等の頑健な認識を達成します。"
+			"mnistDeepDiveAllegory": "<strong>視覚直感:</strong> 手書き文字の重心を 28x28 フレーム中央へ正規化し、生物の視覚受容野と同等の頑健な認識を達成します。",
+			"benchmarkTitle": "AMEVA-Forge: ベンチマークとハードウェアプロファイラ",
+			"benchmarkH2": "2. ハードウェアベンチマークとユニットテストスイート",
+			"benchmarkDesc": "リアルタイム WebGPU 演算スループット (GFLOPS) と CPU NumPy を比較測定し、ブラウザ内で Python 検証テストを実行します。",
+			"benchmarkDeepDiveTitle": "計算スループット: Roofline モデルと共有メモリタイリング",
+			"benchmarkDeepDiveMath": "<strong>理論ピーク FLOPs:</strong> \\( \\text{FLOPs} = 2 \\times M \\times N \\times K \\)<br><strong>タイル化 GEMM カーネル:</strong> \\( 16 \\times 16 \\) ワークグループをオンチップ共有メモリに展開し、メモリストールを排除します。",
+			"benchmarkDeepDiveAllegory": "<strong>ハードウェア比喩:</strong> 256 個の WebGPU スレッドが 16x16 タイルを高速 SRAM 上で並列に積和演算します。"
 		}
 	},
 	"hi": {
@@ -1580,7 +1604,13 @@
 			"nbodyDeepDiveAllegory": "<strong>रूपक:</strong> ऊर्जा अपव्यय को रोकता है और आकाशगंगा की गतिशीलता को स्थिर रखता है।",
 			"mnistDeepDiveTitle": "पैटर्न पहचान: बाउंडिंग बॉक्स सामान्यीकरण",
 			"mnistDeepDiveMath": "<strong>MLP क्लासिफायर:</strong> 28x28 फ्रेम में हस्तलिखित अंकों को पहचानता है।",
-			"mnistDeepDiveAllegory": "<strong>दृश्य अंतर्ज्ञान:</strong> 95%+ सटीकता के लिए अंकों को केंद्र में संरेखित करता है।"
+			"mnistDeepDiveAllegory": "<strong>दृश्य अंतर्ज्ञान:</strong> 95%+ सटीकता के लिए अंकों को केंद्र में संरेखित करता है।",
+			"benchmarkTitle": "AMEVA-Forge: बेंचमार्क और हार्डवेयर प्रोफाइलर",
+			"benchmarkH2": "2. हार्डवेयर बेंचमार्क और यूनिट टेस्ट सूट",
+			"benchmarkDesc": "वास्तविक समय WebGPU थ्रूपुट (GFLOPS) बनाम CPU NumPy का प्रोफाइल करता है और पायथन परीक्षण निष्पादित करता है।",
+			"benchmarkDeepDiveTitle": "थ्रूपुट भौतिकी: रूफलाइन मॉडल और शेयर्ड मेमोरी टाइलिंग",
+			"benchmarkDeepDiveMath": "<strong>सैद्धांतिक पीक FLOPs:</strong> \\( \\text{FLOPs} = 2 \\times M \\times N \\times K \\)",
+			"benchmarkDeepDiveAllegory": "<strong>हार्डवेयर रूपक:</strong> 256 WebGPU थ्रेड्स 16x16 टाइल्स पर एक साथ समानांतर गणना करते हैं।"
 		}
 	},
 	"es": {
@@ -1894,7 +1924,13 @@
 			"nbodyDeepDiveAllegory": "<strong>Alegoría Física:</strong> Evita la divergencia de energía y mantiene órbitas galácticas estables.",
 			"mnistDeepDiveTitle": "Reconocimiento de Patrones: Normalización de Cuadro Delimitador",
 			"mnistDeepDiveMath": "<strong>Perceptrón Multicapa:</strong> Clasifica dígitos en 28x28 con Softmax numéricamente estable.",
-			"mnistDeepDiveAllegory": "<strong>Intuición Visual:</strong> Centra el centro de masa del trazo para una precisión superior al 95%."
+			"mnistDeepDiveAllegory": "<strong>Intuición Visual:</strong> Centra el centro de masa del trazo para una precisión superior al 95%.",
+			"benchmarkTitle": "AMEVA-Forge: Benchmark y Perfilador de Hardware",
+			"benchmarkH2": "2. Benchmark de Hardware y Suite de Pruebas Unitarias",
+			"benchmarkDesc": "Perfila el rendimiento de cómputo en tiempo real de WebGPU (GFLOPS) frente a CPU NumPy y ejecuta scripts de prueba en Python.",
+			"benchmarkDeepDiveTitle": "Rendimiento Computacional: Modelo Roofline y Segmentación de Memoria Compartida",
+			"benchmarkDeepDiveMath": "<strong>Pico Teórico de FLOPs:</strong> \\( \\text{FLOPs} = 2 \\times M \\times N \\times K \\)<br><strong>Kernel GEMM Segmentado:</strong> Carga bloques \\( 16 \\times 16 \\) en memoria compartida en chip.",
+			"benchmarkDeepDiveAllegory": "<strong>Alegoría de Hardware:</strong> 256 hilos WebGPU ejecutan multiplicaciones de matrices en paralelo sobre memoria ultra rápida."
 		}
 	}
 };
