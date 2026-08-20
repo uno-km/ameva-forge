@@ -252,6 +252,29 @@ def test_fuzz_cosine_similarity_clamp_and_maximum():
     assert v.grad is not None
     np.testing.assert_allclose(v.grad.numpy(), np.array([0.0, 1.0, 1.0, 0.0], dtype=np.float32))
 
+def test_fuzz_clip_grad_norm_generator_and_p_norms():
+    """Fuzz test clip_grad_norm_ with generator inputs, Inf-norm, and nn.utils namespace."""
+    import forge.nn as nn
+    
+    # 1. Generator parameter input (e.g. (p for p in ...))
+    p1 = tensor(np.array([3.0, 4.0], dtype=np.float32), requires_grad=True)
+    p1.grad = tensor(np.array([3.0, 4.0], dtype=np.float32)) # norm = 5.0
+    
+    # Pass as generator
+    gen = (p for p in [p1])
+    total_norm = nn.utils.clip_grad_norm_(gen, max_norm=1.0)
+    assert total_norm == 5.0
+    # Gradient must be scaled to [3/5, 4/5] = [0.6, 0.8]
+    np.testing.assert_allclose(p1.grad.numpy(), np.array([0.6, 0.8], dtype=np.float32), atol=1e-5)
+    
+    # 2. Inf norm
+    p2 = tensor(np.array([1.0], dtype=np.float32), requires_grad=True)
+    p2.grad = tensor(np.array([10.0], dtype=np.float32))
+    inf_norm = nn.utils.clip_grad_norm_([p2], max_norm=2.0, norm_type=float('inf'))
+    assert inf_norm == 10.0
+    np.testing.assert_allclose(p2.grad.numpy(), np.array([2.0], dtype=np.float32), atol=1e-5)
+
+
 
 
 

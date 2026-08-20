@@ -489,32 +489,53 @@ class Adam(Optimizer):
 # WHAT: 파라미터들의 그래디언트 글로벌 L2 노름(Norm)을 제한(Clip)하는 동기 함수입니다.
 # WHY: RNN이나 깊은 신경망에서 그래디언트 폭발(Gradient Exploding) 문제를 방지하여 학습을 안정화하기 위함입니다.
 # HOW: 모든 CPU 그래디언트의 제곱합을 구해 노름을 계산하고, max_norm을 넘으면 그 비율만큼 전체 기울기를 축소합니다.
-def clip_grad_norm(parameters: List[Tensor], max_norm: float) -> float:
-    total_norm = 0.0
-    for p in parameters:
+def _normalize_parameters(parameters) -> List[Tensor]:
+    if hasattr(parameters, '__iter__'):
+        return list(parameters)
+    return [parameters]
+
+# WHAT: 모델 파라미터들의 그래디언트 총 노름(Total Norm)을 계산하여 일정 상한(max_norm) 이하로 자르는(Norm Clipping) 함수입니다.
+# WHY: RNN이나 깊은 신경망에서 그래디언트 폭발(Gradient Exploding) 문제를 방지하여 학습을 안정화하기 위함입니다.
+# HOW: Generator 입력 고갈(Exhaustion) 방지를 위해 list로 구체화하고, L2/Inf/Lp 노름 및 PyTorch 표준 인자들을 완벽 지원합니다.
+def clip_grad_norm(parameters, max_norm: float, norm_type: float = 2.0, error_if_nonfinite: bool = False) -> float:
+    params = _normalize_parameters(parameters)
+    valid_params = [p for p in params if p.grad is not None]
+    if not valid_params:
+        return 0.0
+
+    grads = []
+    for p in valid_params:
         if p.device == "gpu" or (p.grad is not None and p.grad.device == "gpu"):
             raise AMEVAForgeDeviceError(
                 "clip_grad_norm() is synchronous and supported only for CPU parameters. "
                 "For GPU tensors in Pyodide/WebGPU, use 'await clip_grad_norm_async(parameters, max_norm)'."
             )
-        if p.grad is not None:
-            g = _require_cpu_data(p.grad, "p.grad")
-            total_norm += float(np.sum(g ** 2))
-                
-    total_norm = float(np.sqrt(total_norm))
+        grads.append(_require_cpu_data(p.grad, "p.grad"))
+
+    norm_type = float(norm_type)
+    if norm_type == float('inf') or np.isinf(norm_type):
+        total_norm = max(float(np.max(np.abs(g))) for g in grads)
+    elif norm_type == 2.0:
+        total_norm = float(np.sqrt(sum(float(np.sum(g ** 2)) for g in grads)))
+    else:
+        total_norm = float(sum(float(np.sum(np.abs(g) ** norm_type)) for g in grads) ** (1.0 / norm_type))
+
+    if error_if_nonfinite and (np.isnan(total_norm) or np.isinf(total_norm)):
+        raise RuntimeError(f"The total norm of order {norm_type} for gradients is non-finite: {total_norm}")
+
     clip_coef = max_norm / (total_norm + 1e-6)
-    
     if clip_coef < 1.0:
-        for p in parameters:
-            if p.grad is not None:
-                g = _require_cpu_data(p.grad, "p.grad")
-                p.grad._data = (g * clip_coef).astype(np.float32)
+        for p, g in zip(valid_params, grads):
+            p.grad._data = (g * clip_coef).astype(np.float32)
+            p.grad._version += 1
     return total_norm
 
+clip_grad_norm_ = clip_grad_norm
 
 # WHAT: WebGPU 및 Pyodide 비동기 환경을 지원하는 GPU/CPU 통합 비동기 Gradient Norm Clipping 함수입니다.
-async def clip_grad_norm_async(parameters: List[Tensor], max_norm: float) -> float:
-    valid_params = [p for p in parameters if p.grad is not None]
+async def clip_grad_norm_async(parameters, max_norm: float, norm_type: float = 2.0, error_if_nonfinite: bool = False) -> float:
+    params = _normalize_parameters(parameters)
+    valid_params = [p for p in params if p.grad is not None]
     if not valid_params:
         return 0.0
 
@@ -525,13 +546,18 @@ async def clip_grad_norm_async(parameters: List[Tensor], max_norm: float) -> flo
 
     grads_data = await asyncio.gather(*(fetch_grad(p.grad) for p in valid_params))
     
-    total_norm = 0.0
-    for g in grads_data:
-        total_norm += float(np.sum(g ** 2))
-                
-    total_norm = float(np.sqrt(total_norm))
+    norm_type = float(norm_type)
+    if norm_type == float('inf') or np.isinf(norm_type):
+        total_norm = max(float(np.max(np.abs(g))) for g in grads_data)
+    elif norm_type == 2.0:
+        total_norm = float(np.sqrt(sum(float(np.sum(g ** 2)) for g in grads_data)))
+    else:
+        total_norm = float(sum(float(np.sum(np.abs(g) ** norm_type)) for g in grads_data) ** (1.0 / norm_type))
+
+    if error_if_nonfinite and (np.isnan(total_norm) or np.isinf(total_norm)):
+        raise RuntimeError(f"The total norm of order {norm_type} for gradients is non-finite: {total_norm}")
+
     clip_coef = max_norm / (total_norm + 1e-6)
-    
     if clip_coef < 1.0:
         for p, g in zip(valid_params, grads_data):
             scaled = (g * clip_coef).astype(np.float32)
@@ -543,14 +569,13 @@ async def clip_grad_norm_async(parameters: List[Tensor], max_norm: float) -> flo
                     old_grad.dispose()
             else:
                 p.grad._data = scaled
+                p.grad._version += 1
     return total_norm
 
-
 # WHAT: 개별 그래디언트 요소의 최댓값/최솟값을 직접 자르는(Value Clipping) 동기 함수입니다.
-# WHY: 매우 큰 특정 그래디언트 값이 전체 학습을 망치는 것을 방지하기 위함입니다.
-# HOW: 각 그래디언트 요소를 [-clip_value, clip_value] 범위 내로 제한(clip)합니다.
-def clip_grad_value(parameters: List[Tensor], clip_value: float) -> None:
-    for p in parameters:
+def clip_grad_value(parameters, clip_value: float) -> None:
+    params = _normalize_parameters(parameters)
+    for p in params:
         if p.device == "gpu" or (p.grad is not None and p.grad.device == "gpu"):
             raise AMEVAForgeDeviceError(
                 "clip_grad_value() is synchronous and supported only for CPU parameters. "
@@ -559,11 +584,14 @@ def clip_grad_value(parameters: List[Tensor], clip_value: float) -> None:
         if p.grad is not None:
             g = _require_cpu_data(p.grad, "p.grad")
             p.grad._data = np.clip(g, -clip_value, clip_value).astype(np.float32)
+            p.grad._version += 1
 
+clip_grad_value_ = clip_grad_value
 
 # WHAT: WebGPU 및 Pyodide 비동기 환경을 지원하는 GPU/CPU 통합 비동기 Gradient Value Clipping 함수입니다.
-async def clip_grad_value_async(parameters: List[Tensor], clip_value: float) -> None:
-    valid_params = [p for p in parameters if p.grad is not None]
+async def clip_grad_value_async(parameters, clip_value: float) -> None:
+    params = _normalize_parameters(parameters)
+    valid_params = [p for p in params if p.grad is not None]
     if not valid_params:
         return
 
@@ -583,6 +611,7 @@ async def clip_grad_value_async(parameters: List[Tensor], clip_value: float) -> 
                 old_grad.dispose()
         else:
             p.grad._data = clipped
+            p.grad._version += 1
 
 # WHAT: 정해진 에포크 주기마다 학습률을 단계적으로 감소시키는 스케줄러입니다.
 # WHY: 학습 후반부에 학습률을 낮춰 더 세밀한 최적화 지점(Global Minimum)에 도달하게 하기 위함입니다.

@@ -1224,3 +1224,16 @@ class CosineSimilarity(Module):
         from .functional import cosine_similarity
         return cosine_similarity(x1, x2, dim=self.dim, eps=self.eps)
 
+class _NNUtils:
+    @staticmethod
+    def clip_grad_norm_(parameters, max_norm: float, norm_type: float = 2.0, error_if_nonfinite: bool = False) -> float:
+        from .optim import clip_grad_norm
+        return clip_grad_norm(parameters, max_norm, norm_type, error_if_nonfinite)
+
+    @staticmethod
+    def clip_grad_value_(parameters, clip_value: float) -> None:
+        from .optim import clip_grad_value
+        return clip_grad_value(parameters, clip_value)
+
+utils = _NNUtils()
+

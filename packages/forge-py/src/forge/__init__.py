@@ -65,7 +65,7 @@ from . import nn
 from .nn import BatchNorm2d, Dropout, LayerNorm, MultiheadAttention, TransformerEncoderLayer, PositionalEncoding, RNNCell, LSTMCell, RNN, LSTM, RMSNorm, RotaryEmbedding, SwiGLU, ModuleList
 # 최적화 알고리즘이 있는 optim 서브모듈과 학습률 스케줄러 임포트
 from . import optim  
-from .optim import clip_grad_norm, clip_grad_value, StepLR, CosineAnnealingLR, ReduceLROnPlateau
+from .optim import clip_grad_norm, clip_grad_norm_, clip_grad_value, clip_grad_value_, StepLR, CosineAnnealingLR, ReduceLROnPlateau
 # 모델 저장 및 로드 유틸리티 임포트
 from .serialization import save_model, load_model
 # 함수형 API 묶음 임포트
