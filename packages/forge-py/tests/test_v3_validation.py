@@ -79,3 +79,68 @@ def test_gather_scatter_grad_parents():
     assert src2.grad is not None
     assert index2.grad is None
     assert target.grad is not None
+
+
+def test_bmm_unbroadcasting_backward():
+    """Verify BMM unbroadcasting during backward pass."""
+    from forge.ops import bmm
+    a = tensor(np.random.randn(1, 4, 3).astype(np.float32), requires_grad=True)
+    b = tensor(np.random.randn(2, 3, 4).astype(np.float32), requires_grad=True)
+    
+    c = bmm(a, b)
+    assert c.shape == (2, 4, 4)
+    
+    loss = c.sum()
+    loss.backward()
+    
+    assert a.grad is not None
+    assert b.grad is not None
+    assert a.grad.shape == (1, 4, 3)
+    assert b.grad.shape == (2, 3, 4)
+
+
+def test_integer_tensor_requires_grad_validation():
+    """Verify that integer tensors cannot have requires_grad=True."""
+    from forge.errors import AMEVAForgeValidationError
+    with pytest.raises(AMEVAForgeValidationError):
+        tensor([1, 2, 3], dtype="int32", requires_grad=True)
+    with pytest.raises(AMEVAForgeValidationError):
+        tensor([1, 2, 3], dtype="int64", requires_grad=True)
+
+
+def test_multidimensional_layer_norm():
+    """Verify multi-dimensional normalized_shape in LayerNorm."""
+    from forge.functional import layer_norm
+    x = tensor(np.random.randn(2, 3, 4, 5).astype(np.float32), requires_grad=True)
+    norm_shape = (4, 5)
+    
+    y = layer_norm(x, norm_shape)
+    assert y.shape == (2, 3, 4, 5)
+    
+    # Check that mean over last 2 dims is approximately 0 and var is approximately 1
+    y_np = y.numpy()
+    mean = np.mean(y_np, axis=(-2, -1))
+    std = np.std(y_np, axis=(-2, -1))
+    np.testing.assert_allclose(mean, np.zeros_like(mean), atol=1e-5)
+    np.testing.assert_allclose(std, np.ones_like(std), atol=1e-3)
+
+
+def test_all_masked_softmax_nan_defense():
+    """Verify that an all -inf row does not produce NaN in Softmax or LogSoftmax."""
+    from forge.functional import softmax, log_softmax
+    logits = np.array([
+        [1.0, 2.0, 3.0],
+        [-np.inf, -np.inf, -np.inf]  # All masked row
+    ], dtype=np.float32)
+    
+    t = tensor(logits)
+    sm = softmax(t, axis=-1)
+    sm_data = sm.numpy()
+    
+    assert not np.isnan(sm_data).any(), "Softmax output contains NaN!"
+    assert np.all(sm_data[1] == 0.0), "All-masked row in Softmax should yield 0.0"
+    
+    lsm = log_softmax(t, axis=-1)
+    lsm_data = lsm.numpy()
+    assert not np.isnan(lsm_data).any(), "LogSoftmax output contains NaN!"
+

@@ -32,30 +32,21 @@ class SoftmaxFunction(Function):
         ctx.axis = axis
         if x.device == 'cpu':
             from .ops import _require_cpu_data
-            # 무엇을: CPU 데이터를 가져온다.
-            # 왜: numpy 연산을 수행하기 위함이다.
-            # 어떻게: _require_cpu_data를 호출한다.
             data = _require_cpu_data(x, 'x')
             
-            # 무엇을: 해당 축에서 최대값을 찾는다.
-            # 왜: exp() 계산 시 오버플로우(overflow)를 방지하기 위한 수치적 안정화 기법이다.
-            # 어떻게: np.max를 사용한다.
-            max_val = np.max(data, axis=axis, keepdims=True)
+            # 무엇을: 유한수(Finite) 마스킹 기반 수치 안정화 Softmax를 계산한다.
+            # 왜: All-Masked (-inf) 행 입력 시 (-inf - (-inf))로 인한 NaN 폭발을 방지하기 위함이다.
+            finite_mask = np.isfinite(data)
+            has_finite = np.any(finite_mask, axis=axis, keepdims=True)
+            safe_data = np.where(finite_mask, data, -1e30)
+            max_val = np.where(has_finite, np.max(safe_data, axis=axis, keepdims=True), 0.0)
             
-            # 무엇을: 지수 함수를 취한다.
-            # 왜: 각 원소를 양수로 만들고 크기에 비례하게 증폭시키기 위함이다.
-            # 어떻게: 데이터에서 최대값을 뺀 후 np.exp를 호출한다.
-            exp_data = np.exp(data - max_val)
-            
-            # 무엇을: 지수 값들의 합을 구한다.
-            # 왜: 확률 분포로 정규화하기 위한 분모를 얻기 위해서다.
-            # 어떻게: np.sum을 사용한다.
+            exp_data = np.where(finite_mask, np.exp(data - max_val), 0.0)
             sum_exp = np.sum(exp_data, axis=axis, keepdims=True)
             
-            # 무엇을: 정규화를 수행한다.
-            # 왜: 합이 1이 되는 확률 값을 얻기 위함이다.
-            # 어떻게: exp_data를 sum_exp로 나눈다.
-            result = exp_data / sum_exp
+            # 무엇을: 정규화를 수행한다 (sum_exp == 0인 all-masked 행은 0.0 확률을 반환).
+            # 왜: 0 / 0 NaN 발생을 원천 방어하기 위함이다.
+            result = np.where(sum_exp > 0.0, exp_data / np.maximum(sum_exp, 1e-12), 0.0)
             
             # 무엇을: 결과 텐서를 컨텍스트에 저장한다.
             # 왜: backward 시 야코비안 계산을 위해 Softmax 결과값이 필요하기 때문이다.
@@ -165,15 +156,23 @@ class LogSoftmaxFunction(Function):
         if x.device == 'cpu':
             from .ops import _require_cpu_data
             data = _require_cpu_data(x, 'x')
-            max_val = np.max(data, axis=axis, keepdims=True)
+            
+            # 무엇을: 유한수(Finite) 마스킹 기반 Log-Sum-Exp 수치 안정화를 수행한다.
+            # 왜: All-Masked (-inf) 행 입력 시 NaN 폭발을 방지하기 위함이다.
+            finite_mask = np.isfinite(data)
+            has_finite = np.any(finite_mask, axis=axis, keepdims=True)
+            safe_data = np.where(finite_mask, data, -1e30)
+            max_val = np.where(has_finite, np.max(safe_data, axis=axis, keepdims=True), 0.0)
+            
             shifted = data - max_val
-            log_sum_exp = np.log(np.sum(np.exp(shifted), axis=axis, keepdims=True))
-            result = shifted - log_sum_exp
+            exp_shifted = np.where(finite_mask, np.exp(shifted), 0.0)
+            sum_exp = np.sum(exp_shifted, axis=axis, keepdims=True)
+            log_sum_exp = np.where(sum_exp > 0.0, np.log(np.maximum(sum_exp, 1e-12)), 0.0)
+            result = np.where(finite_mask, shifted - log_sum_exp, -1e30)
             
             # 무엇을: backward를 위해 softmax 확률을 저장한다.
-            # 왜: log-softmax의 미분 시 exp(log_softmax) 즉 softmax 결과값이 필요하기 때문이다.
-            # 어떻게: np.exp(result)를 취한 후 텐서화하여 저장한다.
-            ctx.save_for_backward(Tensor(shape=result.shape, dtype='float32', device='cpu', data=np.exp(result)))
+            softmax_prob = np.where(finite_mask, np.exp(result), 0.0)
+            ctx.save_for_backward(Tensor(shape=result.shape, dtype='float32', device='cpu', data=softmax_prob))
             return Tensor(shape=result.shape, dtype='float32', device='cpu', data=result)
         else:
             from .ops import exp_op, div, sum_axis, max_axis, reshape, log_op, sub
@@ -369,21 +368,26 @@ def _move_tensor_state(dst, src) -> None:
     WHAT: src 텐서의 상태와 지연 연산 그래프를 dst 텐서로 안전하게 이동(Move)합니다.
     WHY: BatchNorm의 running_mean/running_var 같은 in-place 통계량 갱신 시,
          src의 식별자/그래프/데이터 소유권을 dst로 이전하여 dst 객체의 참조 동일성을 유지하기 위함입니다.
-    HOW: 기존 dst GPU 버퍼 안전 해제 -> src의 _HandleCell 및 AST 소유권 인계 -> src 필드 None 초기화.
+    HOW: 기존 dst GPU 버퍼 안전 해제 -> src의 _HandleCell 소유권 단일 인계 -> src 필드 None 초기화.
     """
-    if dst.device == "gpu" and getattr(dst, "_handle_cell", None) is not None:
-        try:
-            dst.dispose()
-        except Exception:
-            pass
+    from .tensor import _gc_queue
 
+    # 1. 기존 dst의 GPU 버퍼 참조 해제
+    old_cell = getattr(dst, "_handle_cell", None)
+    if dst.device == "gpu" and old_cell is not None and old_cell is not getattr(src, "_handle_cell", None):
+        if old_cell.dec_ref() and old_cell.handle is not None:
+            _gc_queue.add(old_cell.handle)
+
+    # 2. src 버퍼 소유권을 dst로 단일 이전
     dst._data = src._data
     dst._handle_cell = getattr(src, "_handle_cell", None)
+    
     if dst.device == "gpu" and dst._handle_cell is not None:
-        dst._handle_cell.inc_ref()
-        import weakref
-        from .tensor import Tensor
-        weakref.finalize(dst, Tensor._finalize_buffer, dst._handle_cell)
+        if not getattr(dst, "_finalizer_registered", False):
+            import weakref
+            from .tensor import Tensor
+            weakref.finalize(dst, Tensor._finalize_buffer, dst._handle_cell)
+            dst._finalizer_registered = True
 
     dst._lazy_op = getattr(src, "_lazy_op", None)
     dst._op = getattr(src, "_op", None)
@@ -396,9 +400,9 @@ def _move_tensor_state(dst, src) -> None:
     dst.requires_grad = False
     dst.grad = None
     dst._disposed = False
-    dst._finalizer_registered = (dst.device == "gpu")
     dst._version += 1
 
+    # 3. src는 소유권을 dst에 완전히 넘겼으므로 None 초기화
     src._data = None
     src._handle_cell = None
 
@@ -480,31 +484,41 @@ def batch_norm2d(x, running_mean, running_var, weight, bias, training=False, mom
 def layer_norm(x, normalized_shape, weight=None, bias=None, eps=1e-5):
     """
     무엇을: 레이어 정규화(Layer Normalization)를 수행한다.
-    왜: 트랜스포머(Transformer) 등에서 시퀀스나 토큰 단위로 데이터의 스케일을 맞춰주기 위함이다.
-    어떻게: 가장 마지막 차원(dim=-1)을 기준으로 평균과 분산을 구하여 정규화한 뒤 아핀(affine) 변환을 수행한다.
+    왜: 트랜스포머(Transformer), Vision 모델 등에서 지정된 차원들(normalized_shape) 전체에 걸쳐 스케일을 맞추기 위함이다.
+    어떻게: normalized_shape에 해당하는 모든 후방 차원 축들에 대해 평균과 분산을 구하여 정규화한 뒤 아핀(affine) 변환을 수행한다.
     """
     from .ops import sub, mul, div, add, mean_axis, full, sqrt, unsqueeze
-    dim = -1
-    
-    m = mean_axis(x, dim)
-    m_view = unsqueeze(m, dim)
-    
-    diff = sub(x, m_view)
+    if isinstance(normalized_shape, int):
+        normalized_shape = (normalized_shape,)
+
+    ndim_norm = len(normalized_shape)
+    norm_axes = list(range(len(x.shape) - ndim_norm, len(x.shape))) if len(x.shape) >= ndim_norm else [-1]
+
+    # 1. 다차원 정규화 축에 대한 평균(Mean) 계산 (keepdim 형태 유지)
+    m = x
+    for ax in sorted(norm_axes, reverse=True):
+        m = mean_axis(m, ax)
+        m = unsqueeze(m, ax)
+
+    diff = sub(x, m)
     diff_sq = mul(diff, diff)
-    
-    v = mean_axis(diff_sq, dim)
-    v_view = unsqueeze(v, dim)
-    
-    eps_t = full(v_view.shape, eps, device=x.device)
-    denom = sqrt(add(v_view, eps_t))
+
+    # 2. 다차원 정규화 축에 대한 분산(Variance) 계산 (keepdim 형태 유지)
+    v = diff_sq
+    for ax in sorted(norm_axes, reverse=True):
+        v = mean_axis(v, ax)
+        v = unsqueeze(v, ax)
+
+    eps_t = full(v.shape, eps, device=x.device)
+    denom = sqrt(add(v, eps_t))
     x_norm = div(diff, denom)
-    
+
     out = x_norm
     if weight is not None:
         out = mul(out, weight)
     if bias is not None:
         out = add(out, bias)
-        
+
     return out
 
 def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, training=False):

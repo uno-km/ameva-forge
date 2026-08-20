@@ -232,9 +232,13 @@ class Tensor:
         # HOW: 인자로 받은 device를 할당합니다.
         self.device = device
         
-        # WHAT: 자동 미분 추적 여부입니다.
-        # WHY: 역전파 그래프에 포함할지를 결정하기 위함입니다.
-        # HOW: 불리언 값을 할당합니다.
+        # WHAT: 정수형/불리언 등 비미분 Dtype의 requires_grad=True 설정 차단 (PyTorch 불변식 준수)
+        # WHY: 이산 데이터에는 기울기가 정의되지 않으며, 잘못된 Autograd 노드 생성을 조기에 차단하기 위함입니다.
+        if requires_grad and str(dtype) in ("int8", "int16", "int32", "int64", "uint8", "bool"):
+            from .errors import AMEVAForgeValidationError
+            raise AMEVAForgeValidationError(
+                f"[AMEVA-Forge Autograd Error] Only Tensors of floating point dtype can require gradients, got dtype='{dtype}'"
+            )
         self.requires_grad = requires_grad
         
         # WHAT: 역전파를 통해 계산된 이 텐서의 기울기(Gradient)입니다.

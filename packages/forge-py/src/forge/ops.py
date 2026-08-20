@@ -2512,15 +2512,16 @@ class BmmFunction(Function):
             raise AMEVAForgeShapeError("bmm requires 3D tensors")
         B, N, M = a.shape
         B2, M2, P = b.shape
-        if B != B2 or M != M2:
+        if M != M2 or (B != B2 and B != 1 and B2 != 1):
             raise AMEVAForgeShapeError(f"bmm shape mismatch: {a.shape} and {b.shape}")
 
+        out_B = max(B, B2)
         if _should_use_gpu(a, b):
             # WHAT: GPU 배치 행렬 곱입니다.
             # WHY: 여러 배치 행렬 곱을 병렬로 연산하기 위함입니다.
             # HOW: op_params로 크기들을 전달하고 batched_matmul 커널을 부릅니다.
-            return Tensor(shape=(B, N, P), dtype="float32", device="gpu",
-                          op="batched_matmul", parents=(a, b), op_params=[int(B), int(N), int(P), int(M)])
+            return Tensor(shape=(out_B, N, P), dtype="float32", device="gpu",
+                          op="batched_matmul", parents=(a, b), op_params=[int(out_B), int(N), int(P), int(M)])
         else:
             # WHAT: CPU 행렬 곱입니다.
             # WHY: Numpy는 3차원 이상 배열끼리 np.matmul을 시도할 때 첫 차원들을 자동으로 배치 축으로 인식해 행렬 곱을 수행해주기 때문입니다.
@@ -2534,12 +2535,12 @@ class BmmFunction(Function):
     @staticmethod
     def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, Tensor]:
         a, b = ctx.saved_tensors
-        # WHAT: BMM의 역전파 공식 적용입니다.
-        # WHY: 일반 행렬 곱처럼 dL/dA = dL/dY * B^T 이고 dL/dB = A^T * dL/dY 이기 때문입니다(배치 축 유지).
-        # HOW: permute로 (0, 2, 1) 축을 섞어 내부 행렬 부분만 전치시키고 다시 bmm을 재귀적으로 호출합니다.
+        # WHAT: BMM의 역전파 공식 적용 및 브로드캐스팅 배치 축소(Unbroadcasting)입니다.
+        # WHY: 일반 행렬 곱처럼 dL/dA = dL/dY * B^T 이고 dL/dB = A^T * dL/dY 이며, 브로드캐스트된 축을 unbroadcast 해야 합니다.
+        # HOW: permute로 (0, 2, 1) 축을 섞어 내부 행렬 부분만 전치시키고 bmm 호출 후 _unbroadcast로 원래 형상으로 축소합니다.
         grad_a = bmm(grad_output, permute(b, (0, 2, 1)))
         grad_b = bmm(permute(a, (0, 2, 1)), grad_output)
-        return grad_a, grad_b
+        return _unbroadcast(grad_a, a.shape), _unbroadcast(grad_b, b.shape)
 
 # WHAT: 배치 행렬 곱 편의 함수입니다.
 # WHY: 쉽게 3차원 텐서 간의 행렬 곱을 수행하기 위함입니다.
