@@ -330,7 +330,19 @@
 			"benchmarkDesc": "Profiles real-time WebGPU compute throughput (GFLOPS) vs CPU NumPy and executes in-browser Python validation test scripts.",
 			"benchmarkDeepDiveTitle": "Computational Throughput: Roofline Model & Shared Memory Tiling",
 			"benchmarkDeepDiveMath": "<strong>Theoretical Peak FLOPs:</strong> \\( \\text{FLOPs} = 2 \\times M \\times N \\times K \\)<br><strong>Tiled GEMM Kernel:</strong> \\( 16 \\times 16 \\) workgroups loaded into local cache \\( \\text{var<workgroup>} \\), eliminating global memory read stalls.<br><strong>Memory Bandwidth:</strong> Achieves >30 GB/s on-chip throughput via WebGPU Staging Buffer Pool.",
-			"benchmarkDeepDiveAllegory": "<strong>Hardware Allegory:</strong> Rather than streaming individual matrix numbers from slow DRAM across the PCIe bus, WebGPU compute shaders load whole 16x16 tiles into blazing fast on-chip shared memory, executing 256 parallel multiply-accumulate operations in lockstep."
+			"benchmarkDeepDiveAllegory": "<strong>Hardware Allegory:</strong> Rather than streaming individual matrix numbers from slow DRAM across the PCIe bus, WebGPU compute shaders load whole 16x16 tiles into blazing fast on-chip shared memory, executing 256 parallel multiply-accumulate operations in lockstep.",
+			"visionTitle": "AMEVA-Forge: Vision Center",
+			"visionH2": "4. Vision Center (WebGPU Conv2D Image Filters)",
+			"visionDesc": "Demonstrates 2D matrix spatial convolution (Conv2D) and multi-channel image tensor processing on raw image pixels using WebGPU.",
+			"visionDeepDiveTitle": "Spatial Convolution: Discrete 2D Cross-Correlation & Edge Operators",
+			"visionDeepDiveMath": "<strong>2D Spatial Convolution:</strong> \\( S(i, j) = (I * K)(i, j) = \\sum_{m=-1}^{1} \\sum_{n=-1}^{1} I(i-m, j-n) K(m, n) \\)<br><strong>Sobel Gradient Magnitude:</strong> \\( G = \\sqrt{G_x^2 + G_y^2} \\)<br><strong>WebGPU 2D Dispatch:</strong> Dispatches \\( 300 \\times 300 \\) threads with zero CPU readback latency.",
+			"visionDeepDiveAllegory": "<strong>Visual Processing Allegory:</strong> Instead of processing pixels on a slow CPU loop, WebGPU runs a 2D grid of 90,000 parallel GPU shader threads simultaneously, sliding 3x3 convolution kernels across color channels with zero frame drop.",
+			"trainingTitle": "AMEVA-Forge: Training Demo",
+			"trainingH2": "3. Real-time In-Browser Neural Network Training",
+			"trainingDesc": "Executes complete forward pass, reverse-mode autodiff, and in-place WebGPU optimizer steps in real-time inside your browser.",
+			"trainingDeepDiveTitle": "Optimization Dynamics: In-Place SGD / Adam & Gradient Flow",
+			"trainingDeepDiveMath": "<strong>In-Place Adam Update:</strong> \\( m_t = \\beta_1 m_{t-1} + (1-\\beta_1) g_t, \\quad v_t = \\beta_2 v_{t-1} + (1-\\beta_2) g_t^2 \\)<br>\\( \\theta_t = \\theta_{t-1} - \\frac{\\alpha}{\\sqrt{\\hat{v}_t} + \\epsilon} \\hat{m}_t \\)<br><strong>Zero Allocation:</strong> GPU buffer handles are updated in-place with zero memory allocation churn.",
+			"trainingDeepDiveAllegory": "<strong>Training Dynamics:</strong> Gradient vectors directly modify GPU memory in-place via atomic WebGPU compute shaders, avoiding garbage collection pauses during live model convergence."
 		}
 	},
 	"ko": {
@@ -650,7 +662,19 @@
 			"benchmarkDesc": "실시간 WebGPU 연산 처리량(GFLOPS)과 CPU NumPy를 비교 프로파일링하고, 브라우저 내 Python 검증 테스트 스크립트를 즉각 실행합니다.",
 			"benchmarkDeepDiveTitle": "연산 처리량 물리학: 루프라인 모델 및 공유 메모리 타일링",
 			"benchmarkDeepDiveMath": "<strong>이론적 최대 FLOPs:</strong> \\( \\text{FLOPs} = 2 \\times M \\times N \\times K \\)<br><strong>타일드 GEMM 커널:</strong> \\( 16 \\times 16 \\) 워크그룹을 온칩 로컬 캐시 \\( \\text{var<workgroup>} \\)에 적재하여 전역 메모리 읽기 지연을 원천 차단합니다.<br><strong>메모리 대역폭:</strong> WebGPU 스테이징 버퍼 풀을 통해 30 GB/s 이상의 초고속 온칩 처리량을 달성합니다.",
-			"benchmarkDeepDiveAllegory": "<strong>하드웨어 비유:</strong> 느린 전역 메모리(DRAM)에서 숫자를 하나씩 가져오는 대신, 256개 WebGPU 스레드가 16x16 행렬 타일을 초고속 온칩 공유 메모리에 한 번에 올려놓고 동기화 배리어 없이 즉석에서 곱셈-누적(FMA)을 동시 수행합니다."
+			"benchmarkDeepDiveAllegory": "<strong>하드웨어 비유:</strong> 느린 전역 메모리(DRAM)에서 숫자를 하나씩 가져오는 대신, 256개 WebGPU 스레드가 16x16 행렬 타일을 초고속 온칩 공유 메모리에 한 번에 올려놓고 동기화 배리어 없이 즉석에서 곱셈-누적(FMA)을 동시 수행합니다.",
+			"visionTitle": "AMEVA-Forge: 비전 센터",
+			"visionH2": "4. 비전 센터 (WebGPU Conv2D 이미지 필터)",
+			"visionDesc": "WebGPU를 활용하여 원시 이미지 픽셀에 대한 2D 공간 합성곱(Conv2D) 및 다채널 텐서 연산을 실시간으로 수행합니다.",
+			"visionDeepDiveTitle": "공간 합성곱: 이산 2D 상호 상관 및 에지 검출 연산자",
+			"visionDeepDiveMath": "<strong>2D 공간 합성곱:</strong> \\( S(i, j) = (I * K)(i, j) = \\sum_{m=-1}^{1} \\sum_{n=-1}^{1} I(i-m, j-n) K(m, n) \\)<br><strong>소벨 그래디언트 크기:</strong> \\( G = \\sqrt{G_x^2 + G_y^2} \\)<br><strong>WebGPU 2D 디스패치:</strong> CPU 복사 지연 없이 \\( 300 \\times 300 \\) 스레드를 동시 실행합니다.",
+			"visionDeepDiveAllegory": "<strong>시각 신호 처리 비유:</strong> CPU에서 픽셀을 순차적으로 계산하는 대신, 90,000개의 WebGPU 병렬 스레드가 3x3 합성곱 커널을 동시에 슬라이딩하여 프레임 드랍 없이 실시간 필터링을 수행합니다.",
+			"trainingTitle": "AMEVA-Forge: 학습 데모",
+			"trainingH2": "3. 실시간 브라우저 내 신경망 학습",
+			"trainingDesc": "브라우저 내에서 순전파, 역방향 자동 미분, 인플레이스 WebGPU 옵티마이저 스텝을 실시간으로 실행합니다.",
+			"trainingDeepDiveTitle": "최적화 역학: 인플레이스 SGD / Adam 및 기울기 흐름",
+			"trainingDeepDiveMath": "<strong>인플레이스 Adam 갱신식:</strong> \\( m_t = \\beta_1 m_{t-1} + (1-\\beta_1) g_t, \\quad v_t = \\beta_2 v_{t-1} + (1-\\beta_2) g_t^2 \\)<br>\\( \\theta_t = \\theta_{t-1} - \\frac{\\alpha}{\\sqrt{\\hat{v}_t} + \\epsilon} \\hat{m}_t \\)<br><strong>제로 메모리 할당:</strong> GPU 버퍼 핸들을 제자리(In-Place)에서 직접 갱신하여 메모리 누수를 원천 방지합니다.",
+			"trainingDeepDiveAllegory": "<strong>학습 역학 비유:</strong> 계산된 기울기 벡터가 WebGPU 셰이더를 통해 파라미터 버퍼에 즉각 인플레이스로 반영되어, 가비지 컬렉션(GC) 멈춤 현상 없이 매끄럽게 손실값이 수렴합니다."
 		}
 	},
 	"zh": {
@@ -970,7 +994,19 @@
 			"benchmarkDesc": "实时对比 WebGPU 计算吞吐量 (GFLOPS) 与 CPU NumPy，并在浏览器中执行 Python 验证测试脚本。",
 			"benchmarkDeepDiveTitle": "计算吞吐量：Roofline 模型与共享内存分块",
 			"benchmarkDeepDiveMath": "<strong>理论峰值 FLOPs：</strong> \\( \\text{FLOPs} = 2 \\times M \\times N \\times K \\)<br><strong>分块 GEMM 内核：</strong> 将 \\( 16 \\times 16 \\) 工作组加载到片上高速共享内存中，消除全局内存读取停顿。",
-			"benchmarkDeepDiveAllegory": "<strong>硬件比喻：</strong> 256 个 WebGPU 线程将 16x16 矩阵块加载到片上高速缓存中，实现超高带宽的并行矩阵乘法。"
+			"benchmarkDeepDiveAllegory": "<strong>硬件比喻：</strong> 256 个 WebGPU 线程将 16x16 矩阵块加载到片上高速缓存中，实现超高带宽的并行矩阵乘法。",
+			"visionTitle": "AMEVA-Forge: 视觉中心",
+			"visionH2": "4. 视觉中心 (WebGPU Conv2D 图像滤波器)",
+			"visionDesc": "展示使用 WebGPU 在原始图像像素上执行的 2D 空间卷积 (Conv2D) 与多通道张量处理。",
+			"visionDeepDiveTitle": "空间卷积：离散 2D 互相关与边缘算子",
+			"visionDeepDiveMath": "<strong>2D 卷积：</strong> \\( S(i, j) = \\sum \\sum I(i-m, j-n) K(m, n) \\)",
+			"visionDeepDiveAllegory": "<strong>视觉比喻：</strong> 90,000 个 WebGPU 线程同时滑动 3x3 卷积核，实现零延迟的图像并行处理。",
+			"trainingTitle": "AMEVA-Forge: 训练演示",
+			"trainingH2": "3. 浏览器内实时神经网络训练",
+			"trainingDesc": "在浏览器中实时执行完整的前向传播、反向自动微分与 WebGPU 原地优化器更新。",
+			"trainingDeepDiveTitle": "优化动力学：原地 SGD / Adam 与梯度流动",
+			"trainingDeepDiveMath": "<strong>原地 Adam 更新：</strong> \\( \\theta_t = \\theta_{t-1} - \\frac{\\alpha}{\\sqrt{\\hat{v}_t} + \\epsilon} \\hat{m}_t \\)",
+			"trainingDeepDiveAllegory": "<strong>训练比喻：</strong> 梯度直接原地修改 GPU 显存，避免 GC 停顿。"
 		}
 	},
 	"ja": {
@@ -1290,7 +1326,19 @@
 			"benchmarkDesc": "リアルタイム WebGPU 演算スループット (GFLOPS) と CPU NumPy を比較測定し、ブラウザ内で Python 検証テストを実行します。",
 			"benchmarkDeepDiveTitle": "計算スループット: Roofline モデルと共有メモリタイリング",
 			"benchmarkDeepDiveMath": "<strong>理論ピーク FLOPs:</strong> \\( \\text{FLOPs} = 2 \\times M \\times N \\times K \\)<br><strong>タイル化 GEMM カーネル:</strong> \\( 16 \\times 16 \\) ワークグループをオンチップ共有メモリに展開し、メモリストールを排除します。",
-			"benchmarkDeepDiveAllegory": "<strong>ハードウェア比喩:</strong> 256 個の WebGPU スレッドが 16x16 タイルを高速 SRAM 上で並列に積和演算します。"
+			"benchmarkDeepDiveAllegory": "<strong>ハードウェア比喩:</strong> 256 個の WebGPU スレッドが 16x16 タイルを高速 SRAM 上で並列に積和演算します。",
+			"visionTitle": "AMEVA-Forge: ビジョンセンター",
+			"visionH2": "4. ビジョンセンター (WebGPU Conv2D 画像フィルタ)",
+			"visionDesc": "WebGPU を用いて生画像ピクセルに対する 2D 空間畳み込み (Conv2D) と多チャネルテンソル処理を実行します。",
+			"visionDeepDiveTitle": "空間畳み込み: 離散 2D 相互相関とエッジ検出",
+			"visionDeepDiveMath": "<strong>2D 畳み込み:</strong> \\( S(i, j) = \\sum \\sum I(i-m, j-n) K(m, n) \\)",
+			"visionDeepDiveAllegory": "<strong>視覚処理比喩:</strong> 90,000 個の WebGPU 並列スレッドが 3x3 カーネルを同時にスライド処理します。",
+			"trainingTitle": "AMEVA-Forge: トレーニングデモ",
+			"trainingH2": "3. リアルタイムブラウザ内ニューラルネットワーク学習",
+			"trainingDesc": "ブラウザ内で順伝播、自動微分、WebGPU インプレースオプティマイザ更新をリアルタイム実行します。",
+			"trainingDeepDiveTitle": "最適化ダイナミクス: インプレース SGD / Adam と勾配フロー",
+			"trainingDeepDiveMath": "<strong>インプレース Adam:</strong> \\( \\theta_t = \\theta_{t-1} - \\frac{\\alpha}{\\sqrt{\\hat{v}_t} + \\epsilon} \\hat{m}_t \\)",
+			"trainingDeepDiveAllegory": "<strong>学習比喩:</strong> 勾配が GPU メモリ上で直接インプレース更新され、GC による遅延を防止します。"
 		}
 	},
 	"hi": {
@@ -1610,7 +1658,19 @@
 			"benchmarkDesc": "वास्तविक समय WebGPU थ्रूपुट (GFLOPS) बनाम CPU NumPy का प्रोफाइल करता है और पायथन परीक्षण निष्पादित करता है।",
 			"benchmarkDeepDiveTitle": "थ्रूपुट भौतिकी: रूफलाइन मॉडल और शेयर्ड मेमोरी टाइलिंग",
 			"benchmarkDeepDiveMath": "<strong>सैद्धांतिक पीक FLOPs:</strong> \\( \\text{FLOPs} = 2 \\times M \\times N \\times K \\)",
-			"benchmarkDeepDiveAllegory": "<strong>हार्डवेयर रूपक:</strong> 256 WebGPU थ्रेड्स 16x16 टाइल्स पर एक साथ समानांतर गणना करते हैं।"
+			"benchmarkDeepDiveAllegory": "<strong>हार्डवेयर रूपक:</strong> 256 WebGPU थ्रेड्स 16x16 टाइल्स पर एक साथ समानांतर गणना करते हैं।",
+			"visionTitle": "AMEVA-Forge: विजन सेंटर",
+			"visionH2": "4. विजन सेंटर (WebGPU Conv2D छवि फ़िल्टर)",
+			"visionDesc": "WebGPU का उपयोग करके 2D स्थानिक कनवल्शन (Conv2D) निष्पादित करता है।",
+			"visionDeepDiveTitle": "स्थानिक कनवल्शन: 2D क्रॉस-सहसंबंध",
+			"visionDeepDiveMath": "<strong>2D कनवल्शन:</strong> \\( S(i, j) = \\sum \\sum I(i-m, j-n) K(m, n) \\)",
+			"visionDeepDiveAllegory": "<strong>रूपक:</strong> 90,000 समानांतर GPU थ्रेड्स 3x3 फ़िल्टर लागू करते हैं।",
+			"trainingTitle": "AMEVA-Forge: प्रशिक्षण डेमो",
+			"trainingH2": "3. वास्तविक समय ब्राउज़र तंत्रिका नेटवर्क प्रशिक्षण",
+			"trainingDesc": "ब्राउज़र में रीयल-टाइम बैकप्रॉपैगैशन और ऑप्टिमाइज़र निष्पादित करता है।",
+			"trainingDeepDiveTitle": "अनुकूलन गतिकी: इन-प्लेस एडम",
+			"trainingDeepDiveMath": "<strong>एडम अपडेट:</strong> \\( \\theta_t = \\theta_{t-1} - \\frac{\\alpha}{\\sqrt{\\hat{v}_t} + \\epsilon} \\hat{m}_t \\)",
+			"trainingDeepDiveAllegory": "<strong>रूपक:</strong> मेमोरी चर्न के बिना सीधे GPU बफ़र्स को अपडेट करता है।"
 		}
 	},
 	"es": {
@@ -1930,7 +1990,19 @@
 			"benchmarkDesc": "Perfila el rendimiento de cómputo en tiempo real de WebGPU (GFLOPS) frente a CPU NumPy y ejecuta scripts de prueba en Python.",
 			"benchmarkDeepDiveTitle": "Rendimiento Computacional: Modelo Roofline y Segmentación de Memoria Compartida",
 			"benchmarkDeepDiveMath": "<strong>Pico Teórico de FLOPs:</strong> \\( \\text{FLOPs} = 2 \\times M \\times N \\times K \\)<br><strong>Kernel GEMM Segmentado:</strong> Carga bloques \\( 16 \\times 16 \\) en memoria compartida en chip.",
-			"benchmarkDeepDiveAllegory": "<strong>Alegoría de Hardware:</strong> 256 hilos WebGPU ejecutan multiplicaciones de matrices en paralelo sobre memoria ultra rápida."
+			"benchmarkDeepDiveAllegory": "<strong>Alegoría de Hardware:</strong> 256 hilos WebGPU ejecutan multiplicaciones de matrices en paralelo sobre memoria ultra rápida.",
+			"visionTitle": "AMEVA-Forge: Centro de Visión",
+			"visionH2": "4. Centro de Visión (Filtros de Imagen Conv2D WebGPU)",
+			"visionDesc": "Demuestra convolución espacial 2D (Conv2D) y procesamiento de tensores de imagen en WebGPU.",
+			"visionDeepDiveTitle": "Convolución Espacial: Correlación Cruzada 2D y Operadores de Borde",
+			"visionDeepDiveMath": "<strong>Convolución 2D:</strong> \\( S(i, j) = \\sum \\sum I(i-m, j-n) K(m, n) \\)",
+			"visionDeepDiveAllegory": "<strong>Alegoría:</strong> 90,000 hilos WebGPU ejecutan kernels 3x3 simultáneamente.",
+			"trainingTitle": "AMEVA-Forge: Demo de Entrenamiento",
+			"trainingH2": "3. Entrenamiento de Redes Neuronales en el Navegador",
+			"trainingDesc": "Ejecuta propagación hacia adelante, autodiferenciación y optimizadores en WebGPU.",
+			"trainingDeepDiveTitle": "Dinámica de Optimización: Adam / SGD In-Place",
+			"trainingDeepDiveMath": "<strong>Actualización Adam:</strong> \\( \\theta_t = \\theta_{t-1} - \\frac{\\alpha}{\\sqrt{\\hat{v}_t} + \\epsilon} \\hat{m}_t \\)",
+			"trainingDeepDiveAllegory": "<strong>Alegoría:</strong> Actualiza buffers GPU directamente sin recolección de basura."
 		}
 	}
 };

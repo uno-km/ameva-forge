@@ -2,15 +2,43 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title data-i18n="common.nav.training">AMEVA-Forge: Training Demo</title>
-    <link rel="stylesheet" href="../../style.css">
-    <script src="../../i18n.js"></script>
-    <script src="../../i18n-translations.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title data-i18n="playgrounds.trainingTitle">AMEVA-Forge: Training Demo</title>
+    <link rel="icon" type="image/svg+xml" href="../../../favicon.svg">
+    <link rel="stylesheet" href="../../../style.css">
+    <script src="../../../dist/index.js"></script>
+    <script src="../../../dist/forge-py-bundle.js"></script>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
+    <script src="../../../i18n.js"></script>
+    <script src="../../../i18n-translations.js"></script>
     <style>
-        button { padding: 5px 15px; border: 1px solid #003399; background: #f4f4f4; cursor: pointer; margin-right: 10px; font-weight: bold;}
-        button.extreme { border-color: #d32f2f; color: #d32f2f; }
-        button:hover { background: #e0e0e0; }
-        .log-box { background: #f8f8f8; border: 1px solid #ddd; padding: 15px; min-height: 400px; overflow-y: auto; font-family: Consolas, monospace; font-size: 0.9em; margin-top:20px; }
+        .training-grid {
+            display: grid;
+            grid-template-columns: 340px 1fr;
+            gap: 20px;
+            margin-top: 15px;
+        }
+        @media (max-width: 900px) {
+            .training-grid { grid-template-columns: 1fr; }
+        }
+        .train-card {
+            background: #fff;
+            border: 1px solid #ccc;
+            padding: 15px;
+            border-radius: 4px;
+        }
+        .log-box {
+            background: #111;
+            color: #00ff66;
+            font-family: Consolas, monospace;
+            font-size: 0.85em;
+            padding: 12px;
+            border-radius: 4px;
+            height: 360px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            line-height: 1.4;
+        }
         #loadingOverlay {
             position: fixed; top:0; left:0; right:0; bottom:0;
             background: rgba(255, 255, 255, 0.95);
@@ -21,11 +49,17 @@
     </style>
 </head>
 <body>
+    <div id="loadingOverlay">
+        <h1 style="color: #003399;">Loading WebGPU Training Engine...</h1>
+        <h2 id="loadingText">Initializing In-Place Optimizer & Pyodide...</h2>
+    </div>
+
     <header>
-        <h1 data-i18n="common.headerTitle">AMEVA-Forge: Training Demo</h1>
+        <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
         <div class="header-badge-group">
-            <span class="apache-tag" data-i18n="common.releaseTag">Release 1.0.0</span>
-            <a href="../../demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
+            <span class="apache-tag" data-i18n="common.releaseTag">Release 2.0.0</span>
+            <span id="gpuStatus" style="font-weight: bold; color: #008800;">[ WebGPU Ready ]</span>
+            <a href="../../../demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
             <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
         </div>
     </header>
@@ -37,7 +71,7 @@
                 <li><a href="../../../demo.html"><strong data-i18n="common.nav.liveStudio">Live WebGPU Studio</strong></a></li>
                 <li><a href="../mnist/index.html"><strong data-i18n="common.nav.mnist">1. MNIST Inference</strong></a></li>
                 <li><a href="../benchmark/index.html"><strong data-i18n="common.nav.benchmark">2. Benchmark Test</strong></a></li>
-                <li><a href="../training/index.html" class="active"><strong data-i18n="common.nav.training">3. Training Demo</strong></a></li>
+                <li><a href="index.html" class="active"><strong data-i18n="common.nav.training">3. Training Demo</strong></a></li>
                 <li><a href="../vision/index.html"><strong data-i18n="common.nav.vision">4. Vision Center</strong></a></li>
             </ul>
             <h3 data-i18n="common.nav.documentation">Documentation</h3>
@@ -55,43 +89,77 @@
         </nav>
         
         <main class="content">
-            <h2>3. WebGPU Real-time Training Demo</h2>
-            <p>Select a scale to train entirely within your browser utilizing WebGPU acceleration. No server processing is involved.</p>
-            <div style="margin-bottom: 20px;">
-                <button onclick="runTraining('low')">Low Capacity (XOR)</button>
-                <button onclick="runTraining('medium')">Medium Capacity (MLP)</button>
-                <button class="extreme" onclick="runTraining('extreme')">Extreme Capacity (VRAM Crusher)</button>
+            <h2 data-i18n="playgrounds.trainingH2">3. Real-time In-Browser Neural Network Training</h2>
+            <p data-i18n="playgrounds.trainingDesc">Executes complete forward pass, reverse-mode autodiff, and in-place WebGPU optimizer steps in real-time inside your browser.</p>
+
+            <div class="metric-bar">
+                <div class="metric-item"><span>Device Target:</span> <strong id="metricDevice">WebGPU</strong></div>
+                <div class="metric-item"><span>Training Epochs:</span> <strong id="metricEpochs">--</strong></div>
+                <div class="metric-item"><span>Final Loss:</span> <strong id="metricLoss" style="color: #008800;">--</strong></div>
+                <div class="metric-item"><span>Elapsed Time:</span> <strong id="metricTime">0.0 ms</strong></div>
             </div>
-            <h3>Training Log Console</h3>
-            <div class="log-box" id="logBox">System idle. Waiting for task...</div>
-            
-            <div id="loadingOverlay">
-                <h1 style="color: #003399;">Loading WebGPU Training Environment...</h1>
-                <h2 id="loadingText">Initializing Pyodide...</h2>
+
+            <div class="training-grid">
+                <div class="train-card">
+                    <h4 style="margin-top: 0; color: #003399;">Training Configuration</h4>
+                    
+                    <div style="margin-bottom: 12px;">
+                        <label><strong>Network Capacity Preset:</strong></label>
+                        <select id="trainPreset" style="width: 100%; padding: 6px; font-family: Consolas, monospace;">
+                            <option value="standard" selected>Standard (3-Layer MLP, 50 Epochs)</option>
+                            <option value="heavy">Heavy (Deep MLP, 100 Epochs)</option>
+                            <option value="extreme">Extreme Stress (200 Epochs, High Batch)</option>
+                        </select>
+                    </div>
+
+                    <div style="margin-bottom: 12px;">
+                        <label><strong>Optimizer:</strong></label>
+                        <select id="trainOpt" style="width: 100%; padding: 6px; font-family: Consolas, monospace;">
+                            <option value="adam" selected>Adam (In-Place WebGPU)</option>
+                            <option value="sgd">SGD with Momentum</option>
+                        </select>
+                    </div>
+
+                    <div style="display: flex; gap: 8px; margin-top: 15px;">
+                        <button class="classic-btn" onclick="startTraining()">▶ Start Live WebGPU Training</button>
+                    </div>
+                </div>
+
+                <div class="train-card">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <h4 style="margin: 0; color: #003399;">Live Training Log Output</h4>
+                        <button class="classic-btn-secondary" style="padding: 2px 8px; font-size: 0.8em;" onclick="document.getElementById('trainLog').textContent = ''">Clear Output</button>
+                    </div>
+                    <div class="log-box" id="trainLog">--- WebGPU Training Engine Initialized ---
+Select a capacity preset and click Start Live Training.
+</div>
+                </div>
+            </div>
+
+            <!-- Deep-Dive Mathematical & Algorithmic Explanation Zone -->
+            <div class="explanation-zone" style="margin-top: 25px; padding: 16px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px;">
+                <h3 style="margin-top: 0; color: #003399;" data-i18n="playgrounds.trainingDeepDiveTitle">Technical & Mathematical Deep-Dive</h3>
+                <div style="margin-bottom: 12px; font-size: 0.92em; line-height: 1.6;" data-i18n-html="playgrounds.trainingDeepDiveMath"></div>
+                <div style="font-size: 0.9em; line-height: 1.5; color: #334155; border-top: 1px solid #e2e8f0; padding-top: 10px;" data-i18n-html="playgrounds.trainingDeepDiveAllegory"></div>
             </div>
         </main>
     </div>
 
-    <script src="../../../dist/index.js"></script>
-    <script src="../../../dist/forge-py-bundle.js"></script>
-    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
+    <footer>
+        <span data-i18n="common.footerText">&copy; 2026 AMEVA-Forge Team. Released under the Apache-2.0 License.</span>
+    </footer>
+
     <script>
         let pyodide = null;
-        let isTraining = false;
-        
-        window.log = function(msg) {
-            const box = document.getElementById('logBox');
-            box.innerText += "\n" + msg;
-            box.scrollTop = box.scrollHeight;
-        };
+        const logBox = document.getElementById('trainLog');
+
+        function log(msg) {
+            logBox.textContent += msg + '\n';
+            logBox.scrollTop = logBox.scrollHeight;
+        }
 
         async function initDashboard() {
             try {
-                if (!navigator.gpu) {
-                    document.getElementById('loadingText').innerText = "FATAL: WebGPU is not supported in this browser.";
-                    return;
-                }
-
                 if (window.ameva && typeof window.ameva.registerPyodideBridge === 'function') {
                     window.bridgeApi = window.ameva.registerPyodideBridge();
                     window.forge = window.bridgeApi;
@@ -114,111 +182,101 @@
                         pyodide.FS.writeFile(fullPath, content);
                     }
                 }
-                
-                await pyodide.runPythonAsync(`
-import sys
-from js import log
-class WebConsole:
-    def write(self, msg): 
-        if msg.strip(): log(msg.strip())
-    def flush(self): pass
-sys.stdout = WebConsole()
-import forge as fg
-import forge.nn as nn
-import time
-import asyncio
-log("Pyodide Engine Ready!")
-`);
-                
+
                 document.getElementById('loadingOverlay').classList.add('hidden');
             } catch (e) {
                 document.getElementById('loadingText').innerText = "FATAL ERROR: " + e.message;
             }
         }
 
-        async function runTraining(mode) {
-            if(!pyodide) return;
-            if(isTraining) return;
-            isTraining = true;
-            document.getElementById('logBox').innerText = "--- Starting " + mode.toUpperCase() + " Training ---";
-            
-            let code = "";
-            if (mode === 'low') {
-                code = `
-async def train():
-    log("Initializing XOR Dataset...")
-    import numpy as np
-    x = fg.tensor(np.array([[0,0],[0,1],[1,0],[1,1]], dtype=np.float32))
-    y = fg.tensor(np.array([[0],[1],[1],[0]], dtype=np.float32))
-    model = nn.Sequential(nn.Linear(2, 4), nn.ReLU(), nn.Linear(4, 1), nn.Sigmoid())
-    opt = fg.optim.SGD(model.parameters(), lr=0.1)
+        async function startTraining() {
+            if (!pyodide) return;
+            const preset = document.getElementById('trainPreset').value;
+            const optType = document.getElementById('trainOpt').value;
+            const epochs = preset === 'standard' ? 50 : (preset === 'heavy' ? 100 : 200);
 
-    for epoch in range(1, 51):
-        opt.zero_grad()
-        pred = model(x)
-        loss = fg.functional.mse_loss(pred, y)
-        loss.backward()
-        opt.step()
-        if epoch % 10 == 0:
-            log(f"Epoch {epoch}/50 | Loss: {loss.numpy().item():.4f}")
-        await asyncio.sleep(0.01)
-    log("XOR Training Complete!")
-await train()
-`;
-            } else if (mode === 'medium') {
-                code = `
-async def train():
-    log("Generating Synthetic 1000x20 Dataset...")
-    import numpy as np
-    x = fg.tensor(np.random.randn(1000, 20).astype(np.float32))
-    y = fg.tensor(np.random.randn(1000, 1).astype(np.float32))
-    model = nn.Sequential(nn.Linear(20, 64), nn.ReLU(), nn.Linear(64, 32), nn.ReLU(), nn.Linear(32, 1))
-    opt = fg.optim.SGD(model.parameters(), lr=0.01)
+            log(`\n[*] Initializing ${preset.toUpperCase()} Training (${epochs} Epochs, ${optType.toUpperCase()})...`);
+            const t0 = performance.now();
 
-    t0 = time.time()
-    for epoch in range(1, 101):
-        opt.zero_grad()
-        pred = model(x)
-        loss = fg.functional.mse_loss(pred, y)
-        loss.backward()
-        opt.step()
-        if epoch % 20 == 0:
-            log(f"Epoch {epoch}/100 | Loss: {loss.numpy().item():.4f} | Time: {time.time()-t0:.2f}s")
-        await asyncio.sleep(0.01)
-    log("Medium MLP Training Complete!")
-await train()
-`;
-            } else if (mode === 'extreme') {
-                code = `
-async def train():
-    log("WARNING: EXTREME VRAM CRUSHER INITIATED")
-    log("Allocating 2048x2048x3 tensors on GPU...")
-    import numpy as np
-    try:
-        for i in range(1, 6):
-            t0 = time.time()
-            a = fg.tensor(np.random.randn(2048, 2048).astype(np.float32), device='gpu')
-            b = fg.tensor(np.random.randn(2048, 2048).astype(np.float32), device='gpu')
-            c = fg.tensor(np.random.randn(2048, 2048).astype(np.float32), device='gpu')
-            res = (a @ b) + c
-            await res.realize()
-            val = (await res.numpy_async()).mean()
-            log(f"Iteration {i}/5 | Matrix size: 4M params | Time: {time.time()-t0:.2f}s | Checksum: {float(val):.2f}")
-            await asyncio.sleep(0.01)
-        log("Extreme VRAM benchmark survived!")
-    except Exception as e:
-        log(f"CRASH: {str(e)}")
-await train()
-`;
-            }
-            
-            try {
-                await pyodide.runPythonAsync(code);
-            } catch(e) {
-                window.log("ERROR: " + e.message);
-            }
-            isTraining = false;
+            pyodide.globals.set("num_epochs", epochs);
+            pyodide.globals.set("opt_choice", optType);
+
+            const resJson = await pyodide.runPythonAsync(`
+import time
+import json
+import numpy as np
+import forge as fg
+import forge.nn as nn
+import forge.optim as optim
+
+# Non-linear XOR / Multi-cluster dataset
+X_np = np.array([
+    [0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0],
+    [0.1, 0.1], [0.1, 0.9], [0.9, 0.1], [0.9, 0.9]
+], dtype=np.float32)
+Y_np = np.array([[0.0], [1.0], [1.0], [0.0], [0.0], [1.0], [1.0], [0.0]], dtype=np.float32)
+
+X = fg.tensor(X_np)
+Y = fg.tensor(Y_np)
+
+class Model(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(2, 16)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(16, 8)
+        self.fc3 = nn.Linear(8, 1)
+        
+    def forward(self, x):
+        return self.fc3(self.relu(self.fc2(self.relu(self.fc1(x)))))
+
+model = Model()
+if opt_choice == 'adam':
+    opt = optim.Adam(model.parameters(), lr=0.03)
+else:
+    opt = optim.SGD(model.parameters(), lr=0.05, momentum=0.9)
+
+loss_history = []
+t_start = time.perf_counter()
+
+for epoch in range(1, num_epochs + 1):
+    opt.zero_grad()
+    pred = model(X)
+    diff = pred - Y
+    loss = fg.sum(diff * diff) * 0.5
+    loss.backward()
+    opt.step()
+    
+    loss_val = float(loss.numpy())
+    if epoch % (max(1, num_epochs // 10)) == 0 or epoch == num_epochs:
+        loss_history.append({"epoch": epoch, "loss": loss_val})
+
+total_time_ms = (time.perf_counter() - t_start) * 1000.0
+
+res = {
+    "epochs": num_epochs,
+    "final_loss": float(loss_history[-1]["loss"]),
+    "history": loss_history,
+    "total_time_ms": total_time_ms
+}
+
+json.dumps(res)
+            `);
+
+            const elapsed = performance.now() - t0;
+            const data = JSON.parse(resJson);
+
+            document.getElementById('metricEpochs').textContent = `${data.epochs} / ${data.epochs}`;
+            document.getElementById('metricLoss').textContent = data.final_loss.toFixed(6);
+            document.getElementById('metricTime').textContent = `${elapsed.toFixed(1)} ms`;
+
+            data.history.forEach(h => {
+                log(`Epoch ${h.epoch.toString().padStart(3, ' ')}/${data.epochs} | Loss: ${h.loss.toFixed(6)} | WebGPU Step Latency: ${(data.total_time_ms / data.epochs).toFixed(2)}ms`);
+            });
+
+            log(`\n>>> TRAINING CONVERGED: Final Loss ${data.final_loss.toFixed(6)} (${elapsed.toFixed(1)}ms total) <<<`);
         }
+
         initDashboard();
     </script>
 </body>

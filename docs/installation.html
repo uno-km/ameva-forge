@@ -4,19 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title data-i18n="installation.pageTitle">AMEVA-Forge: Installation</title>
-    <link rel="icon" type="image/svg+xml" href="favicon.svg">
-    <link rel="alternate icon" href="favicon.svg">
-    <link rel="stylesheet" href="style.css">
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+    <link rel="alternate icon" href="./favicon.svg">
+    <link rel="stylesheet" href="./style.css">
     <script src="./dist/index.js"></script>
-    <script src="i18n.js"></script>
-    <script src="i18n-translations.js"></script>
+    <script src="./i18n.js"></script>
+    <script src="./i18n-translations.js"></script>
 </head>
 <body>
     <header>
         <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
         <div class="header-badge-group">
             <span class="apache-tag" data-i18n="common.releaseTag">Release 1.0.0</span>
-            <a href="demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
+            <a href="./demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
             <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
         </div>
     </header>
@@ -25,7 +25,7 @@
         <nav class="sidebar">
             <h3 data-i18n="common.nav.interactive">Interactive</h3>
             <ul>
-                <li><a href="demo.html"><strong data-i18n="common.nav.liveStudio">Live WebGPU Studio</strong></a></li>
+                <li><a href="./demo.html"><strong data-i18n="common.nav.liveStudio">Live WebGPU Studio</strong></a></li>
                 <li><a href="experimental/playgrounds/mnist/index.html"><strong data-i18n="common.nav.mnist">1. MNIST Inference</strong></a></li>
                 <li><a href="experimental/playgrounds/benchmark/index.html"><strong data-i18n="common.nav.benchmark">2. Benchmark Test</strong></a></li>
                 <li><a href="experimental/playgrounds/training/index.html"><strong data-i18n="common.nav.training">3. Training Demo</strong></a></li>
@@ -60,7 +60,7 @@ pip install forge-0.1.0-py3-none-any.whl</code></pre>
             <h3 data-i18n="installation.sec3Title">3. In-Browser Pyodide Integration</h3>
             <p data-i18n="installation.sec3Desc">Include the TypeScript bundle and load Pyodide from CDN:</p>
             <pre><code>&lt;!-- Load AMEVA-Forge WebGPU Backend --&gt;
-&lt;script src="https://cdn.jsdelivr.net/npm/@ameva/forge/dist/index.js"&gt;&lt;/script&gt;
+&lt;script src="./dist/index.js"&gt;&lt;/script&gt;
 
 &lt;!-- Load Pyodide WASM Runtime --&gt;
 &lt;script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"&gt;&lt;/script&gt;
