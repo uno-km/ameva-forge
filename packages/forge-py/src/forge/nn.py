@@ -466,6 +466,76 @@ class MSELoss(Module):
         from .functional import mse_loss
         return mse_loss(input, target)
 
+class L1Loss(Module):
+    """
+    무엇을: L1 손실(Mean Absolute Error, MAE) 모듈입니다.
+    """
+    def __init__(self, reduction: str = 'mean'):
+        super().__init__()
+        self.reduction = reduction
+
+    def forward(self, input: Tensor, target: Tensor) -> Tensor:
+        from .functional import l1_loss
+        return l1_loss(input, target, reduction=self.reduction)
+
+class CrossEntropyLoss(Module):
+    """
+    무엇을: 크로스 엔트로피 손실(CrossEntropyLoss) 모듈입니다.
+    왜: 다중 클래스 분류 및 언어 모델(LLM) 넥스트 토큰 예측 손실 계산을 위함입니다.
+    """
+    def __init__(self, weight=None, ignore_index: int = -100, reduction: str = 'mean'):
+        super().__init__()
+        self.weight = weight
+        self.ignore_index = ignore_index
+        self.reduction = reduction
+
+    def forward(self, input: Tensor, target: Tensor) -> Tensor:
+        from .functional import cross_entropy
+        return cross_entropy(input, target)
+
+class BCEWithLogitsLoss(Module):
+    """
+    무엇을: 수치적으로 안정화된 로짓 기반 이진 크로스 엔트로피 손실 모듈입니다.
+    왜: 시그모이드와 결합된 안전한 0/1 분류 및 다중 레이블 분류를 위함입니다.
+    """
+    def __init__(self, weight=None, reduction: str = 'mean', pos_weight=None):
+        super().__init__()
+        self.weight = weight
+        self.reduction = reduction
+        self.pos_weight = pos_weight
+
+    def forward(self, input: Tensor, target: Tensor) -> Tensor:
+        from .functional import binary_cross_entropy_with_logits
+        return binary_cross_entropy_with_logits(input, target, weight=self.weight, reduction=self.reduction, pos_weight=self.pos_weight)
+
+class SmoothL1Loss(Module):
+    """
+    무엇을: 부드러운 L1 손실(Smooth L1 / Huber Loss) 모듈입니다.
+    왜: Bounding Box 회귀 및 이상치 저항 학습을 위함입니다.
+    """
+    def __init__(self, reduction: str = 'mean', beta: float = 1.0):
+        super().__init__()
+        self.reduction = reduction
+        self.beta = beta
+
+    def forward(self, input: Tensor, target: Tensor) -> Tensor:
+        from .functional import smooth_l1_loss
+        return smooth_l1_loss(input, target, beta=self.beta, reduction=self.reduction)
+
+class KLDivLoss(Module):
+    """
+    무엇을: 쿨백-라이블러 발산(KL Divergence) 손실 모듈입니다.
+    왜: 지식 증류(Distillation) 및 확률 분포 일치 학습을 위함입니다.
+    """
+    def __init__(self, reduction: str = 'mean', log_target: bool = False):
+        super().__init__()
+        self.reduction = reduction
+        self.log_target = log_target
+
+    def forward(self, input: Tensor, target: Tensor) -> Tensor:
+        from .functional import kl_div
+        return kl_div(input, target, reduction=self.reduction, log_target=self.log_target)
+
 
 # WHAT: 2차원 공간 상의 최대 풀링(Max Pooling) 연산을 수행하는 계층입니다.
 # WHY: 공간적 해상도를 줄이면서 중요한 특징(가장 강한 신호)을 보존하여 위치 불변성을 얻고 계산량을 감소시키기 위함입니다.

@@ -2772,6 +2772,217 @@ def adaptive_max_pool2d(x: Tensor, output_size: Any) -> Tensor:
     """Applies a 2D adaptive max pooling over an input signal composed of several input planes."""
     return AdaptiveMaxPool2dFunction.apply(x, output_size)
 
+
+# WHAT: 수치적으로 안정화된 로짓 기반 이진 크로스 엔트로피 손실(BCEWithLogitsLoss) 연산 클래스입니다.
+# WHY: Sigmoid + BCELoss 분리 시 발생하는 지수 오버플로 및 log(0) NaN을 원천 차단하기 위함입니다.
+class BCEWithLogitsLossFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, input: Tensor, target: Tensor, weight: Optional[Tensor] = None, reduction: str = 'mean', pos_weight: Optional[Tensor] = None) -> Tensor:
+        ctx.save_for_backward(input, target, weight, pos_weight)
+        ctx.reduction = reduction
+        
+        x = _require_cpu_data(input, "input")
+        y = _require_cpu_data(target, "target")
+        w = _require_cpu_data(weight, "weight") if weight is not None else None
+        pw = _require_cpu_data(pos_weight, "pos_weight") if pos_weight is not None else None
+        
+        # PyTorch 수식: max(x, 0) - x * y + log(1 + exp(-abs(x)))
+        if pw is not None:
+            max_val = np.maximum(-x, 0)
+            log_weight = (pw - 1.0) * y + 1.0
+            loss = (1.0 - y) * x + log_weight * (np.log(1.0 + np.exp(-np.abs(x))) + max_val)
+        else:
+            loss = np.maximum(x, 0) - x * y + np.log(1.0 + np.exp(-np.abs(x)))
+            
+        if w is not None:
+            loss = loss * w
+            
+        if reduction == 'mean':
+            res = np.mean(loss)
+            return Tensor(shape=(), dtype="float32", device="cpu", data=np.array(res, dtype=np.float32))
+        elif reduction == 'sum':
+            res = np.sum(loss)
+            return Tensor(shape=(), dtype="float32", device="cpu", data=np.array(res, dtype=np.float32))
+        else:
+            return Tensor(shape=input.shape, dtype="float32", device="cpu", data=loss.astype(np.float32))
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, None, None, None, None]:
+        input, target, weight, pos_weight = ctx.saved_tensors
+        x = _require_cpu_data(input, "input")
+        y = _require_cpu_data(target, "target")
+        w = _require_cpu_data(weight, "weight") if weight is not None else None
+        pw = _require_cpu_data(pos_weight, "pos_weight") if pos_weight is not None else None
+        g_out = _require_cpu_data(grad_output, "grad_output")
+        
+        sig = 1.0 / (1.0 + np.exp(-x))
+        if pw is not None:
+            dx = sig * (1.0 + (pw - 1.0) * y) - y * pw
+        else:
+            dx = sig - y
+            
+        if w is not None:
+            dx = dx * w
+            
+        if ctx.reduction == 'mean':
+            dx = dx * (g_out / float(x.size))
+        elif ctx.reduction == 'sum':
+            dx = dx * g_out
+        else:
+            dx = dx * g_out
+            
+        return (Tensor(shape=input.shape, dtype="float32", device="cpu", data=dx.astype(np.float32)), None, None, None, None)
+
+def binary_cross_entropy_with_logits(input: Tensor, target: Tensor, weight: Optional[Tensor] = None, reduction: str = 'mean', pos_weight: Optional[Tensor] = None) -> Tensor:
+    """Measures Binary Cross Entropy between target and input probabilities with logits."""
+    return BCEWithLogitsLossFunction.apply(input, target, weight, reduction, pos_weight)
+
+
+# WHAT: 부드러운 L1 손실(Smooth L1 / Huber Loss) 연산 클래스입니다.
+# WHY: 객체 검출(Bounding Box Regression) 및 강화학습에서 이상치(Outlier)에 대한 견고한 미분을 제공하기 위함입니다.
+class SmoothL1LossFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, input: Tensor, target: Tensor, beta: float = 1.0, reduction: str = 'mean') -> Tensor:
+        ctx.save_for_backward(input, target)
+        ctx.beta = beta
+        ctx.reduction = reduction
+        
+        x = _require_cpu_data(input, "input")
+        y = _require_cpu_data(target, "target")
+        diff = x - y
+        abs_diff = np.abs(diff)
+        
+        loss = np.where(abs_diff < beta, 0.5 * (diff ** 2) / beta, abs_diff - 0.5 * beta)
+        
+        if reduction == 'mean':
+            res = np.mean(loss)
+            return Tensor(shape=(), dtype="float32", device="cpu", data=np.array(res, dtype=np.float32))
+        elif reduction == 'sum':
+            res = np.sum(loss)
+            return Tensor(shape=(), dtype="float32", device="cpu", data=np.array(res, dtype=np.float32))
+        else:
+            return Tensor(shape=input.shape, dtype="float32", device="cpu", data=loss.astype(np.float32))
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, None, None, None]:
+        input, target = ctx.saved_tensors
+        x = _require_cpu_data(input, "input")
+        y = _require_cpu_data(target, "target")
+        g_out = _require_cpu_data(grad_output, "grad_output")
+        
+        diff = x - y
+        abs_diff = np.abs(diff)
+        dx = np.where(abs_diff < ctx.beta, diff / ctx.beta, np.sign(diff))
+        
+        if ctx.reduction == 'mean':
+            dx = dx * (g_out / float(x.size))
+        elif ctx.reduction == 'sum':
+            dx = dx * g_out
+        else:
+            dx = dx * g_out
+            
+        return (Tensor(shape=input.shape, dtype="float32", device="cpu", data=dx.astype(np.float32)), None, None, None)
+
+def smooth_l1_loss(input: Tensor, target: Tensor, beta: float = 1.0, reduction: str = 'mean') -> Tensor:
+    """Creates a criterion that uses a squared term if the absolute element-wise error falls below beta and an L1 term otherwise."""
+    return SmoothL1LossFunction.apply(input, target, beta, reduction)
+
+
+# WHAT: 쿨백-라이블러 발산 손실(KLDivLoss) 연산 클래스입니다.
+# WHY: 지식 증류(Knowledge Distillation) 및 확률 분포 일치 학습을 위함입니다.
+class KLDivLossFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, input: Tensor, target: Tensor, reduction: str = 'mean', log_target: bool = False) -> Tensor:
+        ctx.save_for_backward(input, target)
+        ctx.reduction = reduction
+        ctx.log_target = log_target
+        
+        x = _require_cpu_data(input, "input")
+        y = _require_cpu_data(target, "target")
+        
+        if log_target:
+            loss = np.exp(y) * (y - x)
+        else:
+            loss = np.where(y > 0, y * (np.log(np.maximum(y, 1e-12)) - x), 0.0)
+            
+        if reduction == 'mean' or reduction == 'batchmean':
+            res = np.mean(loss) if reduction == 'mean' else np.sum(loss) / float(input.shape[0] if len(input.shape) > 0 else 1)
+            return Tensor(shape=(), dtype="float32", device="cpu", data=np.array(res, dtype=np.float32))
+        elif reduction == 'sum':
+            res = np.sum(loss)
+            return Tensor(shape=(), dtype="float32", device="cpu", data=np.array(res, dtype=np.float32))
+        else:
+            return Tensor(shape=input.shape, dtype="float32", device="cpu", data=loss.astype(np.float32))
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, None, None, None]:
+        input, target = ctx.saved_tensors
+        x = _require_cpu_data(input, "input")
+        y = _require_cpu_data(target, "target")
+        g_out = _require_cpu_data(grad_output, "grad_output")
+        
+        if ctx.log_target:
+            dx = -np.exp(y)
+        else:
+            dx = -y
+            
+        if ctx.reduction == 'mean':
+            dx = dx * (g_out / float(x.size))
+        elif ctx.reduction == 'batchmean':
+            dx = dx * (g_out / float(input.shape[0] if len(input.shape) > 0 else 1))
+        elif ctx.reduction == 'sum':
+            dx = dx * g_out
+        else:
+            dx = dx * g_out
+            
+        return (Tensor(shape=input.shape, dtype="float32", device="cpu", data=dx.astype(np.float32)), None, None, None)
+
+def kl_div(input: Tensor, target: Tensor, reduction: str = 'mean', log_target: bool = False) -> Tensor:
+    """The Kullback-Leibler divergence loss criterion."""
+    return KLDivLossFunction.apply(input, target, reduction, log_target)
+
+
+# WHAT: L1 절대 오차 손실(L1Loss / MAE) 연산 클래스입니다.
+class L1LossFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, input: Tensor, target: Tensor, reduction: str = 'mean') -> Tensor:
+        ctx.save_for_backward(input, target)
+        ctx.reduction = reduction
+        
+        x = _require_cpu_data(input, "input")
+        y = _require_cpu_data(target, "target")
+        loss = np.abs(x - y)
+        
+        if reduction == 'mean':
+            res = np.mean(loss)
+            return Tensor(shape=(), dtype="float32", device="cpu", data=np.array(res, dtype=np.float32))
+        elif reduction == 'sum':
+            res = np.sum(loss)
+            return Tensor(shape=(), dtype="float32", device="cpu", data=np.array(res, dtype=np.float32))
+        else:
+            return Tensor(shape=input.shape, dtype="float32", device="cpu", data=loss.astype(np.float32))
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, None, None]:
+        input, target = ctx.saved_tensors
+        x = _require_cpu_data(input, "input")
+        y = _require_cpu_data(target, "target")
+        g_out = _require_cpu_data(grad_output, "grad_output")
+        
+        dx = np.sign(x - y)
+        if ctx.reduction == 'mean':
+            dx = dx * (g_out / float(x.size))
+        elif ctx.reduction == 'sum':
+            dx = dx * g_out
+        else:
+            dx = dx * g_out
+            
+        return (Tensor(shape=input.shape, dtype="float32", device="cpu", data=dx.astype(np.float32)), None, None)
+
+def l1_loss(input: Tensor, target: Tensor, reduction: str = 'mean') -> Tensor:
+    """Measures the mean absolute error (MAE) between each element in the input and target."""
+    return L1LossFunction.apply(input, target, reduction)
+
 # WHAT: Col2Im(Column to Image) 편의 함수입니다.
 # WHY: 역전파 등에서 평탄화된 열벡터를 다시 2D 이미지 형태로 복원하기 위함입니다.
 # HOW: Col2ImFunction.apply를 호출합니다. (Col2ImFunction 정의는 다른 곳에 존재하거나 별도 모듈에 있습니다)

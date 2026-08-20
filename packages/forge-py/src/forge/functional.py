@@ -390,6 +390,26 @@ def mse_loss(predictions, targets):
     sq = mul(diff, diff)
     return mean_op(sq)
 
+def binary_cross_entropy_with_logits(input, target, weight=None, reduction: str = 'mean', pos_weight=None):
+    """Measures Binary Cross Entropy with logits."""
+    from .ops import binary_cross_entropy_with_logits as ops_bce
+    return ops_bce(input, target, weight=weight, reduction=reduction, pos_weight=pos_weight)
+
+def smooth_l1_loss(input, target, beta: float = 1.0, reduction: str = 'mean'):
+    """Smooth L1 / Huber Loss."""
+    from .ops import smooth_l1_loss as ops_smooth_l1
+    return ops_smooth_l1(input, target, beta=beta, reduction=reduction)
+
+def kl_div(input, target, reduction: str = 'mean', log_target: bool = False):
+    """Kullback-Leibler divergence loss."""
+    from .ops import kl_div as ops_kl_div
+    return ops_kl_div(input, target, reduction=reduction, log_target=log_target)
+
+def l1_loss(input, target, reduction: str = 'mean'):
+    """L1 / MAE loss."""
+    from .ops import l1_loss as ops_l1
+    return ops_l1(input, target, reduction=reduction)
+
 def cosine_similarity(x1, x2, dim: int = 1, eps: float = 1e-8):
     """
     무엇을: 두 텐서 x1과 x2 간의 코사인 유사도(Cosine Similarity)를 계산한다.

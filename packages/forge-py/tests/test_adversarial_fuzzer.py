@@ -393,6 +393,48 @@ def test_fuzz_adaptive_pooling_modules_and_autograd():
     assert x2.grad is not None
     assert np.sum(x2.grad.numpy()) == 4.0
 
+def test_fuzz_advanced_loss_functions_and_autograd():
+    """Fuzz test BCEWithLogitsLoss, SmoothL1Loss, KLDivLoss, L1Loss with Autograd."""
+    import forge as at
+    import forge.nn as nn
+    
+    # 1. BCEWithLogitsLoss
+    bce = nn.BCEWithLogitsLoss()
+    logits = at.tensor(np.array([0.0, 10.0, -10.0], dtype=np.float32), requires_grad=True)
+    target = at.tensor(np.array([0.0, 1.0, 0.0], dtype=np.float32))
+    loss_bce = bce(logits, target)
+    assert not np.isnan(loss_bce.numpy())
+    loss_bce.backward()
+    assert logits.grad is not None
+    assert not np.isnan(logits.grad.numpy()).any()
+    
+    # 2. SmoothL1Loss (Huber)
+    smooth = nn.SmoothL1Loss(beta=1.0)
+    pred_s = at.tensor(np.array([0.5, 3.0], dtype=np.float32), requires_grad=True)
+    target_s = at.tensor(np.array([0.0, 0.0], dtype=np.float32))
+    loss_s = smooth(pred_s, target_s)
+    loss_s.backward()
+    # 0.5 < 1.0 -> grad is 0.5 / 2 = 0.25; 3.0 >= 1.0 -> grad is 1.0 / 2 = 0.5
+    np.testing.assert_allclose(pred_s.grad.numpy(), np.array([0.25, 0.5], dtype=np.float32))
+    
+    # 3. L1Loss
+    l1 = nn.L1Loss()
+    pred_l1 = at.tensor(np.array([2.0, -2.0], dtype=np.float32), requires_grad=True)
+    target_l1 = at.tensor(np.array([0.0, 0.0], dtype=np.float32))
+    loss_l1 = l1(pred_l1, target_l1)
+    loss_l1.backward()
+    np.testing.assert_allclose(pred_l1.grad.numpy(), np.array([0.5, -0.5], dtype=np.float32))
+    
+    # 4. KLDivLoss
+    kld = nn.KLDivLoss(reduction='batchmean')
+    log_probs = at.tensor(np.log(np.array([[0.5, 0.5]], dtype=np.float32)), requires_grad=True)
+    targets_prob = at.tensor(np.array([[0.8, 0.2]], dtype=np.float32))
+    loss_kld = kld(log_probs, targets_prob)
+    loss_kld.backward()
+    assert log_probs.grad is not None
+    np.testing.assert_allclose(log_probs.grad.numpy(), np.array([[-0.8, -0.2]], dtype=np.float32))
+
+
 
 
 
