@@ -997,6 +997,47 @@ def test_fuzz_linalg_suite():
     n = linalg.norm(A)
     np.testing.assert_allclose(n.numpy(), np.linalg.norm(A_np), atol=1e-4)
 
+def test_fuzz_fft_suite():
+    """Fuzz test forge.fft module: rfft, irfft, fft, ifft, fft2, ifft2, rfft2, irfft2, fftfreq, rfftfreq, fftshift, ifftshift with Autograd."""
+    import forge as at
+    from forge import fft
+    
+    # 1. rfft & irfft & Autograd
+    x_np = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], dtype=np.float32)
+    x = at.tensor(x_np, requires_grad=True)
+    X = fft.rfft(x)
+    assert X.shape == (5,)
+    assert X.real.shape == (5,)
+    assert X.imag.shape == (5,)
+    
+    x_rec = fft.irfft(X, n=8)
+    assert x_rec.shape == (8,)
+    np.testing.assert_allclose(x_rec.numpy(), x_np, atol=1e-4)
+    
+    x_rec.sum().backward()
+    assert x.grad is not None
+    np.testing.assert_allclose(x.grad.numpy(), np.ones(8, dtype=np.float32), atol=1e-4)
+    
+    # 2. 2D FFT & IFFT
+    img_np = np.ones((4, 4), dtype=np.float32)
+    img = at.tensor(img_np)
+    F2 = fft.fft2(img)
+    assert F2.shape == (4, 4)
+    img_rec = fft.ifft2(F2)
+    np.testing.assert_allclose(img_rec.real.numpy(), img_np, atol=1e-4)
+    
+    # 3. Frequency bins & Shifts
+    freqs = fft.fftfreq(8, d=1.0)
+    assert freqs.shape == (8,)
+    rfreqs = fft.rfftfreq(8, d=1.0)
+    assert rfreqs.shape == (5,)
+    
+    shifted = fft.fftshift(freqs)
+    assert shifted.shape == (8,)
+    unshifted = fft.ifftshift(shifted)
+    np.testing.assert_allclose(unshifted.numpy(), freqs.numpy(), atol=1e-4)
+
+
 
 
 

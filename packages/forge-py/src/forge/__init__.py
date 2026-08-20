@@ -102,6 +102,7 @@ from .data import DataLoader
 from . import models
 from . import rl
 from . import linalg
+from . import fft
 from .pipeline import pipeline
 
 # WHAT: 외부에서 `from forge import *`를 호출할 때 노출될 이름들의 리스트입니다.
@@ -109,6 +110,7 @@ from .pipeline import pipeline
 # HOW: 외부에 공개해야 할 함수, 클래스, 서브모듈들의 이름을 문자열 리스트로 모아서 정의합니다.
 __all__ = [
     "linalg",
+    "fft",
     # 초기화
     "init",
     "is_available",

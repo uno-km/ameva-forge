@@ -870,6 +870,32 @@ class Tensor:
         from .ops import relu
         return relu(self)
 
+    @property
+    def real(self) -> 'Tensor':
+        """Returns the real part of the tensor."""
+        self._check_disposed()
+        from .ops import _require_cpu_data
+        data = _require_cpu_data(self, "self")
+        res = np.real(data)
+        return Tensor(shape=res.shape, dtype="float32", device=self.device, data=res.astype(np.float32))
+
+    @property
+    def imag(self) -> 'Tensor':
+        """Returns the imaginary part of the tensor."""
+        self._check_disposed()
+        from .ops import _require_cpu_data
+        data = _require_cpu_data(self, "self")
+        res = np.imag(data)
+        return Tensor(shape=res.shape, dtype="float32", device=self.device, data=res.astype(np.float32))
+
+    def angle(self) -> 'Tensor':
+        """Computes the element-wise angle (argument in radians) of complex tensor."""
+        self._check_disposed()
+        from .ops import _require_cpu_data
+        data = _require_cpu_data(self, "self")
+        res = np.angle(data)
+        return Tensor(shape=res.shape, dtype="float32", device=self.device, data=res.astype(np.float32))
+
     def eq(self, other) -> 'Tensor':
         """Calculates element-wise equality (self == other)."""
         self._check_disposed()
