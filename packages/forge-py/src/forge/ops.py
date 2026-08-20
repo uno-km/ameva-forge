@@ -1195,10 +1195,142 @@ class TanhFunction(Function):
         one_minus_sq = sub(ones(tanh_x.shape, device=tanh_x.device), mul(tanh_x, tanh_x))
         return (mul(grad_output, one_minus_sq),)
 
-# WHAT: 하이퍼볼릭 탄젠트 편의 함수입니다.
-# WHY: 외부에서 쉽게 호출하기 위함입니다.
-# HOW: TanhFunction.apply를 실행합니다.
 def tanh_op(x): return TanhFunction.apply(x)
+
+
+# WHAT: GELU(Gaussian Error Linear Unit) 활성화 함수 자동 미분 클래스입니다.
+# WHY: BERT, GPT-2, ViT 등 트랜스포머 모델의 표준 활성화 함수를 지원하기 위함입니다.
+class GeluFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, x: Tensor, approximate: str = "none") -> Tensor:
+        ctx.approximate = approximate
+        ctx.save_for_backward(x)
+        if x.device == "cpu":
+            data = _require_cpu_data(x, "x")
+            if approximate == "tanh":
+                res = 0.5 * data * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (data + 0.044715 * np.power(data, 3))))
+            else:
+                import math
+                _erf = np.vectorize(math.erf)
+                res = 0.5 * data * (1.0 + _erf(data / np.sqrt(2.0)))
+            return Tensor(shape=x.shape, dtype="float32", device="cpu", data=res.astype(np.float32))
+        else:
+            return Tensor(shape=x.shape, dtype="float32", device="gpu", op="gelu", parents=(x,), op_params=[1.0 if approximate == "tanh" else 0.0])
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, None]:
+        x, = ctx.saved_tensors
+        if x.device == "cpu":
+            data_x = _require_cpu_data(x, "x")
+            data_g = _require_cpu_data(grad_output, "grad_output")
+            if ctx.approximate == "tanh":
+                k = np.sqrt(2.0 / np.pi)
+                inner = k * (data_x + 0.044715 * np.power(data_x, 3))
+                tanh_val = np.tanh(inner)
+                dtanh = 1.0 - np.square(tanh_val)
+                dinner = k * (1.0 + 3.0 * 0.044715 * np.square(data_x))
+                dx = 0.5 * (1.0 + tanh_val) + 0.5 * data_x * dtanh * dinner
+            else:
+                import math
+                _erf = np.vectorize(math.erf)
+                cdf = 0.5 * (1.0 + _erf(data_x / np.sqrt(2.0)))
+                pdf = np.exp(-0.5 * np.square(data_x)) / np.sqrt(2.0 * np.pi)
+                dx = cdf + data_x * pdf
+            return (Tensor(shape=x.shape, dtype="float32", device="cpu", data=(data_g * dx).astype(np.float32)), None)
+        else:
+            return (Tensor(shape=x.shape, dtype="float32", device="gpu", op="gelu_backward", parents=(x, grad_output), op_params=[1.0 if ctx.approximate == "tanh" else 0.0]), None)
+
+def gelu(x: Tensor, approximate: str = "none") -> Tensor:
+    """Applies the Gaussian Error Linear Units function."""
+    return GeluFunction.apply(x, approximate)
+
+
+# WHAT: SiLU (Swish: x * sigmoid(x)) 활성화 함수 자동 미분 클래스입니다.
+# WHY: LLaMA-3, Stable Diffusion, YOLO 등 최신 모델의 비선형성을 지원하기 위함입니다.
+class SiluFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, x: Tensor) -> Tensor:
+        ctx.save_for_backward(x)
+        if x.device == "cpu":
+            data = _require_cpu_data(x, "x")
+            sig = 1.0 / (1.0 + np.exp(-data))
+            return Tensor(shape=x.shape, dtype="float32", device="cpu", data=(data * sig).astype(np.float32))
+        else:
+            return Tensor(shape=x.shape, dtype="float32", device="gpu", op="silu", parents=(x,))
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor]:
+        x, = ctx.saved_tensors
+        if x.device == "cpu":
+            data_x = _require_cpu_data(x, "x")
+            data_g = _require_cpu_data(grad_output, "grad_output")
+            sig = 1.0 / (1.0 + np.exp(-data_x))
+            dx = sig * (1.0 + data_x * (1.0 - sig))
+            return (Tensor(shape=x.shape, dtype="float32", device="cpu", data=(data_g * dx).astype(np.float32)),)
+        else:
+            return (Tensor(shape=x.shape, dtype="float32", device="gpu", op="silu_backward", parents=(x, grad_output)),)
+
+def silu(x: Tensor) -> Tensor:
+    """Applies the Sigmoid Linear Unit (SiLU / Swish) function, element-wise."""
+    return SiluFunction.apply(x)
+
+
+# WHAT: LeakyReLU 활성화 함수 클래스입니다.
+class LeakyReluFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, x: Tensor, negative_slope: float = 0.01) -> Tensor:
+        ctx.negative_slope = negative_slope
+        ctx.save_for_backward(x)
+        if x.device == "cpu":
+            data = _require_cpu_data(x, "x")
+            res = np.where(data > 0, data, data * negative_slope)
+            return Tensor(shape=x.shape, dtype="float32", device="cpu", data=res.astype(np.float32))
+        else:
+            return Tensor(shape=x.shape, dtype="float32", device="gpu", op="leaky_relu", parents=(x,), op_params=[float(negative_slope)])
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, None]:
+        x, = ctx.saved_tensors
+        if x.device == "cpu":
+            data_x = _require_cpu_data(x, "x")
+            data_g = _require_cpu_data(grad_output, "grad_output")
+            dx = np.where(data_x > 0, 1.0, ctx.negative_slope).astype(np.float32)
+            return (Tensor(shape=x.shape, dtype="float32", device="cpu", data=data_g * dx), None)
+        else:
+            return (Tensor(shape=x.shape, dtype="float32", device="gpu", op="leaky_relu_backward", parents=(x, grad_output), op_params=[float(ctx.negative_slope)]), None)
+
+def leaky_relu(x: Tensor, negative_slope: float = 0.01) -> Tensor:
+    """Applies the LeakyReLU function element-wise."""
+    return LeakyReluFunction.apply(x, negative_slope)
+
+
+# WHAT: ELU (Exponential Linear Unit) 활성화 함수 클래스입니다.
+class EluFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, x: Tensor, alpha: float = 1.0) -> Tensor:
+        ctx.alpha = alpha
+        ctx.save_for_backward(x)
+        if x.device == "cpu":
+            data = _require_cpu_data(x, "x")
+            res = np.where(data > 0, data, alpha * (np.exp(data) - 1.0))
+            return Tensor(shape=x.shape, dtype="float32", device="cpu", data=res.astype(np.float32))
+        else:
+            return Tensor(shape=x.shape, dtype="float32", device="gpu", op="elu", parents=(x,), op_params=[float(alpha)])
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, None]:
+        x, = ctx.saved_tensors
+        if x.device == "cpu":
+            data_x = _require_cpu_data(x, "x")
+            data_g = _require_cpu_data(grad_output, "grad_output")
+            dx = np.where(data_x > 0, 1.0, ctx.alpha * np.exp(data_x)).astype(np.float32)
+            return (Tensor(shape=x.shape, dtype="float32", device="cpu", data=data_g * dx), None)
+        else:
+            return (Tensor(shape=x.shape, dtype="float32", device="gpu", op="elu_backward", parents=(x, grad_output), op_params=[float(ctx.alpha)]), None)
+
+def elu(x: Tensor, alpha: float = 1.0) -> Tensor:
+    """Applies the Exponential Linear Unit (ELU) function element-wise."""
+    return EluFunction.apply(x, alpha)
 
 
 def _resolve_reshape_shape(current_shape: tuple, new_shape: Any) -> tuple:

@@ -1075,6 +1075,30 @@ class Tensor:
         from .ops import tril
         return tril(self, diagonal)
 
+    def gelu(self, approximate: str = "none"):
+        """Applies GELU to this tensor."""
+        self._check_disposed()
+        from .ops import gelu
+        return gelu(self, approximate=approximate)
+
+    def silu(self):
+        """Applies SiLU (Swish) to this tensor."""
+        self._check_disposed()
+        from .ops import silu
+        return silu(self)
+
+    def leaky_relu(self, negative_slope: float = 0.01):
+        """Applies LeakyReLU to this tensor."""
+        self._check_disposed()
+        from .ops import leaky_relu
+        return leaky_relu(self, negative_slope=negative_slope)
+
+    def elu(self, alpha: float = 1.0):
+        """Applies ELU to this tensor."""
+        self._check_disposed()
+        from .ops import elu
+        return elu(self, alpha=alpha)
+
     def sum(self):
         """
         WHAT: 텐서 내 모든 요소들의 합을 계산합니다.

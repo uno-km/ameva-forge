@@ -409,6 +409,26 @@ def cosine_similarity(x1, x2, dim: int = 1, eps: float = 1e-8):
     denom = mul(norm1, norm2)
     return div(dot, denom)
 
+def gelu(x, approximate: str = "none"):
+    """Applies Gaussian Error Linear Units."""
+    from .ops import gelu as ops_gelu
+    return ops_gelu(x, approximate=approximate)
+
+def silu(x):
+    """Applies Sigmoid Linear Unit (Swish)."""
+    from .ops import silu as ops_silu
+    return ops_silu(x)
+
+def leaky_relu(x, negative_slope: float = 0.01):
+    """Applies LeakyReLU."""
+    from .ops import leaky_relu as ops_leaky_relu
+    return ops_leaky_relu(x, negative_slope=negative_slope)
+
+def elu(x, alpha: float = 1.0):
+    """Applies Exponential Linear Unit."""
+    from .ops import elu as ops_elu
+    return ops_elu(x, alpha=alpha)
+
 def _move_tensor_state(dst, src) -> None:
     """
     WHAT: src 텐서의 상태와 지연 연산 그래프를 dst 텐서로 안전하게 이동(Move)합니다.

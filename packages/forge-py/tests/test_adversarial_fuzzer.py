@@ -300,6 +300,48 @@ def test_fuzz_tensor_creation_and_triangular_ops():
     loss_u.backward()
     np.testing.assert_allclose(mat.grad.numpy(), np.array([[0, 1, 1], [0, 0, 1], [0, 0, 0]], dtype=np.float32))
 
+def test_fuzz_activations_gelu_silu_leaky_elu_autograd():
+    """Fuzz test GELU (none/tanh), SiLU, LeakyReLU, ELU modules & autograd."""
+    import forge as at
+    import forge.nn as nn
+    import forge.functional as F
+    
+    # 1. GELU exact and tanh approximation
+    x_g = at.tensor(np.array([-2.0, -1.0, 0.0, 1.0, 2.0], dtype=np.float32), requires_grad=True)
+    g_out = F.gelu(x_g, approximate="tanh")
+    assert not np.isnan(g_out.numpy()).any()
+    loss_g = g_out.sum()
+    loss_g.backward()
+    assert x_g.grad is not None
+    assert not np.isnan(x_g.grad.numpy()).any()
+    
+    # 2. SiLU module
+    silu_mod = nn.SiLU()
+    x_s = at.tensor(np.array([-1.0, 0.0, 1.0], dtype=np.float32), requires_grad=True)
+    s_out = silu_mod(x_s)
+    loss_s = s_out.sum()
+    loss_s.backward()
+    assert x_s.grad is not None
+    assert not np.isnan(x_s.grad.numpy()).any()
+    
+    # 3. LeakyReLU module
+    lrelu = nn.LeakyReLU(negative_slope=0.1)
+    x_l = at.tensor(np.array([-5.0, 5.0], dtype=np.float32), requires_grad=True)
+    l_out = lrelu(x_l)
+    np.testing.assert_allclose(l_out.numpy(), np.array([-0.5, 5.0], dtype=np.float32))
+    loss_l = l_out.sum()
+    loss_l.backward()
+    np.testing.assert_allclose(x_l.grad.numpy(), np.array([0.1, 1.0], dtype=np.float32))
+    
+    # 4. ELU module
+    elu_mod = nn.ELU(alpha=1.0)
+    x_e = at.tensor(np.array([0.0, 2.0], dtype=np.float32), requires_grad=True)
+    e_out = elu_mod(x_e)
+    loss_e = e_out.sum()
+    loss_e.backward()
+    assert x_e.grad is not None
+
+
 
 
 

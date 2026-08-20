@@ -293,6 +293,57 @@ class Tanh(Module):
         from .ops import tanh_op
         return tanh_op(x)
 
+class GELU(Module):
+    """
+    무엇을: Gaussian Error Linear Unit (GELU) 활성화 함수를 적용하는 모듈입니다.
+    왜: BERT, RoBERTa, GPT, ViT 등 트랜스포머 아키텍처의 표준 활성화를 위함입니다.
+    """
+    def __init__(self, approximate: str = "none"):
+        super().__init__()
+        self.approximate = approximate
+        
+    def forward(self, x):
+        from .ops import gelu
+        return gelu(x, approximate=self.approximate)
+
+class SiLU(Module):
+    """
+    무엇을: Sigmoid Linear Unit (SiLU / Swish) 활성화 함수 모듈입니다.
+    왜: LLaMA-3, Stable Diffusion, YOLO 등 최신 딥러닝 모델의 비선형성을 위함입니다.
+    """
+    def __init__(self):
+        super().__init__()
+        
+    def forward(self, x):
+        from .ops import silu
+        return silu(x)
+
+class LeakyReLU(Module):
+    """
+    무엇을: LeakyReLU 활성화 함수 모듈입니다.
+    왜: Dying ReLU 문제를 방지하기 위해 음수 영역에서 작은 기울기를 제공합니다.
+    """
+    def __init__(self, negative_slope: float = 0.01):
+        super().__init__()
+        self.negative_slope = negative_slope
+        
+    def forward(self, x):
+        from .ops import leaky_relu
+        return leaky_relu(x, negative_slope=self.negative_slope)
+
+class ELU(Module):
+    """
+    무엇을: Exponential Linear Unit (ELU) 활성화 함수 모듈입니다.
+    왜: 음수 영역에서 부드러운 포화 특성을 통해 그래디언트 소실을 방지합니다.
+    """
+    def __init__(self, alpha: float = 1.0):
+        super().__init__()
+        self.alpha = alpha
+        
+    def forward(self, x):
+        from .ops import elu
+        return elu(x, alpha=self.alpha)
+
 
 # WHAT: 여러 신경망 계층들을 순차적으로 이어붙여 단일 모듈로 만들어주는 컨테이너 클래스입니다.
 # WHY: 복잡한 네트워크 구조를 리스트 형태로 쉽게 정의하고 한 번의 forward 호출로 연속 처리를 가능하게 하기 위함입니다.

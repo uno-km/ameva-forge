@@ -60,10 +60,14 @@ __version__ = "0.1.0"
 
 # 기본 통계 및 수학 연산 함수들을 편의상 다른 이름으로 매핑하여 임포트
 from .ops import sum_op as sum, mean_op as mean, exp_op as exp, log_op as log
-from .ops import sigmoid, tanh_op as tanh, reshape, sum_axis
+from .ops import sigmoid, tanh_op as tanh, reshape, sum_axis, gelu, silu, leaky_relu, elu
 # 신경망 구성 요소가 있는 nn 서브모듈과 관련 레이어 임포트
 from . import nn
-from .nn import BatchNorm2d, Dropout, LayerNorm, MultiheadAttention, TransformerEncoderLayer, PositionalEncoding, RNNCell, LSTMCell, RNN, LSTM, RMSNorm, RotaryEmbedding, SwiGLU, ModuleList
+from .nn import (
+    BatchNorm2d, Dropout, LayerNorm, MultiheadAttention, TransformerEncoderLayer,
+    PositionalEncoding, RNNCell, LSTMCell, RNN, LSTM, RMSNorm, RotaryEmbedding, SwiGLU, ModuleList,
+    GELU, SiLU, LeakyReLU, ELU, CosineSimilarity
+)
 # 최적화 알고리즘이 있는 optim 서브모듈과 학습률 스케줄러 임포트
 from . import optim  
 from .optim import clip_grad_norm, clip_grad_norm_, clip_grad_value, clip_grad_value_, StepLR, CosineAnnealingLR, ReduceLROnPlateau
