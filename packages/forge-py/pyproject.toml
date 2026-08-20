@@ -3,17 +3,31 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "forge"
+name = "ameva-forge"
 version = "0.1.0"
-description = "WebGPU-accelerated tensor computation library with autograd for deep learning training"
+description = "High-performance WebGPU-accelerated tensor computation engine with reverse-mode autograd for browser and edge deep learning."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.9"
 authors = [
-    {name = "AMEVA Team"}
+    {name = "AMEVA Foundation", email = "contact@uno-km.com"}
+]
+maintainers = [
+    {name = "AMEVA Engineering Team"}
+]
+keywords = [
+    "deep-learning",
+    "tensor",
+    "autograd",
+    "webgpu",
+    "pytorch",
+    "transformers",
+    "pyodide",
+    "wasm",
+    "machine-learning"
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
@@ -24,6 +38,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Mathematics",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Operating System :: OS Independent",
 ]
@@ -41,6 +56,8 @@ dev = [
 Homepage = "https://uno-km.github.io/ameva-forge/"
 Documentation = "https://uno-km.github.io/ameva-forge/"
 Repository = "https://github.com/uno-km/ameva-forge"
+Issues = "https://github.com/uno-km/ameva-forge/issues"
+Changelog = "https://github.com/uno-km/ameva-forge/blob/main/docs/audits/audit_loop_iteration_30.md"
 
 [tool.setuptools.packages.find]
 where = ["src"]
