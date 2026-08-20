@@ -645,17 +645,18 @@ class L1Loss(Module):
 class CrossEntropyLoss(Module):
     """
     무엇을: 크로스 엔트로피 손실(CrossEntropyLoss) 모듈입니다.
-    왜: 다중 클래스 분류 및 언어 모델(LLM) 넥스트 토큰 예측 손실 계산을 위함입니다.
+    왜: 다중 클래스 분류, Label Smoothing 및 언어 모델(LLM) 넥스트 토큰 예측 손실 계산을 위함입니다.
     """
-    def __init__(self, weight=None, ignore_index: int = -100, reduction: str = 'mean'):
+    def __init__(self, weight=None, ignore_index: int = -100, reduction: str = 'mean', label_smoothing: float = 0.0):
         super().__init__()
         self.weight = weight
         self.ignore_index = ignore_index
         self.reduction = reduction
+        self.label_smoothing = label_smoothing
 
     def forward(self, input: Tensor, target: Tensor) -> Tensor:
         from .functional import cross_entropy
-        return cross_entropy(input, target)
+        return cross_entropy(input, target, weight=self.weight, ignore_index=self.ignore_index, reduction=self.reduction, label_smoothing=self.label_smoothing)
 
 class BCEWithLogitsLoss(Module):
     """
@@ -699,6 +700,55 @@ class KLDivLoss(Module):
     def forward(self, input: Tensor, target: Tensor) -> Tensor:
         from .functional import kl_div
         return kl_div(input, target, reduction=self.reduction, log_target=self.log_target)
+
+
+class TripletMarginLoss(Module):
+    """
+    무엇을: 앵커-양성-음성 삼중항 손실(TripletMarginLoss) 모듈입니다.
+    왜: FaceNet, Metric Learning, 벡터 임베딩 유사도 학습을 위함입니다.
+    """
+    def __init__(self, margin: float = 1.0, p: float = 2.0, eps: float = 1e-6, swap: bool = False, reduction: str = 'mean'):
+        super().__init__()
+        self.margin = margin
+        self.p = p
+        self.eps = eps
+        self.swap = swap
+        self.reduction = reduction
+
+    def forward(self, anchor: Tensor, positive: Tensor, negative: Tensor) -> Tensor:
+        from .functional import triplet_margin_loss
+        return triplet_margin_loss(anchor, positive, negative, margin=self.margin, p=self.p, eps=self.eps, swap=self.swap, reduction=self.reduction)
+
+
+class CosineEmbeddingLoss(Module):
+    """
+    무엇을: 코사인 임베딩 손실(CosineEmbeddingLoss) 모듈입니다.
+    왜: CLIP, Siamese Network, 대조 학습 임베딩 정렬을 위함입니다.
+    """
+    def __init__(self, margin: float = 0.0, reduction: str = 'mean'):
+        super().__init__()
+        self.margin = margin
+        self.reduction = reduction
+
+    def forward(self, input1: Tensor, input2: Tensor, target: Tensor) -> Tensor:
+        from .functional import cosine_embedding_loss
+        return cosine_embedding_loss(input1, input2, target, margin=self.margin, reduction=self.reduction)
+
+
+class MarginRankingLoss(Module):
+    """
+    무엇을: 페어와이즈 랭킹 손실(MarginRankingLoss) 모듈입니다.
+    왜: 순위 최적화 및 페어 랭킹 평가를 위함입니다.
+    """
+    def __init__(self, margin: float = 0.0, reduction: str = 'mean'):
+        super().__init__()
+        self.margin = margin
+        self.reduction = reduction
+
+    def forward(self, input1: Tensor, input2: Tensor, target: Tensor) -> Tensor:
+        from .functional import margin_ranking_loss
+        return margin_ranking_loss(input1, input2, target, margin=self.margin, reduction=self.reduction)
+
 
 
 # WHAT: 2차원 공간 상의 최대 풀링(Max Pooling) 연산을 수행하는 계층입니다.

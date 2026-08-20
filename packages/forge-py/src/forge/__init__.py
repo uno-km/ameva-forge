@@ -85,7 +85,8 @@ from .nn import (
     Identity, ConstantPad2d, ZeroPad2d, ReflectionPad2d, ReplicationPad2d,
     AdaptiveAvgPool2d, AdaptiveMaxPool2d,
     CrossEntropyLoss, MSELoss, L1Loss, BCEWithLogitsLoss, SmoothL1Loss, KLDivLoss,
-    Conv1d, PixelShuffle, PixelUnshuffle, Upsample
+    TripletMarginLoss, CosineEmbeddingLoss, MarginRankingLoss,
+    Conv1d, ConvTranspose2d, PixelShuffle, PixelUnshuffle, Upsample
 )
 # 최적화 알고리즘이 있는 optim 서브모듈과 학습률 스케줄러 임포트
 from . import optim  

@@ -358,11 +358,30 @@ class CrossEntropyFunction(Function):
             )
             return (grad_logits, None)
 
-def cross_entropy(predictions, targets):
+def cross_entropy(predictions, targets, weight=None, ignore_index: int = -100, reduction: str = 'mean', label_smoothing: float = 0.0):
     """
-    WHAT: 크로스 엔트로피 손실을 계산하며, 1D/2D/3D 정수 라벨 및 확률 분포(Soft Target)를 모두 지원합니다.
+    WHAT: 크로스 엔트로피 손실을 계산하며, 1D/2D/3D 정수 라벨, 확률 분포(Soft Target), Label Smoothing을 모두 지원합니다.
     WHY: 일반 분류뿐만 아니라 LLM 넥스트 토큰 예측(3D shape: [B, T, V]), Label Smoothing, Knowledge Distillation을 완벽 지원하기 위함입니다.
     """
+    if label_smoothing > 0.0:
+        from .ops import mul, sum_axis, mean_op, neg, tensor
+        log_p = log_softmax(predictions, axis=-1)
+        C = predictions.shape[-1]
+        
+        # 정수 타겟을 smooth target 확률 분포로 변환
+        if len(targets.shape) == 1 and len(predictions.shape) == 2:
+            N = predictions.shape[0]
+            targets_np = targets.numpy() if hasattr(targets, 'numpy') else np.asarray(targets)
+            one_hot = np.zeros((N, C), dtype=np.float32)
+            for i in range(N):
+                t_idx = int(targets_np[i])
+                if 0 <= t_idx < C:
+                    one_hot[i, t_idx] = 1.0
+            smooth_targets = one_hot * (1.0 - label_smoothing) + (label_smoothing / C)
+            targets_tensor = tensor(smooth_targets, device=predictions.device, dtype=predictions.dtype)
+            loss_unreduced = neg(sum_axis(mul(targets_tensor, log_p), axis=-1))
+            return mean_op(loss_unreduced) if reduction == 'mean' else (loss_unreduced.sum() if reduction == 'sum' else loss_unreduced)
+            
     # 3D LLM Sequence Logits [B, T, C]와 [B, T] Targets 처리
     if len(predictions.shape) == 3 and len(targets.shape) == 2:
         from .ops import reshape
@@ -375,7 +394,7 @@ def cross_entropy(predictions, targets):
         from .ops import mul, sum_axis, mean_op, neg
         log_p = log_softmax(predictions, axis=-1)
         loss_unreduced = neg(sum_axis(mul(targets, log_p), axis=-1))
-        return mean_op(loss_unreduced)
+        return mean_op(loss_unreduced) if reduction == 'mean' else (loss_unreduced.sum() if reduction == 'sum' else loss_unreduced)
     return CrossEntropyFunction.apply(predictions, targets)
 
 def mse_loss(predictions, targets):
@@ -840,5 +859,77 @@ def rope(x, base_freq=10000.0, offset_pos=0):
         out_np[b, h, :, 1::2] = v1 * cos_theta + v0 * sin_theta
         
     return tensor(out_np, device=x.device, dtype=x.dtype, requires_grad=x.requires_grad)
+
+
+def triplet_margin_loss(anchor: 'Tensor', positive: 'Tensor', negative: 'Tensor', margin: float = 1.0, p: float = 2.0, eps: float = 1e-6, swap: bool = False, reduction: str = 'mean') -> 'Tensor':
+    """
+    WHAT: 앵커(Anchor), 양성(Positive), 음성(Negative) 간의 거리 기반 Triplet Margin 손실 함수입니다.
+    WHY: FaceNet, Metric Learning, 임베딩 검색, Re-ID에서 양성 쌍을 가깝게, 음성 쌍을 멀리 배치하기 위함입니다.
+    HOW: L(a, p, n) = max(0, d(a, p) - d(a, n) + margin) 수식으로 계산합니다.
+    """
+    from .ops import sub, norm, relu, where
+    
+    diff_ap = sub(anchor, positive)
+    diff_an = sub(anchor, negative)
+    
+    if p == 2.0:
+        d_ap = diff_ap.pow(2.0).sum(axis=-1, keepdim=True).add(eps).sqrt()
+        d_an = diff_an.pow(2.0).sum(axis=-1, keepdim=True).add(eps).sqrt()
+    else:
+        d_ap = diff_ap.abs().pow(p).sum(axis=-1, keepdim=True).add(eps).pow(1.0 / p)
+        d_an = diff_an.abs().pow(p).sum(axis=-1, keepdim=True).add(eps).pow(1.0 / p)
+        
+    if swap:
+        diff_pn = sub(positive, negative)
+        if p == 2.0:
+            d_pn = diff_pn.pow(2.0).sum(axis=-1, keepdim=True).add(eps).sqrt()
+        else:
+            d_pn = diff_pn.abs().pow(p).sum(axis=-1, keepdim=True).add(eps).pow(1.0 / p)
+        d_an = where(d_an.lt(d_pn), d_an, d_pn)
+        
+    loss = (d_ap - d_an + margin).relu()
+    if reduction == 'mean':
+        return loss.mean()
+    elif reduction == 'sum':
+        return loss.sum()
+    return loss
+
+
+def cosine_embedding_loss(input1: 'Tensor', input2: 'Tensor', target: 'Tensor', margin: float = 0.0, reduction: str = 'mean') -> 'Tensor':
+    """
+    WHAT: 두 텐서 간의 코사인 유사도를 바탕으로 대조 학습을 수행하는 손실 함수입니다.
+    WHY: CLIP, Siamese Network, 문장 임베딩의 유사도 학습을 위함입니다.
+    HOW: target == 1 이면 1 - cos, target == -1 이면 max(0, cos - margin) 수식으로 계산합니다.
+    """
+    from .ops import where
+    cos = cosine_similarity(input1, input2, dim=-1)
+    if len(target.shape) < len(cos.shape):
+        target_view = target.view(cos.shape)
+    else:
+        target_view = target
+        
+    pos_loss = 1.0 - cos
+    neg_loss = (cos - margin).relu()
+    loss = where(target_view.eq(1.0), pos_loss, neg_loss)
+    if reduction == 'mean':
+        return loss.mean()
+    elif reduction == 'sum':
+        return loss.sum()
+    return loss
+
+
+def margin_ranking_loss(input1: 'Tensor', input2: 'Tensor', target: 'Tensor', margin: float = 0.0, reduction: str = 'mean') -> 'Tensor':
+    """
+    WHAT: 두 입력 텐서 간의 상대적 랭킹 순서를 평가하는 Margin Ranking 손실 함수입니다.
+    WHY: 랭킹 기반 추천 시스템 및 페어와이즈 순위 최적화를 위함입니다.
+    HOW: loss = max(0, -target * (input1 - input2) + margin) 수식으로 계산합니다.
+    """
+    loss = (-target * (input1 - input2) + margin).relu()
+    if reduction == 'mean':
+        return loss.mean()
+    elif reduction == 'sum':
+        return loss.sum()
+    return loss
+
 
 

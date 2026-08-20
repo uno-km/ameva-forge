@@ -896,6 +896,56 @@ def test_fuzz_conv_transpose2d_affine_grid_grid_sample():
     assert img.grad is not None
     np.testing.assert_allclose(img.grad.numpy(), np.ones((1, 1, 4, 4), dtype=np.float32), atol=1e-4)
 
+def test_fuzz_ranking_losses_and_label_smoothing():
+    """Fuzz test TripletMarginLoss, CosineEmbeddingLoss, MarginRankingLoss and CrossEntropy with label_smoothing."""
+    import forge as at
+    from forge import nn
+    import forge.functional as F
+    
+    # 1. TripletMarginLoss & backward
+    triplet_loss = nn.TripletMarginLoss(margin=1.0, p=2.0)
+    anchor = at.tensor(np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32), requires_grad=True)
+    positive = at.tensor(np.array([[0.1, 0.0], [1.1, 1.0]], dtype=np.float32), requires_grad=True)
+    negative = at.tensor(np.array([[2.0, 2.0], [0.0, 0.0]], dtype=np.float32), requires_grad=True)
+    loss = triplet_loss(anchor, positive, negative)
+    assert loss.shape == ()
+    loss.backward()
+    assert anchor.grad is not None
+    assert positive.grad is not None
+    assert negative.grad is not None
+    
+    # 2. CosineEmbeddingLoss & backward
+    cos_loss_fn = nn.CosineEmbeddingLoss(margin=0.5)
+    x1 = at.tensor(np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32), requires_grad=True)
+    x2 = at.tensor(np.array([[1.0, 0.0], [1.0, 0.0]], dtype=np.float32), requires_grad=True)
+    target = at.tensor(np.array([1.0, -1.0], dtype=np.float32))
+    l_cos = cos_loss_fn(x1, x2, target)
+    assert l_cos.shape == ()
+    l_cos.backward()
+    assert x1.grad is not None
+    assert x2.grad is not None
+    
+    # 3. MarginRankingLoss & backward
+    rank_loss_fn = nn.MarginRankingLoss(margin=0.5)
+    r1 = at.tensor(np.array([1.0, 2.0], dtype=np.float32), requires_grad=True)
+    r2 = at.tensor(np.array([0.5, 3.0], dtype=np.float32), requires_grad=True)
+    t_rank = at.tensor(np.array([1.0, -1.0], dtype=np.float32))
+    l_rank = rank_loss_fn(r1, r2, t_rank)
+    assert l_rank.shape == ()
+    l_rank.backward()
+    assert r1.grad is not None
+    assert r2.grad is not None
+    
+    # 4. CrossEntropyLoss with label_smoothing
+    ce_smooth = nn.CrossEntropyLoss(label_smoothing=0.1)
+    logits = at.tensor(np.array([[2.0, 1.0, 0.1], [0.5, 3.0, 1.0]], dtype=np.float32), requires_grad=True)
+    ce_targets = at.tensor(np.array([0, 1], dtype=np.float32))
+    l_ce = ce_smooth(logits, ce_targets)
+    assert l_ce.shape == ()
+    l_ce.backward()
+    assert logits.grad is not None
+
+
 
 
 

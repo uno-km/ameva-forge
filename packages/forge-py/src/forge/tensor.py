@@ -844,6 +844,86 @@ class Tensor:
         from .ops import pow_op
         return pow_op(self, exponent)
 
+    def pow(self, exponent) -> 'Tensor':
+        """Calculates element-wise power."""
+        return self.__pow__(exponent)
+
+    def add(self, other) -> 'Tensor':
+        """Calculates element-wise addition."""
+        return self.__add__(other)
+
+    def sub(self, other) -> 'Tensor':
+        """Calculates element-wise subtraction."""
+        return self.__sub__(other)
+
+    def mul(self, other) -> 'Tensor':
+        """Calculates element-wise multiplication."""
+        return self.__mul__(other)
+
+    def div(self, other) -> 'Tensor':
+        """Calculates element-wise division."""
+        return self.__truediv__(other)
+
+    def relu(self) -> 'Tensor':
+        """Applies rectified linear unit element-wise."""
+        self._check_disposed()
+        from .ops import relu
+        return relu(self)
+
+    def eq(self, other) -> 'Tensor':
+        """Calculates element-wise equality (self == other)."""
+        self._check_disposed()
+        from .ops import _require_cpu_data
+        data_self = _require_cpu_data(self, "self")
+        data_other = _require_cpu_data(other, "other") if isinstance(other, Tensor) else np.asarray(other)
+        res = (data_self == data_other)
+        return Tensor(shape=res.shape, dtype="bool", device=self.device, data=res)
+
+    def ne(self, other) -> 'Tensor':
+        """Calculates element-wise inequality (self != other)."""
+        self._check_disposed()
+        from .ops import _require_cpu_data
+        data_self = _require_cpu_data(self, "self")
+        data_other = _require_cpu_data(other, "other") if isinstance(other, Tensor) else np.asarray(other)
+        res = (data_self != data_other)
+        return Tensor(shape=res.shape, dtype="bool", device=self.device, data=res)
+
+    def lt(self, other) -> 'Tensor':
+        """Calculates element-wise less-than (self < other)."""
+        self._check_disposed()
+        from .ops import _require_cpu_data
+        data_self = _require_cpu_data(self, "self")
+        data_other = _require_cpu_data(other, "other") if isinstance(other, Tensor) else np.asarray(other)
+        res = (data_self < data_other)
+        return Tensor(shape=res.shape, dtype="bool", device=self.device, data=res)
+
+    def le(self, other) -> 'Tensor':
+        """Calculates element-wise less-than-or-equal (self <= other)."""
+        self._check_disposed()
+        from .ops import _require_cpu_data
+        data_self = _require_cpu_data(self, "self")
+        data_other = _require_cpu_data(other, "other") if isinstance(other, Tensor) else np.asarray(other)
+        res = (data_self <= data_other)
+        return Tensor(shape=res.shape, dtype="bool", device=self.device, data=res)
+
+    def gt(self, other) -> 'Tensor':
+        """Calculates element-wise greater-than (self > other)."""
+        self._check_disposed()
+        from .ops import _require_cpu_data
+        data_self = _require_cpu_data(self, "self")
+        data_other = _require_cpu_data(other, "other") if isinstance(other, Tensor) else np.asarray(other)
+        res = (data_self > data_other)
+        return Tensor(shape=res.shape, dtype="bool", device=self.device, data=res)
+
+    def ge(self, other) -> 'Tensor':
+        """Calculates element-wise greater-than-or-equal (self >= other)."""
+        self._check_disposed()
+        from .ops import _require_cpu_data
+        data_self = _require_cpu_data(self, "self")
+        data_other = _require_cpu_data(other, "other") if isinstance(other, Tensor) else np.asarray(other)
+        res = (data_self >= data_other)
+        return Tensor(shape=res.shape, dtype="bool", device=self.device, data=res)
+
     def clone(self) -> 'Tensor':
         """
         WHAT: 텐서의 복제본을 생성하여 반환합니다.
