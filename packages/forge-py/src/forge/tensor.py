@@ -1621,14 +1621,14 @@ class Parameter(Tensor):
                 device=data.device,
                 requires_grad=requires_grad,
                 data=data._data,
-                handle=data.handle,
-                op=data._op,
-                parents=data._parents,
-                op_params=data._op_params,
+                handle=getattr(data, '_handle', None),
+                op=getattr(data, '_lazy_op', None),
+                parents=getattr(data, '_parents', ()),
+                op_params=getattr(data, '_lazy_params', None),
                 handle_cell=getattr(data, '_handle_cell', None)
             )
-            self._ctx = data._ctx
-            self._grad = data._grad
+            self._ctx = getattr(data, '_ctx', None)
+            self.grad = getattr(data, 'grad', None)
             self._grad_parents = getattr(data, '_grad_parents', ())
         elif data is not None:
             arr = np.asarray(data)

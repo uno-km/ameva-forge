@@ -38,7 +38,8 @@ from .ops import (
     roll, repeat_interleave, meshgrid, diag, diagonal, trace, outer,
     masked_fill, index_select, masked_select, nonzero, take_along_dim,
     cumprod, unflatten, cdist, norm, atleast_1d, atleast_2d, atleast_3d,
-    einsum, kron, tensordot, nan_to_num
+    einsum, kron, tensordot, nan_to_num,
+    conv_transpose2d, affine_grid, grid_sample
 )
 any = any_op
 all = all_op

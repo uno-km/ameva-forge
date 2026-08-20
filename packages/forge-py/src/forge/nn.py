@@ -935,6 +935,38 @@ class Conv2d(Module):
         # HOW: 내부 C/C++ 기반 또는 최적화된 conv2d 함수로 넘깁니다.
         return conv2d(x, self.weight, self.bias, self.stride, self.padding)
 
+
+class ConvTranspose2d(Module):
+    """
+    WHAT: 2차원 전치 합성곱(Transposed Convolution 2D / Deconvolution) 계층 모듈입니다.
+    WHY: GAN 생성자, Diffusion U-Net 업샘플링, VAE 디코더 등에서 저해상도 피처맵을 고해상도로 확장 복원하기 위함입니다.
+    HOW: 분수 보폭(Fractionally-strided) 합성곱 수식을 통해 출력을 업스케일링합니다.
+    """
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: Union[int, Tuple[int, int]], stride: Union[int, Tuple[int, int]] = 1, padding: Union[int, Tuple[int, int]] = 0, output_padding: Union[int, Tuple[int, int]] = 0, bias: bool = True):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = (kernel_size, kernel_size) if isinstance(kernel_size, int) else kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.output_padding = output_padding
+        
+        import math
+        k = 1.0 / math.sqrt(in_channels * self.kernel_size[0] * self.kernel_size[1])
+        w_data = np.random.uniform(-k, k, (in_channels, out_channels, self.kernel_size[0], self.kernel_size[1])).astype(np.float32)
+        self.weight = Parameter(Tensor(shape=w_data.shape, dtype="float32", device="cpu", data=w_data))
+        
+        if bias:
+            b_data = np.random.uniform(-k, k, (out_channels,)).astype(np.float32)
+            self.bias = Parameter(Tensor(shape=(out_channels,), dtype="float32", device="cpu", data=b_data))
+        else:
+            self.bias = None
+
+    def forward(self, x: 'Tensor') -> 'Tensor':
+        from .ops import conv_transpose2d
+        return conv_transpose2d(x, self.weight, self.bias, stride=self.stride, padding=self.padding, output_padding=self.output_padding)
+
+
 class Conv1d(Module):
     """
     무엇을: 1차원 합성곱(Convolution 1D) 계층 모듈입니다.

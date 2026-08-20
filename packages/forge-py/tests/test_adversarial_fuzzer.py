@@ -864,6 +864,39 @@ def test_fuzz_einsum_kron_tensordot_nan_to_num():
     (cleaned * 2.0).sum().backward()
     np.testing.assert_allclose(with_nan.grad.numpy(), np.array([2.0, 0.0, 0.0, 0.0]))
 
+def test_fuzz_conv_transpose2d_affine_grid_grid_sample():
+    """Fuzz test ConvTranspose2d, conv_transpose2d, affine_grid, grid_sample with Autograd."""
+    import forge as at
+    from forge import nn
+    
+    # 1. ConvTranspose2d Module & backward
+    deconv = nn.ConvTranspose2d(in_channels=2, out_channels=3, kernel_size=3, stride=2, padding=1)
+    x = at.tensor(np.ones((1, 2, 4, 4), dtype=np.float32), requires_grad=True)
+    out = deconv(x)
+    # H_out = (4 - 1)*2 - 2*1 + 3 = 6 - 2 + 3 = 7
+    assert out.shape == (1, 3, 7, 7)
+    out.sum().backward()
+    assert x.grad is not None
+    assert deconv.weight.grad is not None
+    assert deconv.bias.grad is not None
+    
+    # 2. affine_grid & grid_sample
+    # Identity affine matrix [ [1, 0, 0], [0, 1, 0] ]
+    theta = at.tensor(np.array([[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]], dtype=np.float32))
+    grid = at.affine_grid(theta, size=[1, 1, 4, 4], align_corners=True)
+    assert grid.shape == (1, 4, 4, 2)
+    
+    img = at.tensor(np.arange(16, dtype=np.float32).reshape(1, 1, 4, 4), requires_grad=True)
+    sampled = at.grid_sample(img, grid, align_corners=True)
+    assert sampled.shape == (1, 1, 4, 4)
+    # Sampling with identity grid should recover the original image
+    np.testing.assert_allclose(sampled.numpy(), img.numpy(), atol=1e-4)
+    
+    sampled.sum().backward()
+    assert img.grad is not None
+    np.testing.assert_allclose(img.grad.numpy(), np.ones((1, 1, 4, 4), dtype=np.float32), atol=1e-4)
+
+
 
 
 

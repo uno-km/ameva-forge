@@ -4031,6 +4031,239 @@ def nan_to_num(input: Tensor, nan: float = 0.0, posinf: Optional[float] = None, 
     return NanToNumFunction.apply(input, nan, posinf, neginf)
 
 
+class ConvTranspose2dFunction(Function):
+    @staticmethod
+    def forward(ctx, input: Tensor, weight: Tensor, bias: Optional[Tensor] = None, stride: Union[int, Tuple[int, int]] = 1, padding: Union[int, Tuple[int, int]] = 0, output_padding: Union[int, Tuple[int, int]] = 0) -> Tensor:
+        data_x = _require_cpu_data(input, "input")
+        data_w = _require_cpu_data(weight, "weight")
+        data_b = _require_cpu_data(bias, "bias") if bias is not None else None
+        
+        s_h, s_w = (stride, stride) if isinstance(stride, int) else stride
+        p_h, p_w = (padding, padding) if isinstance(padding, int) else padding
+        op_h, op_w = (output_padding, output_padding) if isinstance(output_padding, int) else output_padding
+        
+        N, C_in, H_in, W_in = data_x.shape
+        C_in_w, C_out, K_h, K_w = data_w.shape
+        if C_in != C_in_w:
+            raise AMEVAForgeShapeError(f"ConvTranspose2d: input channels ({C_in}) != weight in_channels ({C_in_w})")
+            
+        H_out = (H_in - 1) * s_h - 2 * p_h + K_h + op_h
+        W_out = (W_in - 1) * s_w - 2 * p_w + K_w + op_w
+        
+        out = np.zeros((N, C_out, H_out, W_out), dtype=np.float32)
+        
+        for n in range(N):
+            for c_in in range(C_in):
+                for c_out in range(C_out):
+                    w_kernel = data_w[c_in, c_out]
+                    for h in range(H_in):
+                        for w in range(W_in):
+                            val = data_x[n, c_in, h, w]
+                            h_start = h * s_h - p_h
+                            w_start = w * s_w - p_w
+                            for kh in range(K_h):
+                                for kw in range(K_w):
+                                    oh = h_start + kh
+                                    ow = w_start + kw
+                                    if 0 <= oh < H_out and 0 <= ow < W_out:
+                                        out[n, c_out, oh, ow] += val * w_kernel[kh, kw]
+                                        
+        if data_b is not None:
+            out += data_b.reshape(1, C_out, 1, 1)
+            
+        if bias is not None:
+            ctx.save_for_backward(input, weight, bias)
+        else:
+            ctx.save_for_backward(input, weight)
+        ctx.has_bias = (bias is not None)
+        ctx.stride = (s_h, s_w)
+        ctx.padding = (p_h, p_w)
+        ctx.output_padding = (op_h, op_w)
+        ctx.H_out = H_out
+        ctx.W_out = W_out
+        return Tensor(shape=out.shape, dtype=input.dtype, device=input.device, data=out)
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple:
+        if ctx.has_bias:
+            input, weight, bias = ctx.saved_tensors
+        else:
+            input, weight = ctx.saved_tensors
+            bias = None
+        data_g = _require_cpu_data(grad_output, "grad_output")
+        data_x = _require_cpu_data(input, "input")
+        data_w = _require_cpu_data(weight, "weight")
+        
+        s_h, s_w = ctx.stride
+        p_h, p_w = ctx.padding
+        N, C_in, H_in, W_in = data_x.shape
+        C_in_w, C_out, K_h, K_w = data_w.shape
+        H_out = ctx.H_out
+        W_out = ctx.W_out
+        
+        grad_x = np.zeros_like(data_x)
+        grad_w = np.zeros_like(data_w)
+        grad_b = np.sum(data_g, axis=(0, 2, 3)).astype(np.float32) if bias is not None else None
+        
+        for n in range(N):
+            for c_in in range(C_in):
+                for c_out in range(C_out):
+                    w_kernel = data_w[c_in, c_out]
+                    for h in range(H_in):
+                        for w in range(W_in):
+                            val_x = data_x[n, c_in, h, w]
+                            h_start = h * s_h - p_h
+                            w_start = w * s_w - p_w
+                            for kh in range(K_h):
+                                for kw in range(K_w):
+                                    oh = h_start + kh
+                                    ow = w_start + kw
+                                    if 0 <= oh < H_out and 0 <= ow < W_out:
+                                        g_val = data_g[n, c_out, oh, ow]
+                                        grad_x[n, c_in, h, w] += g_val * w_kernel[kh, kw]
+                                        grad_w[c_in, c_out, kh, kw] += g_val * val_x
+                                        
+        g_x_tensor = Tensor(shape=grad_x.shape, dtype=grad_output.dtype, device=grad_output.device, data=grad_x)
+        g_w_tensor = Tensor(shape=grad_w.shape, dtype=grad_output.dtype, device=grad_output.device, data=grad_w)
+        
+        if bias is not None:
+            g_b_tensor = Tensor(shape=grad_b.shape, dtype=grad_output.dtype, device=grad_output.device, data=grad_b)
+            return g_x_tensor, g_w_tensor, g_b_tensor
+        else:
+            return g_x_tensor, g_w_tensor
+
+def conv_transpose2d(input: Tensor, weight: Tensor, bias: Optional[Tensor] = None, stride: Union[int, Tuple[int, int]] = 1, padding: Union[int, Tuple[int, int]] = 0, output_padding: Union[int, Tuple[int, int]] = 0) -> Tensor:
+    """Applies a 2D transposed convolution operator over an input image."""
+    return ConvTranspose2dFunction.apply(input, weight, bias, stride, padding, output_padding)
+
+
+def affine_grid(theta: Tensor, size: Sequence[int], align_corners: bool = False) -> Tensor:
+    """Generates a 2D flow field (sampling grid), given a batch of affine matrices theta."""
+    data_theta = _require_cpu_data(theta, "theta")
+    N = data_theta.shape[0]
+    C, H, W = size[1], size[2], size[3]
+    
+    if align_corners:
+        y = np.linspace(-1.0, 1.0, H, dtype=np.float32)
+        x = np.linspace(-1.0, 1.0, W, dtype=np.float32)
+    else:
+        y = (np.arange(H, dtype=np.float32) * 2.0 + 1.0) / H - 1.0
+        x = (np.arange(W, dtype=np.float32) * 2.0 + 1.0) / W - 1.0
+        
+    grid_x, grid_y = np.meshgrid(x, y, indexing='xy')
+    homogeneous = np.stack([grid_x, grid_y, np.ones_like(grid_x)], axis=-1).reshape(-1, 3)
+    
+    out = np.zeros((N, H, W, 2), dtype=np.float32)
+    for n in range(N):
+        t = data_theta[n]
+        transformed = homogeneous @ t.T
+        out[n] = transformed.reshape(H, W, 2)
+        
+    return Tensor(shape=out.shape, dtype=theta.dtype, device=theta.device, data=out)
+
+
+class GridSampleFunction(Function):
+    @staticmethod
+    def forward(ctx, input: Tensor, grid: Tensor, mode: str = 'bilinear', padding_mode: str = 'zeros', align_corners: bool = False) -> Tensor:
+        data_x = _require_cpu_data(input, "input")
+        data_g = _require_cpu_data(grid, "grid")
+        
+        N, C, H_in, W_in = data_x.shape
+        N_g, H_out, W_out, _ = data_g.shape
+        
+        out = np.zeros((N, C, H_out, W_out), dtype=np.float32)
+        
+        for n in range(N):
+            for h in range(H_out):
+                for w in range(W_out):
+                    gx, gy = data_g[n, h, w, 0], data_g[n, h, w, 1]
+                    if align_corners:
+                        ix = ((gx + 1.0) / 2.0) * (W_in - 1)
+                        iy = ((gy + 1.0) / 2.0) * (H_in - 1)
+                    else:
+                        ix = ((gx + 1.0) * W_in - 1.0) / 2.0
+                        iy = ((gy + 1.0) * H_in - 1.0) / 2.0
+                        
+                    x0 = int(np.floor(ix))
+                    x1 = x0 + 1
+                    y0 = int(np.floor(iy))
+                    y1 = y0 + 1
+                    
+                    wa = (x1 - ix) * (y1 - iy)
+                    wb = (x1 - ix) * (iy - y0)
+                    wc = (ix - x0) * (y1 - iy)
+                    wd = (ix - x0) * (iy - y0)
+                    
+                    for c in range(C):
+                        val = 0.0
+                        if 0 <= x0 < W_in and 0 <= y0 < H_in:
+                            val += wa * data_x[n, c, y0, x0]
+                        if 0 <= x0 < W_in and 0 <= y1 < H_in:
+                            val += wb * data_x[n, c, y1, x0]
+                        if 0 <= x1 < W_in and 0 <= y0 < H_in:
+                            val += wc * data_x[n, c, y0, x1]
+                        if 0 <= x1 < W_in and 0 <= y1 < H_in:
+                            val += wd * data_x[n, c, y1, x1]
+                        out[n, c, h, w] = val
+                        
+        ctx.save_for_backward(input, grid)
+        ctx.align_corners = align_corners
+        return Tensor(shape=out.shape, dtype=input.dtype, device=input.device, data=out)
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, Tensor]:
+        input, grid = ctx.saved_tensors
+        data_x = _require_cpu_data(input, "input")
+        data_g = _require_cpu_data(grid, "grid")
+        data_out_grad = _require_cpu_data(grad_output, "grad_output")
+        
+        N, C, H_in, W_in = data_x.shape
+        N_g, H_out, W_out, _ = data_g.shape
+        align_corners = ctx.align_corners
+        
+        grad_input = np.zeros_like(data_x)
+        grad_grid = np.zeros_like(data_g)
+        
+        for n in range(N):
+            for h in range(H_out):
+                for w in range(W_out):
+                    gx, gy = data_g[n, h, w, 0], data_g[n, h, w, 1]
+                    if align_corners:
+                        ix = ((gx + 1.0) / 2.0) * (W_in - 1)
+                        iy = ((gy + 1.0) / 2.0) * (H_in - 1)
+                    else:
+                        ix = ((gx + 1.0) * W_in - 1.0) / 2.0
+                        iy = ((gy + 1.0) * H_in - 1.0) / 2.0
+                        
+                    x0 = int(np.floor(ix))
+                    x1 = x0 + 1
+                    y0 = int(np.floor(iy))
+                    y1 = y0 + 1
+                    
+                    wa = (x1 - ix) * (y1 - iy)
+                    wb = (x1 - ix) * (iy - y0)
+                    wc = (ix - x0) * (y1 - iy)
+                    wd = (ix - x0) * (iy - y0)
+                    
+                    for c in range(C):
+                        og = data_out_grad[n, c, h, w]
+                        if 0 <= x0 < W_in and 0 <= y0 < H_in:
+                            grad_input[n, c, y0, x0] += og * wa
+                        if 0 <= x0 < W_in and 0 <= y1 < H_in:
+                            grad_input[n, c, y1, x0] += og * wb
+                        if 0 <= x1 < W_in and 0 <= y0 < H_in:
+                            grad_input[n, c, y0, x1] += og * wc
+                        if 0 <= x1 < W_in and 0 <= y1 < H_in:
+                            grad_input[n, c, y1, x1] += og * wd
+                            
+        return Tensor(shape=grad_input.shape, dtype=grad_output.dtype, device=grad_output.device, data=grad_input), Tensor(shape=grad_grid.shape, dtype=grid.dtype, device=grid.device, data=grad_grid)
+
+def grid_sample(input: Tensor, grid: Tensor, mode: str = 'bilinear', padding_mode: str = 'zeros', align_corners: bool = False) -> Tensor:
+    """Given an input and a flow-field grid, computes the output using input values and pixel locations from grid."""
+    return GridSampleFunction.apply(input, grid, mode, padding_mode, align_corners)
+
+
+
 
 
 
