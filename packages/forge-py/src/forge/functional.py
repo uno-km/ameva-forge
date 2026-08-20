@@ -587,6 +587,17 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
         query = reshape(query, (B * H, L, D))
         key = reshape(key, (B * H, key.shape[2], D))
         value = reshape(value, (B * H, value.shape[2], value.shape[3]))
+        if attn_mask is not None:
+            from .ops import tensor
+            if len(attn_mask.shape) == 4:
+                m_B, m_H, m_L, m_S = attn_mask.shape
+                m_data = attn_mask.numpy() if hasattr(attn_mask, 'numpy') else attn_mask
+                if hasattr(m_data, 'dtype') and (m_data.dtype == bool or str(m_data.dtype) == 'bool'):
+                    m_data = np.where(m_data, -1e9, 0.0).astype(np.float32)
+                if m_H == 1 and H > 1:
+                    m_data = np.broadcast_to(m_data, (B, H, m_L, m_S))
+                m_data = np.ascontiguousarray(m_data.reshape(B * H, m_L, m_S))
+                attn_mask = tensor(m_data, device=query.device)
         
     d_k = query.shape[-1]
     query_t = query
@@ -603,7 +614,14 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
         causal_mask = tensor(mask_np, device=scores.device)
         scores = add(scores, causal_mask)
     elif attn_mask is not None:
-        scores = add(scores, attn_mask)
+        from .ops import tensor
+        m_data = attn_mask.numpy() if hasattr(attn_mask, 'numpy') else attn_mask
+        if hasattr(m_data, 'dtype') and (m_data.dtype == bool or str(m_data.dtype) == 'bool'):
+            float_m = np.where(m_data, -1e9, 0.0).astype(np.float32)
+            attn_mask_t = tensor(float_m, device=scores.device)
+        else:
+            attn_mask_t = attn_mask
+        scores = add(scores, attn_mask_t)
 
     attn = softmax(scores, axis=-1)
     

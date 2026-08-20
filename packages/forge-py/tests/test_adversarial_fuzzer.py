@@ -145,5 +145,30 @@ def test_fuzz_rms_norm_multidim_and_signatures():
     y2 = F.rms_norm(x2, w, 1e-5)
     assert y2.shape == (2, 3, 4)
 
+def test_fuzz_multihead_attention_masks_and_invariants():
+    """Fuzz test MultiheadAttention divisibility validation and key_padding_mask."""
+    import forge.nn as nn
+    
+    # 1. Divisibility invariant failure
+    with pytest.raises(AMEVAForgeValidationError):
+        nn.MultiheadAttention(embed_dim=65, num_heads=8)
+        
+    # 2. Key padding mask execution
+    mha = nn.MultiheadAttention(embed_dim=32, num_heads=4)
+    q = tensor(np.random.randn(2, 6, 32).astype(np.float32), requires_grad=True)
+    k = tensor(np.random.randn(2, 6, 32).astype(np.float32), requires_grad=True)
+    v = tensor(np.random.randn(2, 6, 32).astype(np.float32), requires_grad=True)
+    
+    # Mask last 2 tokens of batch 0
+    key_padding_mask = tensor(np.array([[False, False, False, False, True, True],
+                                        [False, False, False, False, False, False]]))
+    out = mha(q, k, v, key_padding_mask=key_padding_mask)
+    assert out.shape == (2, 6, 32)
+    loss = out.sum()
+    loss.backward()
+    assert q.grad is not None
+    assert not np.isnan(q.grad.numpy()).any()
+
+
 
 

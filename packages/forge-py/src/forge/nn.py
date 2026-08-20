@@ -14,7 +14,7 @@
 from typing import List, Optional, Tuple, Dict, Any
 from collections import OrderedDict
 from .tensor import Tensor
-from .errors import AMEVAForgeUnsupportedOperationError
+from .errors import AMEVAForgeUnsupportedOperationError, AMEVAForgeValidationError
 
 # WHAT: 내부 연산 모듈에서 다양한 수학적 연산 함수들을 임포트합니다.
 # WHY: 신경망 계층 내에서 순전파 연산을 수행하기 위해 필요한 연산들을 제공하기 때문입니다.
@@ -653,78 +653,56 @@ class MultiheadAttention(Module):
     # WHAT: MultiheadAttention의 초기화 메서드입니다.
     # WHY: 임베딩 차원, 헤드 개수를 정하고 프로젝션을 위한 선형 레이어(Linear)를 구성하기 위함입니다.
     # HOW: 각 프로젝션(q, k, v, out)용 Linear 인스턴스를 생성해 속성으로 등록합니다.
-    def __init__(self, embed_dim, num_heads, dropout=0.0, bias=True):
+    def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.0, bias: bool = True):
         super().__init__()
+        if embed_dim % num_heads != 0:
+            raise AMEVAForgeValidationError(f"embed_dim ({embed_dim}) must be divisible by num_heads ({num_heads})")
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.dropout = dropout
-        
-        # WHAT: 단일 어텐션 헤드가 처리할 차원의 크기입니다.
-        # WHY: 전체 차원을 헤드 수로 균등하게 분할하여 병렬 연산하기 위함입니다.
-        # HOW: 전체 임베딩 차원을 헤드 개수로 나눈 몫을 저장합니다.
         self.head_dim = embed_dim // num_heads
         
-        # WHAT: Query 텐서를 프로젝션하기 위한 선형 계층입니다.
-        # WHY: 입력 데이터를 어텐션 메커니즘을 위한 질의(Query) 공간으로 매핑하기 위함입니다.
-        # HOW: embed_dim 크기의 입출력을 갖는 Linear 모듈로 초기화됩니다.
         self.q_proj = Linear(embed_dim, embed_dim, bias=bias)
-        
-        # WHAT: Key 텐서를 프로젝션하기 위한 선형 계층입니다.
-        # WHY: 어텐션에서 질의와 비교될 대상(Key) 공간으로 매핑하기 위함입니다.
-        # HOW: Linear(embed_dim, embed_dim)으로 구성됩니다.
         self.k_proj = Linear(embed_dim, embed_dim, bias=bias)
-        
-        # WHAT: Value 텐서를 프로젝션하기 위한 선형 계층입니다.
-        # WHY: 어텐션 가중치가 곱해져 실제 정보(Value)로 쓰일 공간으로 매핑하기 위함입니다.
-        # HOW: Linear(embed_dim, embed_dim)으로 구성됩니다.
         self.v_proj = Linear(embed_dim, embed_dim, bias=bias)
-        
-        # WHAT: 여러 헤드에서 합쳐진 결과를 최종 차원으로 복원하는 선형 계층입니다.
-        # WHY: 병렬 처리된 다중 관점의 정보를 하나로 융합(mix)하기 위함입니다.
-        # HOW: 출력 차원인 embed_dim으로 다시 한번 선형 결합합니다.
         self.out_proj = Linear(embed_dim, embed_dim, bias=bias)
         
-    # WHAT: 멀티헤드 어텐션의 순전파 메서드입니다.
-    # WHY: 입력된 q, k, v에 대해 실제 스케일드 닷 프로덕트 어텐션 연산을 수행하기 위함입니다.
-    # HOW: 입력을 리니어 변환하고 차원을 헤드 단위로 쪼갠 뒤 어텐션을 적용하고 합쳐서 최종 리니어 변환합니다.
-    def forward(self, query, key, value, attn_mask=None, is_causal=False):
+    def forward(self, query, key, value, key_padding_mask=None, need_weights=False, attn_mask=None, is_causal=False):
         from .functional import scaled_dot_product_attention
-        from .ops import reshape, permute
+        from .ops import reshape, permute, tensor, add
+        from .errors import AMEVAForgeShapeError
         
-        # WHAT: 입력 텐서들의 형상(Shape) 정보를 추출합니다.
-        # WHY: 차원 변환(reshape) 시 필요한 배치 사이즈(B), 시퀀스 길이(L, S), 임베딩 차원(E)을 알기 위함입니다.
-        # HOW: query와 key의 shape 튜플을 언패킹합니다.
         B, L, E = query.shape
         _, S, _ = key.shape
         
-        # WHAT: 입력 텐서들을 각 프로젝션 계층을 통과시켜 변환합니다.
-        # WHY: 어텐션을 계산할 공간(Sub-space)으로 데이터를 매핑하기 위함입니다.
-        # HOW: 미리 정의된 q_proj, k_proj, v_proj를 호출합니다.
         q = self.q_proj(query)
         k = self.k_proj(key)
         v = self.v_proj(value)
         
-        # WHAT: 차원을 분할하고 재배열하여 다중 헤드 형태로 만듭니다.
-        # WHY: 1개의 거대한 행렬곱을 num_heads개의 독립적인 행렬곱으로 병렬화하기 위함입니다.
-        # HOW: 형상을 (Batch, Length, Heads, HeadDim)으로 바꾼 뒤 (Batch, Heads, Length, HeadDim)으로 치환(permute)합니다.
         q = permute(reshape(q, (B, L, self.num_heads, self.head_dim)), (0, 2, 1, 3))
         k = permute(reshape(k, (B, S, self.num_heads, self.head_dim)), (0, 2, 1, 3))
         v = permute(reshape(v, (B, S, self.num_heads, self.head_dim)), (0, 2, 1, 3))
         
-        # WHAT: 어텐션 스코어 및 결과값 계산입니다.
-        # WHY: 각 질의에 대해 모든 키와의 유사도를 구해 그 가중치만큼 Value를 혼합하기 위함입니다.
-        # HOW: functional의 scaled_dot_product_attention 함수를 호출합니다.
-        attn_out = scaled_dot_product_attention(q, k, v, attn_mask, self.dropout, is_causal, self.training)
-        
-        # WHAT: 다중 헤드 결과를 단일 텐서로 다시 병합합니다.
-        # WHY: 다음 레이어로 넘기기 위해 원래 임베딩 차원 형태로 되돌리기 위함입니다.
-        # HOW: permute로 헤드와 길이 차원을 되돌린 후 reshape로 묶습니다.
+        # key_padding_mask (B, S) 처리: True인 위치는 어텐션에서 제외(-1e9)
+        combined_mask = attn_mask
+        if key_padding_mask is not None:
+            kp_data = key_padding_mask.numpy() if hasattr(key_padding_mask, 'numpy') else key_padding_mask
+            if kp_data.dtype == bool or str(key_padding_mask.dtype) == 'bool':
+                kp_float = np.where(kp_data, -1e9, 0.0).astype(np.float32)
+            else:
+                kp_float = kp_data.astype(np.float32)
+            # (B, 1, 1, S) 형태로 브로드캐스팅
+            kp_float = kp_float[:, None, None, :]
+            kp_tensor = tensor(kp_float, device=query.device)
+            combined_mask = kp_tensor if combined_mask is None else add(combined_mask, kp_tensor)
+
+        attn_out = scaled_dot_product_attention(q, k, v, combined_mask, self.dropout, is_causal, self.training)
         attn_out = reshape(permute(attn_out, (0, 2, 1, 3)), (B, L, E))
+        out = self.out_proj(attn_out)
         
-        # WHAT: 결합된 결과에 최종 선형 변환을 적용합니다.
-        # WHY: 독립적으로 추출된 특징들을 서로 교차(mix)시키고 모델 표현력을 강화하기 위함입니다.
-        # HOW: out_proj를 호출하여 결과를 반환합니다.
-        return self.out_proj(attn_out)
+        if need_weights:
+            return out, None
+        return out
 
 # WHAT: 트랜스포머 인코더의 단일 레이어 블록 클래스입니다.
 # WHY: 자기 주의 메커니즘(Self-Attention)과 피드포워드 네트워크(FFN)를 결합해 시퀀스 내 문맥적 특징을 추출하기 위함입니다.
