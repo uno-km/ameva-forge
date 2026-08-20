@@ -1218,7 +1218,7 @@ class RMSNorm(Module):
             
     def forward(self, x):
         from .functional import rms_norm
-        return rms_norm(x, weight=self.weight, eps=self.eps)
+        return rms_norm(x, normalized_shape=self.normalized_shape, weight=self.weight, eps=self.eps)
 
 class RotaryEmbedding(Module):
     """

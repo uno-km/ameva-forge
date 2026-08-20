@@ -617,27 +617,50 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
         
     return out
 
-def rms_norm(x, weight=None, eps=1e-5):
+def rms_norm(x, normalized_shape=None, weight=None, eps=1e-5):
     """
     무엇을: Root Mean Square Normalization (RMSNorm)을 적용한다.
-    왜: LayerNorm 대비 평균 계산을 생략하여 추론 및 학습 처리 속도를 20~30% 가속한다.
-    어떻게: x / sqrt(mean(x^2) + eps) * weight
+    왜: LayerNorm 대비 평균 감산을 생략하여 계산 비용을 30% 절감하면서도 강력한 학습 안정성을 제공한다.
+    어떻게: x / sqrt(mean(x^2, dim=normalized_shape) + eps) * weight
+    PyTorch 2.4+ 시그니처 (x, normalized_shape, weight, eps) 및 LLaMA 시그니처 (x, weight, eps)를 모두 자동 수용한다.
     """
+    from .tensor import Tensor
+    # 시그니처 유연성 처리: 2번째 인자로 weight 텐서가 직접 전달된 경우
+    if isinstance(normalized_shape, (Tensor,)):
+        eps = 1e-5 if weight is None else float(weight) if isinstance(weight, (int, float)) else eps
+        weight = normalized_shape
+        normalized_shape = (x.shape[-1],)
+    elif normalized_shape is None:
+        if weight is not None and isinstance(weight, (int, float)):
+            eps = float(weight)
+            weight = None
+        normalized_shape = (x.shape[-1],)
+    elif isinstance(normalized_shape, int):
+        normalized_shape = (normalized_shape,)
+    else:
+        normalized_shape = tuple(normalized_shape)
+
     from .autograd import is_grad_enabled
     needs_grad = is_grad_enabled() and (x.requires_grad or (weight is not None and weight.requires_grad))
 
-    if not needs_grad and x.device == 'gpu':
-        from .tensor import Tensor
+    if not needs_grad and x.device == 'gpu' and len(normalized_shape) == 1:
         parents = (x,) if weight is None else (x, weight)
         return Tensor(shape=x.shape, dtype=x.dtype, device='gpu',
                       op='rmsnorm', parents=parents, op_params=[float(eps)],
                       requires_grad=False)
     
-    from .ops import sub, mul, div, add, mean_axis, full, sqrt, unsqueeze
+    from .ops import mul, div, add, mean_axis, full, sqrt, unsqueeze
+    dims = tuple(range(-len(normalized_shape), 0))
     sq = mul(x, x)
-    m = mean_axis(sq, -1)
-    m_view = unsqueeze(m, -1)
-    eps_t = full(m_view.shape, eps, device=x.device)
+    m = sq
+    for d in dims:
+        m = mean_axis(m, d)
+        
+    m_view = m
+    for _ in range(len(normalized_shape)):
+        m_view = unsqueeze(m_view, -1)
+        
+    eps_t = full(m_view.shape, float(eps), device=x.device)
     denom = sqrt(add(m_view, eps_t))
     out = div(x, denom)
     if weight is not None:

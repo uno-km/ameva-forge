@@ -119,4 +119,31 @@ def test_fuzz_embedding_padding_idx_and_bounds():
     with pytest.raises(IndexError):
         emb(tensor(np.array([-1], dtype=np.int32)))
 
+def test_fuzz_rms_norm_multidim_and_signatures():
+    """Fuzz test RMSNorm multi-dimensional normalized_shape and dual API signatures."""
+    import forge.functional as F
+    import forge.nn as nn
+    
+    # 1. Multi-dimensional reduction (B=2, H=3, W=4, norm_shape=(3, 4))
+    x = tensor(np.random.randn(2, 3, 4).astype(np.float32), requires_grad=True)
+    norm = nn.RMSNorm((3, 4), eps=1e-5)
+    y = norm(x)
+    assert y.shape == (2, 3, 4)
+    loss = y.sum()
+    loss.backward()
+    assert x.grad is not None
+    assert not np.isnan(x.grad.numpy()).any()
+
+    # 2. PyTorch 2.4 signature F.rms_norm(x, normalized_shape, weight, eps)
+    w = tensor(np.ones((4,)).astype(np.float32), requires_grad=True)
+    x1 = tensor(np.random.randn(2, 3, 4).astype(np.float32), requires_grad=True)
+    y1 = F.rms_norm(x1, (4,), weight=w, eps=1e-5)
+    assert y1.shape == (2, 3, 4)
+
+    # 3. LLaMA signature F.rms_norm(x, weight, eps)
+    x2 = tensor(np.random.randn(2, 3, 4).astype(np.float32), requires_grad=True)
+    y2 = F.rms_norm(x2, w, 1e-5)
+    assert y2.shape == (2, 3, 4)
+
+
 
