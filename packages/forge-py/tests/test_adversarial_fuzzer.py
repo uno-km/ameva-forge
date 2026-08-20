@@ -91,3 +91,32 @@ def test_fuzz_cross_entropy_ignore_index_and_3d():
     assert preds_3d.grad is not None
     assert not np.isnan(preds_3d.grad.numpy()).any()
 
+def test_fuzz_embedding_padding_idx_and_bounds():
+    """Fuzz test nn.Embedding padding_idx zeroing and out-of-bounds index rejection."""
+    import forge.nn as nn
+    emb = nn.Embedding(10, 16, padding_idx=0)
+    # Weight at padding_idx should be strictly 0
+    w_np = emb.weight.numpy()
+    np.testing.assert_allclose(w_np[0], np.zeros(16))
+    
+    # Forward lookup
+    idx = tensor(np.array([0, 3, 5, 0], dtype=np.int32))
+    out = emb(idx)
+    assert out.shape == (4, 16)
+    np.testing.assert_allclose(out.numpy()[0], np.zeros(16))
+    np.testing.assert_allclose(out.numpy()[3], np.zeros(16))
+    
+    # Backward gradient at padding_idx must stay 0
+    loss = out.sum()
+    loss.backward()
+    assert emb.weight.grad is not None
+    grad_w = emb.weight.grad.numpy()
+    np.testing.assert_allclose(grad_w[0], np.zeros(16))
+    
+    # Out of bounds index should raise IndexError
+    with pytest.raises(IndexError):
+        emb(tensor(np.array([12], dtype=np.int32)))
+    with pytest.raises(IndexError):
+        emb(tensor(np.array([-1], dtype=np.int32)))
+
+

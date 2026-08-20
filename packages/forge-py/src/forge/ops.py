@@ -2446,10 +2446,13 @@ def dropout(x: Tensor, p: float = 0.5, training: bool = True) -> Tensor:
 # HOW: numpy 팬시 인덱싱(data_w[data_i])을 사용하고, 미분 시 np.add.at을 통해 추출된 위치에 기울기를 누적합니다.
 class EmbeddingFunction(Function):
     @staticmethod
-    def forward(ctx, weight: Tensor, index: Tensor) -> Tensor:
+    def forward(ctx, weight: Tensor, index: Tensor, padding_idx: Optional[int] = None) -> Tensor:
         _ensure_same_device(weight, index, "embedding")
         ctx.save_for_backward(weight, index)
+        ctx.padding_idx = padding_idx
         out_shape = index.shape + (weight.shape[-1],)
+        vocab_size = weight.shape[0]
+        
         if weight.device == "gpu" and index.device == "gpu":
             num_tokens = math.prod(index.shape)
             embedding_dim = weight.shape[-1]
@@ -2462,39 +2465,43 @@ class EmbeddingFunction(Function):
         data_w = _require_cpu_data(weight, "weight")
         data_i = _require_cpu_data(index, "index").astype(int)
         
-        # WHAT: 정수 인덱스 배열에 해당하는 가중치 벡터들을 가져옵니다.
-        # WHY: 그것이 임베딩 룩업의 본질이기 때문입니다.
-        # HOW: data_w[data_i]로 가져옵니다.
+        # OOB 경계 검사: 음수 인덱스 랩핑 및 상한 초과 에러 방출 (PyTorch Invariant)
+        if np.any(data_i < 0) or np.any(data_i >= vocab_size):
+            raise IndexError(f"index out of range in embedding: vocab_size={vocab_size}, got min={int(np.min(data_i))}, max={int(np.max(data_i))}")
+        
         out_data = data_w[data_i]
         return Tensor(shape=out_data.shape, dtype="float32", device="cpu", data=out_data)
 
     @staticmethod
-    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, type(None)]:
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, type(None), type(None)]:
         weight, index = ctx.saved_tensors
+        padding_idx = getattr(ctx, "padding_idx", None)
+        vocab_size = weight.shape[0]
+        
         if grad_output.device == "gpu" or weight.device == "gpu":
             num_tokens = math.prod(index.shape)
             embedding_dim = weight.shape[-1]
-            vocab_size = weight.shape[0]
             op_params = [num_tokens, embedding_dim, vocab_size, vocab_size * embedding_dim]
             grad_w = Tensor(shape=weight.shape, dtype="float32", device="gpu",
                             op="embedding_backward", parents=(grad_output, index),
                             op_params=op_params)
-            return (grad_w, None)
+            return (grad_w, None, None)
         data_i = _require_cpu_data(index, "index").astype(int)
         data_g = _require_cpu_data(grad_output, "grad_output")
         
         # WHAT: 원본 가중치 크기의 0 텐서를 만들고 미분값을 더해줍니다.
-        # WHY: 여러 번 참조된 인덱스는 기울기가 합산되어야 가중치 업데이트가 제대로 이루어지기 때문입니다.
-        # HOW: np.add.at 함수를 사용해 data_g를 data_i 위치에 안전하게 누적합니다.
         grad_w = np.zeros_like(_require_cpu_data(weight, "weight"))
         np.add.at(grad_w, data_i, data_g)
-        return (Tensor(shape=weight.shape, dtype="float32", device="cpu", data=grad_w), None)
+        if padding_idx is not None and 0 <= padding_idx < vocab_size:
+            grad_w[padding_idx] = 0.0
+            
+        return (Tensor(shape=weight.shape, dtype="float32", device="cpu", data=grad_w), None, None)
 
 # WHAT: 임베딩 룩업 편의 함수입니다.
 # WHY: 외부에서 룩업 연산을 쉽게 호출하기 위함입니다.
 # HOW: EmbeddingFunction.apply를 호출합니다.
-def embedding(weight: Tensor, index: Tensor) -> Tensor:
-    return EmbeddingFunction.apply(weight, index)
+def embedding(weight: Tensor, index: Tensor, padding_idx: Optional[int] = None) -> Tensor:
+    return EmbeddingFunction.apply(weight, index, padding_idx)
 
 # WHAT: 배치 행렬 곱(Batched Matrix Multiplication, BMM) 연산 클래스입니다.
 # WHY: 트랜스포머(Transformer)의 어텐션 메커니즘 등에서 배치 단위로 (B, N, M)과 (B, M, P) 행렬 곱을 동시 수행하기 위함입니다.

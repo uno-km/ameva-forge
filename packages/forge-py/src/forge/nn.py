@@ -11,7 +11,7 @@
 # WHAT: typing 모듈에서 List 타입을 임포트합니다.
 # WHY: 타입 힌팅을 통해 코드의 가독성을 높이고 정적 분석을 용이하게 하기 위함입니다.
 # HOW: 반환 값 등의 타입 명시에 사용됩니다.
-from typing import List
+from typing import List, Optional, Tuple, Dict, Any
 from collections import OrderedDict
 from .tensor import Tensor
 from .errors import AMEVAForgeUnsupportedOperationError
@@ -875,28 +875,21 @@ class Embedding(Module):
     # WHAT: 임베딩 계층 초기화 메서드입니다.
     # WHY: 어휘 사전 크기와 임베딩 차원을 받아 가중치 파라미터를 생성하기 위함입니다.
     # HOW: 랜덤 정규분포를 사용해 초기 가중치 행렬을 구성하고 학습 가능한 텐서로 만듭니다.
-    def __init__(self, num_embeddings, embedding_dim):
+    def __init__(self, num_embeddings: int, embedding_dim: int, padding_idx: Optional[int] = None):
         super().__init__()
         # WHAT: 어휘 사전(Vocabulary)의 총 단어 개수입니다.
-        # WHY: 룩업 테이블 행렬의 행(Row) 개수를 결정하기 위함입니다.
-        # HOW: 멤버 변수로 저장합니다.
         self.num_embeddings = num_embeddings
         
         # WHAT: 각 단어가 표현될 밀집 벡터의 차원 수입니다.
-        # WHY: 룩업 테이블 행렬의 열(Column) 개수를 결정하기 위함입니다.
-        # HOW: 멤버 변수로 저장합니다.
         self.embedding_dim = embedding_dim
+        self.padding_idx = padding_idx
         
         # Standard normal initialization
-        # WHAT: 임베딩 가중치의 초기 데이터 행렬입니다.
-        # WHY: 모델이 처음부터 다양한 의미 공간을 탐색하도록 무작위로 분산시키기 위함입니다.
-        # HOW: np.random.randn을 통해 (num_embeddings, embedding_dim) 크기의 배열을 생성합니다.
         data = np.random.randn(num_embeddings, embedding_dim).astype(np.float32)
+        if padding_idx is not None and 0 <= padding_idx < num_embeddings:
+            data[padding_idx] = 0.0
         
         from .ops import tensor
-        # WHAT: 임베딩 룩업 테이블 역할을 하는 학습 가능한 텐서입니다.
-        # WHY: 훈련 과정을 통해 단어 간의 유사도와 관계를 가중치로 최적화하기 위함입니다.
-        # HOW: requires_grad=True로 설정하여 저장합니다.
         self.weight = tensor(data, requires_grad=True)
 
     # WHAT: 임베딩 계층의 순전파 연산입니다.
@@ -904,7 +897,7 @@ class Embedding(Module):
     # HOW: 내부 ops.embedding 함수를 호출하여 룩업을 수행합니다.
     def forward(self, x):
         from .ops import embedding
-        return embedding(self.weight, x)
+        return embedding(self.weight, x, padding_idx=self.padding_idx)
 
 # WHAT: 기본 순환 신경망 셀(RNN Cell)을 구현한 클래스입니다.
 # WHY: 단일 타임스텝(time step)에 대해 입력과 이전 은닉 상태(Hidden State)를 받아 새로운 은닉 상태를 계산하기 위함입니다.
