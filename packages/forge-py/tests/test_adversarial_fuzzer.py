@@ -169,6 +169,33 @@ def test_fuzz_multihead_attention_masks_and_invariants():
     assert q.grad is not None
     assert not np.isnan(q.grad.numpy()).any()
 
+def test_fuzz_llama_gqa_and_mismatched_kv_heads():
+    """Fuzz test LLaMA Grouped Query Attention (GQA) with 4x query heads vs KV heads."""
+    from forge.models.llama import LlamaConfig, LlamaAttention
+    
+    # 8 Query heads, 2 KV heads (GQA with ratio 4:1)
+    cfg = LlamaConfig(
+        vocab_size=100,
+        hidden_size=64,
+        intermediate_size=128,
+        num_hidden_layers=2,
+        num_attention_heads=8,
+        num_key_value_heads=2,
+        device="cpu"
+    )
+    attn = LlamaAttention(cfg)
+    x = tensor(np.random.randn(2, 5, 64).astype(np.float32), requires_grad=True)
+    out, past_kv = attn(x)
+    assert out.shape == (2, 5, 64)
+    assert past_kv[0].shape == (2, 2, 5, 8) # (B, num_kv_heads, S, head_dim)
+    
+    # Backward pass verification
+    loss = out.sum()
+    loss.backward()
+    assert x.grad is not None
+    assert not np.isnan(x.grad.numpy()).any()
+
+
 
 
 

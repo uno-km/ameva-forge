@@ -71,8 +71,11 @@ class LlamaAttention(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
-        self.head_dim = self.hidden_size // self.num_heads
         self.num_key_value_heads = config.num_key_value_heads
+        if self.num_heads % self.num_key_value_heads != 0:
+            raise ValueError(f"num_attention_heads ({self.num_heads}) must be divisible by num_key_value_heads ({self.num_key_value_heads})")
+        self.head_dim = self.hidden_size // self.num_heads
+        self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.rope_theta = config.rope_theta
 
         self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
@@ -109,9 +112,26 @@ class LlamaAttention(nn.Module):
 
         present_key_value = (k, v)
 
+        # GQA: Repeat Key/Value heads to match Query heads if GQA is enabled
+        if self.num_key_value_groups > 1:
+            from forge.ops import cat
+            repeated_k = []
+            repeated_v = []
+            for h in range(self.num_key_value_heads):
+                k_slice = k[:, h:h+1, :, :]
+                v_slice = v[:, h:h+1, :, :]
+                for _ in range(self.num_key_value_groups):
+                    repeated_k.append(k_slice)
+                    repeated_v.append(v_slice)
+            k_for_attn = cat(repeated_k, dim=1)
+            v_for_attn = cat(repeated_v, dim=1)
+        else:
+            k_for_attn = k
+            v_for_attn = v
+
         # FlashAttention / Scaled Dot-Product Attention
         scale = 1.0 / math.sqrt(self.head_dim)
-        attn_output = F.scaled_dot_product_attention(q, k, v, scale=scale, is_causal=True)
+        attn_output = F.scaled_dot_product_attention(q, k_for_attn, v_for_attn, scale=scale, is_causal=True)
 
         # [B, H, L, d] -> [B, L, H, d] -> [B, L, H * d] (Restore sequence-contiguous layout)
         attn_output = attn_output.permute(0, 2, 1, 3).reshape((B, L, self.hidden_size))
