@@ -518,6 +518,32 @@ class AvgPool2d(Module):
         from .ops import avg_pool2d
         return avg_pool2d(x, self.kernel_size, self.stride, self.padding)
 
+class AdaptiveAvgPool2d(Module):
+    """
+    무엇을: 임의 크기의 2D 입력에 대해 지정된 출력 크기(output_size)로 적응형 평균 풀링을 수행합니다.
+    왜: ResNet, EfficientNet, MobileNet 등 비전 모델의 헤드 분류기 직전 공간 차원 요약을 위함입니다.
+    """
+    def __init__(self, output_size: Any):
+        super().__init__()
+        self.output_size = output_size
+
+    def forward(self, x: Tensor) -> Tensor:
+        from .ops import adaptive_avg_pool2d
+        return adaptive_avg_pool2d(x, self.output_size)
+
+class AdaptiveMaxPool2d(Module):
+    """
+    무엇을: 임의 크기의 2D 입력에 대해 지정된 출력 크기(output_size)로 적응형 최대 풀링을 수행합니다.
+    왜: 입력 해상도에 무관하게 고정 크기의 공간 최댓값 피처맵을 추출하기 위함입니다.
+    """
+    def __init__(self, output_size: Any):
+        super().__init__()
+        self.output_size = output_size
+
+    def forward(self, x: Tensor) -> Tensor:
+        from .ops import adaptive_max_pool2d
+        return adaptive_max_pool2d(x, self.output_size)
+
 # WHAT: 다차원 텐서를 연속된 1차원 데이터로 펼치는(Flatten) 계층 클래스입니다.
 # WHY: 합성곱(CNN) 층을 거친 다차원 피처맵을 완전 연결(Linear) 계층의 입력으로 주입할 수 있도록 형태를 변환하기 위함입니다.
 # HOW: start_dim부터 end_dim까지의 차원을 결합하여 새로운 형태의 텐서를 만듭니다.

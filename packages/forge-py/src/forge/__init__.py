@@ -27,7 +27,8 @@ from .ops import (
     unsqueeze, squeeze, flatten, permute, max_op, max_axis, var, std, sqrt,
     cat, where, pad, gather, scatter, dropout, conv2d, max_pool2d, avg_pool2d, bmm,
     maximum, minimum, clamp,
-    arange, eye, linspace, triu, tril
+    arange, eye, linspace, triu, tril,
+    adaptive_avg_pool2d, adaptive_max_pool2d
 )
 # 텐서 객체 자체를 정의하는 클래스 및 GC 함수 임포트
 from .tensor import Tensor, flush_gc
@@ -67,7 +68,8 @@ from .nn import (
     BatchNorm2d, Dropout, LayerNorm, MultiheadAttention, TransformerEncoderLayer,
     PositionalEncoding, RNNCell, LSTMCell, RNN, LSTM, RMSNorm, RotaryEmbedding, SwiGLU, ModuleList,
     GELU, SiLU, LeakyReLU, ELU, CosineSimilarity,
-    Identity, ConstantPad2d, ZeroPad2d, ReflectionPad2d, ReplicationPad2d
+    Identity, ConstantPad2d, ZeroPad2d, ReflectionPad2d, ReplicationPad2d,
+    AdaptiveAvgPool2d, AdaptiveMaxPool2d
 )
 # 최적화 알고리즘이 있는 optim 서브모듈과 학습률 스케줄러 임포트
 from . import optim  

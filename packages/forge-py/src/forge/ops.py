@@ -2655,6 +2655,123 @@ class AvgPool2dFunction(Function):
 def avg_pool2d(x: Tensor, kernel_size, stride=None, padding=0) -> Tensor:
     return AvgPool2dFunction.apply(x, kernel_size, stride, padding)
 
+
+# WHAT: 2차원 적응형 평균 풀링(Adaptive Average Pooling 2D) 연산 클래스입니다.
+# WHY: 입력 피처맵의 해상도에 상관없이 지정된 출력 크기(output_size: (H, W))로 공간 차원을 요약하기 위함입니다.
+class AdaptiveAvgPool2dFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, x: Tensor, output_size: Any) -> Tensor:
+        if isinstance(output_size, int):
+            out_h, out_w = output_size, output_size
+        else:
+            out_h, out_w = output_size
+        ctx.save_for_backward(x)
+        ctx.output_size = (out_h, out_w)
+        
+        if len(x.shape) != 4:
+            raise AMEVAForgeShapeError(f"adaptive_avg_pool2d requires 4D tensor (N, C, H, W), got shape {x.shape}")
+            
+        N, C, H, W = x.shape
+        data = _require_cpu_data(x, "x")
+        out = np.zeros((N, C, out_h, out_w), dtype=np.float32)
+        
+        for oh in range(out_h):
+            h_start = int(np.floor(oh * H / out_h))
+            h_end = int(np.ceil((oh + 1) * H / out_h))
+            for ow in range(out_w):
+                w_start = int(np.floor(ow * W / out_w))
+                w_end = int(np.ceil((ow + 1) * W / out_w))
+                patch = data[:, :, h_start:h_end, w_start:w_end]
+                out[:, :, oh, ow] = np.mean(patch, axis=(2, 3))
+                
+        return Tensor(shape=(N, C, out_h, out_w), dtype="float32", device="cpu", data=out)
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, None]:
+        x, = ctx.saved_tensors
+        out_h, out_w = ctx.output_size
+        N, C, H, W = x.shape
+        
+        grad_out_np = _require_cpu_data(grad_output, "grad_output")
+        grad_x = np.zeros((N, C, H, W), dtype=np.float32)
+        
+        for oh in range(out_h):
+            h_start = int(np.floor(oh * H / out_h))
+            h_end = int(np.ceil((oh + 1) * H / out_h))
+            for ow in range(out_w):
+                w_start = int(np.floor(ow * W / out_w))
+                w_end = int(np.ceil((ow + 1) * W / out_w))
+                area = float((h_end - h_start) * (w_end - w_start))
+                g = grad_out_np[:, :, oh:oh+1, ow:ow+1] / area
+                grad_x[:, :, h_start:h_end, w_start:w_end] += g
+                
+        return (Tensor(shape=x.shape, dtype="float32", device="cpu", data=grad_x), None)
+
+def adaptive_avg_pool2d(x: Tensor, output_size: Any) -> Tensor:
+    """Applies a 2D adaptive average pooling over an input signal composed of several input planes."""
+    return AdaptiveAvgPool2dFunction.apply(x, output_size)
+
+
+# WHAT: 2차원 적응형 최대 풀링(Adaptive Max Pooling 2D) 연산 클래스입니다.
+class AdaptiveMaxPool2dFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, x: Tensor, output_size: Any) -> Tensor:
+        if isinstance(output_size, int):
+            out_h, out_w = output_size, output_size
+        else:
+            out_h, out_w = output_size
+        ctx.save_for_backward(x)
+        ctx.output_size = (out_h, out_w)
+        
+        if len(x.shape) != 4:
+            raise AMEVAForgeShapeError(f"adaptive_max_pool2d requires 4D tensor (N, C, H, W), got shape {x.shape}")
+            
+        N, C, H, W = x.shape
+        data = _require_cpu_data(x, "x")
+        out = np.zeros((N, C, out_h, out_w), dtype=np.float32)
+        
+        for oh in range(out_h):
+            h_start = int(np.floor(oh * H / out_h))
+            h_end = int(np.ceil((oh + 1) * H / out_h))
+            for ow in range(out_w):
+                w_start = int(np.floor(ow * W / out_w))
+                w_end = int(np.ceil((ow + 1) * W / out_w))
+                patch = data[:, :, h_start:h_end, w_start:w_end]
+                out[:, :, oh, ow] = np.max(patch, axis=(2, 3))
+                
+        return Tensor(shape=(N, C, out_h, out_w), dtype="float32", device="cpu", data=out)
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, None]:
+        x, = ctx.saved_tensors
+        out_h, out_w = ctx.output_size
+        N, C, H, W = x.shape
+        
+        data_x = _require_cpu_data(x, "x")
+        grad_out_np = _require_cpu_data(grad_output, "grad_output")
+        grad_x = np.zeros((N, C, H, W), dtype=np.float32)
+        
+        for oh in range(out_h):
+            h_start = int(np.floor(oh * H / out_h))
+            h_end = int(np.ceil((oh + 1) * H / out_h))
+            for ow in range(out_w):
+                w_start = int(np.floor(ow * W / out_w))
+                w_end = int(np.ceil((ow + 1) * W / out_w))
+                patch = data_x[:, :, h_start:h_end, w_start:w_end]
+                max_val = np.max(patch, axis=(2, 3), keepdims=True)
+                mask = (patch == max_val).astype(np.float32)
+                sum_mask = np.sum(mask, axis=(2, 3), keepdims=True)
+                sum_mask[sum_mask == 0] = 1.0
+                mask = mask / sum_mask
+                g = grad_out_np[:, :, oh:oh+1, ow:ow+1] * mask
+                grad_x[:, :, h_start:h_end, w_start:w_end] += g
+                
+        return (Tensor(shape=x.shape, dtype="float32", device="cpu", data=grad_x), None)
+
+def adaptive_max_pool2d(x: Tensor, output_size: Any) -> Tensor:
+    """Applies a 2D adaptive max pooling over an input signal composed of several input planes."""
+    return AdaptiveMaxPool2dFunction.apply(x, output_size)
+
 # WHAT: Col2Im(Column to Image) 편의 함수입니다.
 # WHY: 역전파 등에서 평탄화된 열벡터를 다시 2D 이미지 형태로 복원하기 위함입니다.
 # HOW: Col2ImFunction.apply를 호출합니다. (Col2ImFunction 정의는 다른 곳에 존재하거나 별도 모듈에 있습니다)

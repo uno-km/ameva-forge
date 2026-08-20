@@ -364,6 +364,36 @@ def test_fuzz_identity_and_pad_modules():
     loss_p.backward()
     np.testing.assert_allclose(x_img.grad.numpy(), np.ones((1, 1, 4, 4), dtype=np.float32))
 
+def test_fuzz_adaptive_pooling_modules_and_autograd():
+    """Fuzz test AdaptiveAvgPool2d and AdaptiveMaxPool2d with arbitrary output sizes."""
+    import forge as at
+    import forge.nn as nn
+    
+    # 1. Global Adaptive Average Pooling ((1, 1))
+    gap = nn.AdaptiveAvgPool2d((1, 1))
+    x = at.tensor(np.arange(16, dtype=np.float32).reshape(1, 1, 4, 4), requires_grad=True)
+    out_gap = gap(x)
+    assert out_gap.shape == (1, 1, 1, 1)
+    np.testing.assert_allclose(out_gap.numpy(), np.array([[[[7.5]]]], dtype=np.float32))
+    loss_gap = out_gap.sum()
+    loss_gap.backward()
+    np.testing.assert_allclose(x.grad.numpy(), np.full((1, 1, 4, 4), 1.0 / 16.0, dtype=np.float32))
+    
+    # 2. Adaptive Max Pooling ((2, 2))
+    gmp = nn.AdaptiveMaxPool2d((2, 2))
+    x2 = at.tensor(np.array([[[[1, 2, 3, 4],
+                               [5, 6, 7, 8],
+                               [9, 10, 11, 12],
+                               [13, 14, 15, 16]]]], dtype=np.float32), requires_grad=True)
+    out_gmp = gmp(x2)
+    assert out_gmp.shape == (1, 1, 2, 2)
+    np.testing.assert_allclose(out_gmp.numpy(), np.array([[[[6, 8], [14, 16]]]], dtype=np.float32))
+    loss_gmp = out_gmp.sum()
+    loss_gmp.backward()
+    assert x2.grad is not None
+    assert np.sum(x2.grad.numpy()) == 4.0
+
+
 
 
 

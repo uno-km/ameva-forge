@@ -434,6 +434,16 @@ def pad(input, pad, mode: str = 'constant', value: float = 0.0):
     from .ops import pad as ops_pad
     return ops_pad(input, pad, mode=mode, value=value)
 
+def adaptive_avg_pool2d(input, output_size):
+    """Applies a 2D adaptive average pooling."""
+    from .ops import adaptive_avg_pool2d as ops_adaptive_avg_pool2d
+    return ops_adaptive_avg_pool2d(input, output_size)
+
+def adaptive_max_pool2d(input, output_size):
+    """Applies a 2D adaptive max pooling."""
+    from .ops import adaptive_max_pool2d as ops_adaptive_max_pool2d
+    return ops_adaptive_max_pool2d(input, output_size)
+
 def _move_tensor_state(dst, src) -> None:
     """
     WHAT: src 텐서의 상태와 지연 연산 그래프를 dst 텐서로 안전하게 이동(Move)합니다.
