@@ -37,7 +37,8 @@ from .ops import (
     multinomial, randint, bernoulli, normal,
     roll, repeat_interleave, meshgrid, diag, diagonal, trace, outer,
     masked_fill, index_select, masked_select, nonzero, take_along_dim,
-    cumprod, unflatten, cdist, norm, atleast_1d, atleast_2d, atleast_3d
+    cumprod, unflatten, cdist, norm, atleast_1d, atleast_2d, atleast_3d,
+    einsum, kron, tensordot, nan_to_num
 )
 any = any_op
 all = all_op

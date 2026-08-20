@@ -1546,6 +1546,26 @@ class Tensor:
         from .ops import norm
         return norm(self, p=p, dim=dim, keepdim=keepdim)
 
+    def nan_to_num(self, nan: float = 0.0, posinf: Optional[float] = None, neginf: Optional[float] = None):
+        """Replaces NaN, positive infinity, and negative infinity values."""
+        self._check_disposed()
+        from .ops import nan_to_num
+        return nan_to_num(self, nan=nan, posinf=posinf, neginf=neginf)
+
+    def nan_to_num_(self, nan: float = 0.0, posinf: Optional[float] = None, neginf: Optional[float] = None):
+        """In-place version of nan_to_num."""
+        self._check_disposed()
+        from .ops import _require_cpu_data
+        data_x = _require_cpu_data(self, "self")
+        nan_val = float(nan)
+        posinf_val = float(posinf) if posinf is not None else 1.7976931348623157e+308
+        neginf_val = float(neginf) if neginf is not None else -1.7976931348623157e+308
+        data_x[np.isnan(data_x)] = nan_val
+        data_x[np.isposinf(data_x)] = posinf_val
+        data_x[np.isneginf(data_x)] = neginf_val
+        self._version += 1
+        return self
+
     def __getitem__(self, key):
         """
         WHAT: 인덱싱 또는 슬라이싱 문법(예: tensor[0:2])을 사용하여 텐서의 부분 배열을 추출합니다.

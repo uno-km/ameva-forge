@@ -825,6 +825,46 @@ def test_fuzz_adamw_rmsprop_adagrad_linearlr_lambdalr_multisteplr():
     sched_ms.step() # epoch 2 (hit milestone!)
     assert abs(opt3.lr - 0.5) < 1e-5
 
+def test_fuzz_einsum_kron_tensordot_nan_to_num():
+    """Fuzz test einsum, kron, tensordot, nan_to_num with Autograd."""
+    import forge as at
+    
+    # 1. einsum matrix multiplication & backward
+    a = at.tensor(np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32), requires_grad=True)
+    b = at.tensor(np.array([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32), requires_grad=True)
+    c = at.einsum("ij,jk->ik", a, b)
+    assert c.shape == (2, 2)
+    np.testing.assert_allclose(c.numpy(), np.array([[19.0, 22.0], [43.0, 50.0]]))
+    c.sum().backward()
+    np.testing.assert_allclose(a.grad.numpy(), np.array([[11.0, 15.0], [11.0, 15.0]]))
+    np.testing.assert_allclose(b.grad.numpy(), np.array([[4.0, 4.0], [6.0, 6.0]]))
+    
+    # 2. einsum batched trace & contraction
+    x = at.tensor(np.array([[[1.0, 2.0], [3.0, 4.0]]], dtype=np.float32))
+    tr = at.einsum("bii->b", x)
+    np.testing.assert_allclose(tr.numpy(), np.array([5.0]))
+    
+    # 3. kron & backward
+    k1 = at.tensor(np.array([[1.0, 2.0]], dtype=np.float32), requires_grad=True)
+    k2 = at.tensor(np.array([[3.0], [4.0]], dtype=np.float32), requires_grad=True)
+    k_out = at.kron(k1, k2)
+    assert k_out.shape == (2, 2)
+    np.testing.assert_allclose(k_out.numpy(), np.array([[3.0, 6.0], [4.0, 8.0]]))
+    
+    # 4. tensordot
+    td1 = at.tensor(np.arange(6, dtype=np.float32).reshape(2, 3))
+    td2 = at.tensor(np.arange(12, dtype=np.float32).reshape(3, 4))
+    td_out = at.tensordot(td1, td2, dims=1)
+    assert td_out.shape == (2, 4)
+    
+    # 5. nan_to_num & backward
+    with_nan = at.tensor(np.array([1.0, float('nan'), float('inf'), float('-inf')], dtype=np.float32), requires_grad=True)
+    cleaned = with_nan.nan_to_num(nan=0.0, posinf=999.0, neginf=-999.0)
+    np.testing.assert_allclose(cleaned.numpy(), np.array([1.0, 0.0, 999.0, -999.0]))
+    (cleaned * 2.0).sum().backward()
+    np.testing.assert_allclose(with_nan.grad.numpy(), np.array([2.0, 0.0, 0.0, 0.0]))
+
+
 
 
 

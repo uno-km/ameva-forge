@@ -3894,5 +3894,143 @@ def atleast_3d(*tensors: Tensor) -> Union[Tensor, Tuple[Tensor, ...]]:
     return res[0] if len(res) == 1 else tuple(res)
 
 
+class EinsumFunction(Function):
+    @staticmethod
+    def forward(ctx, equation: str, *operands: Tensor) -> Tensor:
+        eq = equation.replace(" ", "")
+        data_ops = [_require_cpu_data(op, f"operand_{i}") for i, op in enumerate(operands)]
+        res = np.einsum(eq, *data_ops)
+        ctx.equation = eq
+        ctx.save_for_backward(*operands)
+        return Tensor(shape=res.shape, dtype=operands[0].dtype, device=operands[0].device, data=np.ascontiguousarray(res))
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple:
+        eq = ctx.equation
+        operands = ctx.saved_tensors
+        data_g = _require_cpu_data(grad_output, "grad_output")
+        data_ops = [_require_cpu_data(op, f"operand_{i}") for i, op in enumerate(operands)]
+        
+        if "->" in eq:
+            inputs_str, out_str = eq.split("->")
+        else:
+            inputs_str = eq
+            counts = {}
+            for ch in inputs_str:
+                if ch != ",":
+                    counts[ch] = counts.get(ch, 0) + 1
+            out_str = "".join(sorted([ch for ch, c in counts.items() if c == 1]))
+            
+        input_terms = inputs_str.split(",")
+        grads = []
+        
+        for k in range(len(operands)):
+            target_term = input_terms[k]
+            other_terms = [input_terms[i] for i in range(len(operands)) if i != k]
+            other_data = [data_ops[i] for i in range(len(operands)) if i != k]
+            
+            bwd_lhs = ",".join([out_str] + other_terms) if other_terms else out_str
+            bwd_eq = f"{bwd_lhs}->{target_term}"
+            bwd_args = [data_g] + other_data
+            
+            grad_k_data = np.einsum(bwd_eq, *bwd_args)
+            grads.append(Tensor(shape=grad_k_data.shape, dtype=grad_output.dtype, device=grad_output.device, data=np.ascontiguousarray(grad_k_data)))
+            
+        return tuple(grads)
+
+def einsum(equation: str, *operands: Tensor) -> Tensor:
+    """Sums the product of the elements of the input operands along dimensions specified using a notation based on the Einstein summation convention."""
+    return EinsumFunction.apply(equation, *operands)
+
+
+def kron(input: Tensor, other: Tensor) -> Tensor:
+    """Computes the Kronecker product of input and other."""
+    data_a = _require_cpu_data(input, "input")
+    data_b = _require_cpu_data(other, "other")
+    res = np.kron(data_a, data_b)
+    if input.requires_grad or other.requires_grad:
+        a_shape = list(input.shape)
+        b_shape = list(other.shape)
+        a_exp = input
+        b_exp = other
+        max_rank = max(len(a_shape), len(b_shape))
+        while len(a_exp.shape) < max_rank:
+            a_exp = a_exp.unsqueeze(0)
+        while len(b_exp.shape) < max_rank:
+            b_exp = b_exp.unsqueeze(0)
+        
+        for r in range(max_rank):
+            a_exp = a_exp.unsqueeze(2 * r + 1)
+            b_exp = b_exp.unsqueeze(2 * r)
+        prod = a_exp * b_exp
+        final_shape = tuple(a_exp.shape[2 * r] * b_exp.shape[2 * r + 1] for r in range(max_rank))
+        return prod.reshape(final_shape)
+    else:
+        return Tensor(shape=res.shape, dtype=input.dtype, device=input.device, data=np.ascontiguousarray(res))
+
+
+def tensordot(a: Tensor, b: Tensor, dims: Union[int, Tuple[Sequence[int], Sequence[int]]] = 2) -> Tensor:
+    """Computes tensor dot product along specified axes."""
+    if isinstance(dims, int):
+        axes_a = list(range(len(a.shape) - dims, len(a.shape)))
+        axes_b = list(range(0, dims))
+    else:
+        axes_a, axes_b = dims
+    data_a = _require_cpu_data(a, "a")
+    data_b = _require_cpu_data(b, "b")
+    res = np.tensordot(data_a, data_b, axes=(axes_a, axes_b))
+    if a.requires_grad or b.requires_grad:
+        rank_a = len(a.shape)
+        rank_b = len(b.shape)
+        chars = [chr(ord('a') + i) for i in range(rank_a + rank_b)]
+        chars_a = list(chars[:rank_a])
+        chars_b = list(chars[rank_a:])
+        for i, (ax_a, ax_b) in enumerate(zip(axes_a, axes_b)):
+            norm_a = ax_a if ax_a >= 0 else ax_a + rank_a
+            norm_b = ax_b if ax_b >= 0 else ax_b + rank_b
+            chars_b[norm_b] = chars_a[norm_a]
+        out_chars = [c for i, c in enumerate(chars_a) if i not in [ax if ax >= 0 else ax + rank_a for ax in axes_a]] + \
+                    [c for i, c in enumerate(chars_b) if i not in [ax if ax >= 0 else ax + rank_b for ax in axes_b]]
+        eq = f"{''.join(chars_a)},{''.join(chars_b)}->{''.join(out_chars)}"
+        return einsum(eq, a, b)
+    else:
+        return Tensor(shape=res.shape, dtype=a.dtype, device=a.device, data=np.ascontiguousarray(res))
+
+
+class NanToNumFunction(Function):
+    @staticmethod
+    def forward(ctx, input: Tensor, nan: float = 0.0, posinf: Optional[float] = None, neginf: Optional[float] = None) -> Tensor:
+        data_x = _require_cpu_data(input, "input")
+        res = np.copy(data_x)
+        nan_mask = np.isnan(data_x)
+        posinf_mask = np.isposinf(data_x)
+        neginf_mask = np.isneginf(data_x)
+        
+        nan_val = float(nan)
+        posinf_val = float(posinf) if posinf is not None else 1.7976931348623157e+308
+        neginf_val = float(neginf) if neginf is not None else -1.7976931348623157e+308
+        
+        res[nan_mask] = nan_val
+        res[posinf_mask] = posinf_val
+        res[neginf_mask] = neginf_val
+        
+        ctx.save_for_backward(Tensor(shape=data_x.shape, dtype="bool", device=input.device, data=(nan_mask | posinf_mask | neginf_mask)))
+        return Tensor(shape=res.shape, dtype=input.dtype, device=input.device, data=res)
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, None, None, None]:
+        invalid_mask, = ctx.saved_tensors
+        data_g = _require_cpu_data(grad_output, "grad_output")
+        data_inv = _require_cpu_data(invalid_mask, "invalid_mask").astype(bool)
+        grad_x = np.copy(data_g)
+        grad_x[data_inv] = 0.0
+        return Tensor(shape=grad_x.shape, dtype=grad_output.dtype, device=grad_output.device, data=grad_x), None, None, None
+
+def nan_to_num(input: Tensor, nan: float = 0.0, posinf: Optional[float] = None, neginf: Optional[float] = None) -> Tensor:
+    """Replaces NaN, positive infinity, and negative infinity values in input."""
+    return NanToNumFunction.apply(input, nan, posinf, neginf)
+
+
+
 
 
