@@ -3755,4 +3755,144 @@ def take_along_dim(input: Tensor, indices: Tensor, dim: int) -> Tensor:
     return TakeAlongDimFunction.apply(input, indices, dim)
 
 
+class CumprodFunction(Function):
+    @staticmethod
+    def forward(ctx, input: Tensor, dim: int) -> Tensor:
+        data_x = _require_cpu_data(input, "input")
+        rank = len(data_x.shape)
+        norm_dim = dim if dim >= 0 else dim + rank
+        res = np.cumprod(data_x, axis=norm_dim)
+        ctx.save_for_backward(input, Tensor(shape=res.shape, dtype=input.dtype, device=input.device, data=res))
+        ctx.dim = norm_dim
+        return Tensor(shape=res.shape, dtype=input.dtype, device=input.device, data=res)
+
+    @staticmethod
+    def backward(ctx, grad_output: Tensor) -> Tuple[Tensor, None]:
+        input, out = ctx.saved_tensors
+        data_x = _require_cpu_data(input, "input")
+        data_out = _require_cpu_data(out, "out")
+        data_g = _require_cpu_data(grad_output, "grad_output")
+        dim = ctx.dim
+        grad_x = np.zeros_like(data_x)
+        dim_size = data_x.shape[dim]
+        slices_i = [slice(None)] * len(data_x.shape)
+        slices_j = [slice(None)] * len(data_x.shape)
+        for i in range(dim_size):
+            slices_i[dim] = i
+            accum = np.zeros_like(data_x[tuple(slices_i)])
+            for j in range(i, dim_size):
+                slices_j[dim] = j
+                if i == 0:
+                    sub_prod = data_out[tuple(slices_j)] / np.where(data_x[tuple(slices_i)] == 0, 1e-12, data_x[tuple(slices_i)])
+                else:
+                    prev_slices = [slice(None)] * len(data_x.shape)
+                    prev_slices[dim] = i - 1
+                    denom = data_out[tuple(prev_slices)] * data_x[tuple(slices_i)]
+                    sub_prod = data_out[tuple(slices_j)] / np.where(denom == 0, 1e-12, denom) * data_out[tuple(prev_slices)]
+                accum += data_g[tuple(slices_j)] * sub_prod
+            grad_x[tuple(slices_i)] = accum
+        return Tensor(shape=grad_x.shape, dtype=grad_output.dtype, device=grad_output.device, data=grad_x), None
+
+def cumprod(input: Tensor, dim: int) -> Tensor:
+    """Returns the cumulative product of elements of input in the dimension dim."""
+    return CumprodFunction.apply(input, dim)
+
+def unflatten(input: Tensor, dim: int, sizes: Tuple[int, ...]) -> Tensor:
+    """Expands a dimension of the input tensor over multiple dimensions."""
+    shape = list(input.shape)
+    rank = len(shape)
+    norm_dim = dim if dim >= 0 else dim + rank
+    if norm_dim < 0 or norm_dim >= rank:
+        raise AMEVAForgeShapeError(f"unflatten: dim {dim} out of range for tensor of rank {rank}")
+    prod = 1
+    for s in sizes:
+        prod *= s
+    if prod != shape[norm_dim]:
+        raise AMEVAForgeShapeError(f"unflatten: sizes {sizes} product ({prod}) does not match dimension {shape[norm_dim]}")
+    new_shape = shape[:norm_dim] + list(sizes) + shape[norm_dim+1:]
+    return input.reshape(tuple(new_shape))
+
+def cdist(x1: Tensor, x2: Tensor, p: float = 2.0) -> Tensor:
+    """Computes batched the p-norm distance between each pair of the two collections of row vectors."""
+    diff = x1.unsqueeze(-2) - x2.unsqueeze(-3)
+    if p == 2.0:
+        return (diff ** 2).sum(dim=-1).sqrt()
+    elif p == 1.0:
+        return diff.abs().sum(dim=-1)
+    else:
+        return (diff.abs() ** p).sum(dim=-1) ** (1.0 / p)
+
+def norm(input: Tensor, p: Union[float, int, str] = 2, dim: Optional[Union[int, Tuple[int, ...]]] = None, keepdim: bool = False) -> Tensor:
+    """Returns the matrix norm or vector norm of a given tensor."""
+    if p == 2 or p == 2.0 or p == 'fro':
+        sq = (input ** 2)
+        if dim is None:
+            s = sq.sum()
+            return s.sqrt()
+        elif isinstance(dim, int):
+            return sq.sum(axis=dim, keepdim=keepdim).sqrt()
+        else:
+            res = sq
+            for d in sorted(dim, reverse=True):
+                res = res.sum(axis=d, keepdim=keepdim)
+            return res.sqrt()
+    elif p == 1 or p == 1.0:
+        ab = input.abs()
+        if dim is None:
+            return ab.sum()
+        elif isinstance(dim, int):
+            return ab.sum(axis=dim, keepdim=keepdim)
+        else:
+            res = ab
+            for d in sorted(dim, reverse=True):
+                res = res.sum(axis=d, keepdim=keepdim)
+            return res
+    else:
+        p_float = float(p)
+        ab = (input.abs() ** p_float)
+        if dim is None:
+            return ab.sum() ** (1.0 / p_float)
+        elif isinstance(dim, int):
+            return ab.sum(axis=dim, keepdim=keepdim) ** (1.0 / p_float)
+        else:
+            res = ab
+            for d in sorted(dim, reverse=True):
+                res = res.sum(axis=d, keepdim=keepdim)
+            return res ** (1.0 / p_float)
+
+def atleast_1d(*tensors: Tensor) -> Union[Tensor, Tuple[Tensor, ...]]:
+    res = []
+    for t in tensors:
+        if len(t.shape) == 0:
+            res.append(t.reshape((1,)))
+        else:
+            res.append(t)
+    return res[0] if len(res) == 1 else tuple(res)
+
+def atleast_2d(*tensors: Tensor) -> Union[Tensor, Tuple[Tensor, ...]]:
+    res = []
+    for t in tensors:
+        if len(t.shape) == 0:
+            res.append(t.reshape((1, 1)))
+        elif len(t.shape) == 1:
+            res.append(t.unsqueeze(0))
+        else:
+            res.append(t)
+    return res[0] if len(res) == 1 else tuple(res)
+
+def atleast_3d(*tensors: Tensor) -> Union[Tensor, Tuple[Tensor, ...]]:
+    res = []
+    for t in tensors:
+        if len(t.shape) == 0:
+            res.append(t.reshape((1, 1, 1)))
+        elif len(t.shape) == 1:
+            res.append(t.unsqueeze(0).unsqueeze(-1))
+        elif len(t.shape) == 2:
+            res.append(t.unsqueeze(-1))
+        else:
+            res.append(t)
+    return res[0] if len(res) == 1 else tuple(res)
+
+
+
 

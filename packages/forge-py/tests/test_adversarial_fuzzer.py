@@ -729,6 +729,48 @@ def test_fuzz_masked_fill_index_select_masked_select_nonzero_take_along_dim():
     assert t_out.shape == (2, 2)
     np.testing.assert_allclose(t_out.numpy(), np.array([[30.0, 10.0], [50.0, 60.0]]))
 
+def test_fuzz_cumprod_unflatten_cdist_norm_atleast_xd():
+    """Fuzz test cumprod, unflatten, cdist, norm, atleast_1d/2d/3d with Autograd."""
+    import forge as at
+    
+    # 1. cumprod & backward
+    a = at.tensor(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32), requires_grad=True)
+    cp = a.cumprod(dim=0)
+    assert cp.shape == (4,)
+    np.testing.assert_allclose(cp.numpy(), np.array([1.0, 2.0, 6.0, 24.0]))
+    cp.sum().backward()
+    # d(y1+y2+y3+y4)/da1 = 1 + a2 + a2*a3 + a2*a3*a4 = 1 + 2 + 6 + 24 = 33
+    # d(y1+y2+y3+y4)/da2 = a1 + a1*a3 + a1*a3*a4 = 1 + 3 + 12 = 16
+    # d(y1+y2+y3+y4)/da3 = a1*a2 + a1*a2*a4 = 2 + 8 = 10
+    # d(y1+y2+y3+y4)/da4 = a1*a2*a3 = 6
+    np.testing.assert_allclose(a.grad.numpy(), np.array([33.0, 16.0, 10.0, 6.0], dtype=np.float32))
+    
+    # 2. unflatten
+    t_flat = at.tensor(np.zeros((2, 12, 5), dtype=np.float32))
+    t_unflat = t_flat.unflatten(dim=1, sizes=(3, 4))
+    assert t_unflat.shape == (2, 3, 4, 5)
+    
+    # 3. cdist
+    x1 = at.tensor(np.array([[0.0, 0.0], [3.0, 4.0]], dtype=np.float32))
+    x2 = at.tensor(np.array([[0.0, 0.0]], dtype=np.float32))
+    dists = at.cdist(x1, x2, p=2.0)
+    assert dists.shape == (2, 1)
+    np.testing.assert_allclose(dists.numpy(), np.array([[0.0], [5.0]], dtype=np.float32))
+    
+    # 4. norm
+    v = at.tensor(np.array([3.0, 4.0], dtype=np.float32), requires_grad=True)
+    n = v.norm(p=2)
+    np.testing.assert_allclose(n.numpy(), 5.0)
+    n.backward()
+    np.testing.assert_allclose(v.grad.numpy(), np.array([0.6, 0.8], dtype=np.float32))
+    
+    # 5. atleast_1d, 2d, 3d
+    sc = at.tensor(5.0)
+    assert at.atleast_1d(sc).shape == (1,)
+    assert at.atleast_2d(sc).shape == (1, 1)
+    assert at.atleast_3d(sc).shape == (1, 1, 1)
+
+
 
 
 

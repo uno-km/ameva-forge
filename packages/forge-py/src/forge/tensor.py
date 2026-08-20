@@ -1099,25 +1099,93 @@ class Tensor:
         from .ops import elu
         return elu(self, alpha=alpha)
 
-    def sum(self):
-        """
-        WHAT: 텐서 내 모든 요소들의 합을 계산합니다.
-        WHY: 손실(Loss) 합산이나 특정 차원의 데이터를 집계하기 위함입니다.
-        HOW: ops.sum_op 함수를 호출하여 스칼라(또는 축소된 텐서)를 반환합니다.
-        """
+    def sqrt(self):
+        """Calculates element-wise square root."""
         self._check_disposed()
-        from .ops import sum_op
-        return sum_op(self)
+        from .ops import sqrt
+        return sqrt(self)
 
-    def mean(self):
+    def abs(self):
+        """Calculates element-wise absolute value."""
+        self._check_disposed()
+        from .ops import abs_op
+        return abs_op(self)
+
+    def exp(self):
+        """Calculates element-wise exponential."""
+        self._check_disposed()
+        from .ops import exp_op
+        return exp_op(self)
+
+    def log(self):
+        """Calculates element-wise natural logarithm."""
+        self._check_disposed()
+        from .ops import log_op
+        return log_op(self)
+
+    def sin(self):
+        """Calculates element-wise sine."""
+        self._check_disposed()
+        from .ops import sin_op
+        return sin_op(self)
+
+    def cos(self):
+        """Calculates element-wise cosine."""
+        self._check_disposed()
+        from .ops import cos_op
+        return cos_op(self)
+
+    def sum(self, dim: Optional[Union[int, Tuple[int, ...]]] = None, axis: Optional[Union[int, Tuple[int, ...]]] = None, keepdim: bool = False):
         """
-        WHAT: 텐서 내 모든 요소들의 평균을 계산합니다.
-        WHY: MSE 손실 계산 등에서 전체 데이터의 평균적인 크기를 구하기 위함입니다.
-        HOW: ops.mean_op 함수를 호출하여 결과를 반환합니다.
+        WHAT: 텐서 내 모든 요소 또는 특정 차원들의 합을 계산합니다.
+        WHY: 손실(Loss) 합산이나 특정 차원의 데이터를 집계하기 위함입니다.
+        HOW: dim이 지정되면 sum_axis를 반복 호출하고, 없으면 전체 sum_op를 호출합니다.
         """
         self._check_disposed()
-        from .ops import mean_op
-        return mean_op(self)
+        d = dim if dim is not None else axis
+        if d is None:
+            from .ops import sum_op
+            return sum_op(self)
+        else:
+            from .ops import sum_axis
+            if isinstance(d, int):
+                res = sum_axis(self, axis=d)
+                if keepdim:
+                    res = res.unsqueeze(d)
+                return res
+            else:
+                res = self
+                for ax in sorted(d, reverse=True):
+                    res = sum_axis(res, axis=ax)
+                if keepdim:
+                    for ax in sorted(d):
+                        res = res.unsqueeze(ax)
+                return res
+
+    def mean(self, dim: Optional[Union[int, Tuple[int, ...]]] = None, axis: Optional[Union[int, Tuple[int, ...]]] = None, keepdim: bool = False):
+        """
+        WHAT: 텐서 내 모든 요소 또는 특정 차원들의 평균을 계산합니다.
+        WHY: MSE 손실 계산 등에서 전체 또는 축별 데이터의 평균적인 크기를 구하기 위함입니다.
+        HOW: dim이 지정되면 sum 후 해당 차원 크기들의 곱으로 나누고, 없으면 mean_op를 호출합니다.
+        """
+        self._check_disposed()
+        d = dim if dim is not None else axis
+        if d is None:
+            from .ops import mean_op
+            return mean_op(self)
+        else:
+            total_elements = 1
+            if isinstance(d, int):
+                rank = len(self.shape)
+                norm_d = d if d >= 0 else d + rank
+                total_elements = self.shape[norm_d]
+            else:
+                rank = len(self.shape)
+                for ax in d:
+                    norm_d = ax if ax >= 0 else ax + rank
+                    total_elements *= self.shape[norm_d]
+            s = self.sum(dim=d, keepdim=keepdim)
+            return s / float(total_elements)
 
     def reshape(self, *shape):
         """
@@ -1459,6 +1527,24 @@ class Tensor:
         self._check_disposed()
         from .ops import take_along_dim
         return take_along_dim(self, indices=indices, dim=dim)
+
+    def cumprod(self, dim: int):
+        """Returns the cumulative product of elements along dim."""
+        self._check_disposed()
+        from .ops import cumprod
+        return cumprod(self, dim=dim)
+
+    def unflatten(self, dim: int, sizes: Tuple[int, ...]):
+        """Expands a dimension over multiple dimensions."""
+        self._check_disposed()
+        from .ops import unflatten
+        return unflatten(self, dim=dim, sizes=sizes)
+
+    def norm(self, p: Union[float, int, str] = 2, dim: Optional[Union[int, Tuple[int, ...]]] = None, keepdim: bool = False):
+        """Returns matrix or vector norm."""
+        self._check_disposed()
+        from .ops import norm
+        return norm(self, p=p, dim=dim, keepdim=keepdim)
 
     def __getitem__(self, key):
         """
