@@ -7003,8 +7003,8 @@ function validateInstruction(inst, idx) {
      * HOW: for...of 구문으로 각 차원(dim)을 검사하고 elements 변수에 곱합니다.
      */
     for (const dim of i.shape) {
-        if (!Number.isSafeInteger(dim) || dim <= 0) {
-            throw new AMEVAForgeShapeError(`Instruction[${idx}]: shape dim must be a positive safe integer, got ${dim}`);
+        if (!Number.isSafeInteger(dim) || dim < 0) {
+            throw new AMEVAForgeShapeError(`Instruction[${idx}]: shape dim must be a non-negative safe integer, got ${dim}`);
         }
         if (dim > Number.MAX_SAFE_INTEGER / elements) {
             throw new AMEVAForgeShapeError(`Instruction[${idx}]: shape product integer overflow`);

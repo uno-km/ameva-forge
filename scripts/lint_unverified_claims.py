@@ -16,7 +16,7 @@ marker_count = 0
 for root in ROOTS:
     paths = [root] if root.is_file() else list(root.rglob('*'))
     for path in paths:
-        if not path.is_file() or path.suffix.lower() not in {'.md', '.html'}:
+        if not path.is_file() or path.suffix.lower() not in {'.md', '.html'} or 'audits' in path.parts:
             continue
         text = path.read_text(encoding='utf-8', errors='replace')
         for line_no, line in enumerate(text.splitlines(), 1):

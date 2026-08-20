@@ -186,3 +186,8 @@ export interface QuotaSnapshot {
     activeTokens: number;
 }
 export declare function getQuotaSnapshot(): QuotaSnapshot;
+/**
+ * WHAT: WebGPU GPUDevice의 물리 limits 메타데이터를 기반으로 QuotaManager 한계를 동적으로 협상합니다.
+ * WHY: 256MB 등 저용량 VRAM 모바일 기기(Android/iOS Safari)에서 OS OOM 크래시를 원천 방어하기 위함입니다.
+ */
+export declare function syncQuotaWithDevice(device: GPUDevice, quotaManager?: QuotaManager): void;
