@@ -193,10 +193,18 @@ def js_dispose_batch(handles: list) -> None:
 
 
 def _map_js_error(e: Exception) -> None:
-    """Map JS error names to Python typed exceptions."""
+    """Map JS error names to Python typed exceptions with full stack preservation."""
     msg = str(e)
     err_name = getattr(e, 'name', '')
-    if 'AMEVAForgeValidationError' in msg or err_name == 'AMEVAForgeValidationError':
+    js_stack = getattr(e, 'stack', '')
+    if js_stack and str(js_stack) not in msg:
+        msg = f"{msg}\n[JavaScript V8 Stack:\n{js_stack}]"
+
+    from .errors import AMEVAForgeSecurityError
+
+    if 'AMEVAForgeSecurityError' in msg or err_name == 'AMEVAForgeSecurityError':
+        raise AMEVAForgeSecurityError(msg) from e
+    elif 'AMEVAForgeValidationError' in msg or err_name == 'AMEVAForgeValidationError':
         raise AMEVAForgeValidationError(msg) from e
     elif 'AMEVAForgeOutOfMemoryError' in msg or 'OOM' in msg or err_name == 'AMEVAForgeOutOfMemoryError':
         raise AMEVAForgeOutOfMemoryError(msg) from e

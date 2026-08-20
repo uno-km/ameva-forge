@@ -48,27 +48,21 @@ from .errors import (
 # HOW: 모든 연산 클래스는 Function을 상속받고 forward/backward에서 Context(ctx)를 사용합니다.
 from .autograd import Function, Context, no_grad
 
+import contextvars
+
 # ─── Debug Mode ──────────────────────────────────────────────────────────────
 # VUL-003/004: NumPy/PyTorch 기본 동작 유지, debug mode에서만 경고 활성화
+# Concurrency Fix: contextvars.ContextVar를 사용하여 비동기 코루틴 및 멀티스레드 간 격리 보장
 
-# WHAT: 디버그 모드의 활성화 여부를 나타내는 전역 불리언 변수입니다.
-# WHY: 0으로 나누기 등 수치적 불안정 상황 발생 시 경고(warning)를 출력할지 결정하기 위함입니다.
-# HOW: 기본값은 False이며, set_debug_mode를 통해 변경됩니다.
-_debug_mode: bool = False
+_debug_mode_var: contextvars.ContextVar[bool] = contextvars.ContextVar("forge_debug_mode", default=False)
 
-# WHAT: 전역 디버그 모드를 설정하는 함수입니다.
-# WHY: 사용자가 코드 외부에서 런타임에 디버그 경고 활성화 여부를 켜고 끌 수 있게 하기 위함입니다.
-# HOW: global 키워드를 사용하여 _debug_mode 변수의 값을 인자 enabled로 덮어씁니다.
 def set_debug_mode(enabled: bool = True) -> None:
     """디버그 모드를 설정한다. 활성화 시 div-by-zero, log-of-non-positive 등을 경고한다."""
-    global _debug_mode
-    _debug_mode = enabled
+    _debug_mode_var.set(enabled)
 
-# WHAT: 현재 디버그 모드 상태를 반환하는 함수입니다.
-# WHY: 연산 내부에서 경고 메시지를 출력할지 판단하기 위한 조건으로 쓰기 위함입니다.
-# HOW: 전역 변수 _debug_mode를 단순히 리턴합니다.
 def get_debug_mode() -> bool:
-    return _debug_mode
+    """현재 디버그 모드 상태를 반환한다."""
+    return _debug_mode_var.get()
 
 
 # WHAT: 텐서가 유효한 CPU 데이터를 가지고 있는지 검사하고 반환하는 유틸리티 함수입니다.
@@ -626,7 +620,7 @@ class DivFunction(Function):
             data_a = _require_cpu_data(a, "a")
             data_b = _require_cpu_data(b, "b")
             # VUL-003: debug mode에서만 zero-division 경고
-            if _debug_mode and np.any(data_b == 0):
+            if get_debug_mode() and np.any(data_b == 0):
                 import warnings
                 warnings.warn(
                     "[AMEVA debug] Division by zero detected. "
@@ -952,7 +946,7 @@ class LogFunction(Function):
         else:
             data = _require_cpu_data(x, 'x')
             # VUL-004: debug mode에서만 non-positive 입력 경고
-            if _debug_mode and np.any(data <= 0):
+            if get_debug_mode() and np.any(data <= 0):
                 import warnings
                 warnings.warn(
                     "[AMEVA debug] log() received non-positive input. "

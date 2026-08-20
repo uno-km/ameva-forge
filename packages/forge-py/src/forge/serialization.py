@@ -36,10 +36,35 @@ def save_model(model: Module, path: str):
         else:
             numpy_dict[k] = v
             
+    import tempfile
+    
+    # WHAT: 원자적(Atomic) 파일 저장을 위해 임시 파일을 생성 후 치환합니다.
+    # WHY: 쓰기 도중 충돌이나 중단 발생 시 기존 정상 가중치 파일이 파괴되는 것을 방지하기 위함입니다.
+    dir_name = os.path.dirname(os.path.abspath(path))
+    if not os.path.exists(dir_name):
+        try:
+            os.makedirs(dir_name, exist_ok=True)
+        except Exception as e:
+            raise AMEVAForgeValidationError(f"[AMEVA-Forge Error] Cannot create directory '{dir_name}': {e}") from e
+
+    tmp_path = None
     try:
-        np.savez(path, **numpy_dict)
+        with tempfile.NamedTemporaryFile(dir=dir_name, delete=False, suffix=".tmp") as tmp_f:
+            tmp_path = tmp_f.name
+        np.savez(tmp_path, **numpy_dict)
+        
+        # np.savez는 .npz 확장자를 자동으로 붙이므로 실제 생성된 파일 경로 확인
+        actual_tmp = tmp_path + ".npz" if os.path.exists(tmp_path + ".npz") else tmp_path
+        os.replace(actual_tmp, path)
     except Exception as e:
-        raise AMEVAForgeValidationError(f"[AMEVA-Forge Error] Failed to write model weights to '{path}': {e}") from e
+        raise AMEVAForgeValidationError(f"[AMEVA-Forge Error] Failed to write model weights atomically to '{path}': {e}") from e
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try: os.remove(tmp_path)
+            except Exception: pass
+        if tmp_path and os.path.exists(tmp_path + ".npz"):
+            try: os.remove(tmp_path + ".npz")
+            except Exception: pass
 
 def load_model(model: Module, path: str):
     """
