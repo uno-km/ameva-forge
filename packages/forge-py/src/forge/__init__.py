@@ -105,6 +105,7 @@ from . import linalg
 from . import fft
 from . import special
 from .special import erf, erfc, erfinv, expm1, log1p, sinc
+from . import distributions
 from .pipeline import pipeline
 
 # WHAT: 외부에서 `from forge import *`를 호출할 때 노출될 이름들의 리스트입니다.
@@ -114,6 +115,7 @@ __all__ = [
     "linalg",
     "fft",
     "special",
+    "distributions",
     "erf",
     "erfc",
     "erfinv",

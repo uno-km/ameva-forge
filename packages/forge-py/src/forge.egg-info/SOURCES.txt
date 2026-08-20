@@ -6,6 +6,7 @@ src/forge/autograd.py
 src/forge/bridge.py
 src/forge/data.py
 src/forge/device.py
+src/forge/distributions.py
 src/forge/errors.py
 src/forge/fft.py
 src/forge/functional.py

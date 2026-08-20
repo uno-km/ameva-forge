@@ -1089,6 +1089,57 @@ def test_fuzz_special_functions_suite():
     assert y1.grad is not None
     np.testing.assert_allclose(xy.numpy(), np.array([0.0, 2.0 * np.log(5.0)], dtype=np.float32), atol=1e-4)
 
+def test_fuzz_distributions_suite():
+    """Fuzz test forge.distributions module: Normal (rsample, log_prob, entropy), Uniform, Bernoulli, Categorical, kl_divergence."""
+    import forge as at
+    from forge import distributions as dist
+    
+    # 1. Normal distribution & VAE Reparameterization Trick (rsample)
+    loc = at.tensor(np.array([0.0, 1.0], dtype=np.float32), requires_grad=True)
+    scale = at.tensor(np.array([1.0, 2.0], dtype=np.float32), requires_grad=True)
+    normal = dist.Normal(loc, scale)
+    
+    sample = normal.sample()
+    assert sample.shape == (2,)
+    
+    # rsample with backward
+    z = normal.rsample(sample_shape=(10,))
+    assert z.shape == (10, 2)
+    z.sum().backward()
+    assert loc.grad is not None
+    assert scale.grad is not None
+    
+    # log_prob & entropy
+    lp = normal.log_prob(loc)
+    assert lp.shape == (2,)
+    ent = normal.entropy()
+    assert ent.shape == (2,)
+    
+    # 2. Analytical KL divergence (Normal || Standard Normal)
+    std_normal = dist.Normal(at.tensor([0.0, 0.0]), at.tensor([1.0, 1.0]))
+    kl = dist.kl_divergence(normal, std_normal)
+    assert kl.shape == (2,)
+    
+    # 3. Categorical (RL policy sampling)
+    logits = at.tensor(np.array([[1.0, 2.0, 3.0], [3.0, 2.0, 1.0]], dtype=np.float32))
+    cat = dist.Categorical(logits=logits)
+    act = cat.sample()
+    assert act.shape == (2,)
+    cat_lp = cat.log_prob(act)
+    assert cat_lp.shape == (2,)
+    cat_ent = cat.entropy()
+    assert cat_ent.shape == (2,)
+    
+    # 4. Bernoulli & Uniform
+    bern = dist.Bernoulli(probs=0.7)
+    b_s = bern.sample((5,))
+    assert b_s.shape == (5,)
+    
+    unif = dist.Uniform(0.0, 10.0)
+    u_s = unif.rsample((4,))
+    assert u_s.shape == (4,)
+
+
 
 
 
