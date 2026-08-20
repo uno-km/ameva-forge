@@ -40,8 +40,10 @@
 				"attention": "6. FlashAttention-2",
 				"quantization": "7. INT4/INT8 Quantization",
 				"audio": "8. Audio DSP Center",
-				"nbody": "9. N-Body Physics"
-			}
+				"nbody": "9. N-Body Physics",
+				"aiSpecs": "AI Agent Protocol & Feeds"
+			},
+			"pypiBtn": "PyPI (pip)"
 		},
 		"home": {
 			"pageTitle": "AMEVA-Forge Documentation",
@@ -67,7 +69,11 @@
 			"catOptim": "Optimization",
 			"catOptimOps": "<code>optim.SGD</code> (GPU In-Place AXPY kernel with automatic gradient buffer disposal)",
 			"gettingStartedTitle": "Getting Started",
-			"gettingStartedDesc": "Proceed to our <a href=\"installation.html\">Installation Guide</a> to set up AMEVA-Forge in your environment, try the <a href=\"demo.html\">Interactive Live Studio</a>, or explore the <a href=\"quickstart.html\">Quickstart Guide</a> to define computation graphs immediately."
+			"gettingStartedDesc": "Proceed to our <a href=\"installation.html\">Installation Guide</a> to set up AMEVA-Forge in your environment, try the <a href=\"demo.html\">Interactive Live Studio</a>, or explore the <a href=\"quickstart.html\">Quickstart Guide</a> to define computation graphs immediately.",
+			"quickInstallTitle": "1-Line Quick Installation",
+			"quickInstallDesc": "Install via pip for native/Pyodide usage, or launch the zero-install WebGPU Live Studio:",
+			"catShaders": "WGSL Shaders",
+			"catShadersOps": "Elementwise unary/binary, 2D Matmul tile, Softmax 2-pass, LayerNorm 2-pass, In-place AXPY SGD kernel"
 		},
 		"whatIsForge": {
 			"pageTitle": "AMEVA-Forge: What is Forge?",
@@ -394,8 +400,10 @@
 				"attention": "6. FlashAttention-2 비교기",
 				"quantization": "7. INT4/INT8 양자화 랩",
 				"audio": "8. 오디오 DSP 센터",
-				"nbody": "9. N-Body 물리 시뮬레이터"
-			}
+				"nbody": "9. N-Body 물리 시뮬레이터",
+				"aiSpecs": "AI 에이전트 프로토콜 & 피드"
+			},
+			"pypiBtn": "PyPI (pip)"
 		},
 		"home": {
 			"pageTitle": "AMEVA-Forge 공식 문서",
@@ -421,7 +429,11 @@
 			"catOptim": "최적화 알고리즘 (Optimization)",
 			"catOptimOps": "<code>optim.SGD</code> (기울기 버퍼 자동 반환 및 GPU In-Place AXPY 커널 가속)",
 			"gettingStartedTitle": "시작하기",
-			"gettingStartedDesc": "AMEVA-Forge 환경을 구성하려면 <a href=\"installation.html\">설치 가이드</a>를 확인하거나, <a href=\"demo.html\">실시간 인터랙티브 스튜디오</a>를 체험해보세요. <a href=\"quickstart.html\">빠른 시작 가이드</a>에서 즉시 계산 그래프를 정의할 수도 있습니다."
+			"gettingStartedDesc": "AMEVA-Forge 환경을 구성하려면 <a href=\"installation.html\">설치 가이드</a>를 확인하거나, <a href=\"demo.html\">실시간 인터랙티브 스튜디오</a>를 체험해보세요. <a href=\"quickstart.html\">빠른 시작 가이드</a>에서 즉시 계산 그래프를 정의할 수도 있습니다.",
+			"quickInstallTitle": "1줄 빠른 설치 및 실행",
+			"quickInstallDesc": "pip 명령어로 즉시 설치하거나, 무설치 WebGPU 라이브 스튜디오를 브라우저에서 바로 실행하세요:",
+			"catShaders": "WGSL 셰이더",
+			"catShadersOps": "원소별 단항/이항 연산, 2D Matmul 타일링, Softmax 2-패스, LayerNorm 2-패스, In-place AXPY SGD 커널"
 		},
 		"whatIsForge": {
 			"pageTitle": "AMEVA-Forge: Forge란 무엇인가?",
@@ -748,8 +760,10 @@
 				"attention": "6. FlashAttention-2 比较器",
 				"quantization": "7. INT4/INT8 量化实验室",
 				"audio": "8. 音频 DSP 中心",
-				"nbody": "9. N-Body 物理模拟器"
-			}
+				"nbody": "9. N-Body 物理模拟器",
+				"aiSpecs": "AI 代理协议与信息流"
+			},
+			"pypiBtn": "PyPI (pip)"
 		},
 		"home": {
 			"pageTitle": "AMEVA-Forge 官方文档",
@@ -775,7 +789,11 @@
 			"catOptim": "优化器 (Optimization)",
 			"catOptimOps": "<code>optim.SGD</code> (GPU 原位 In-Place AXPY 内核加速与自动梯度释放)",
 			"gettingStartedTitle": "快速入门",
-			"gettingStartedDesc": "请参阅我们的 <a href=\"installation.html\">安装指南</a> 在您的环境中配置 AMEVA-Forge，或体验 <a href=\"demo.html\">实时交互工作室</a>，也可直接查阅 <a href=\"quickstart.html\">快速上手指南</a> 定义计算图。"
+			"gettingStartedDesc": "请参阅我们的 <a href=\"installation.html\">安装指南</a> 在您的环境中配置 AMEVA-Forge，或体验 <a href=\"demo.html\">实时交互工作室</a>，也可直接查阅 <a href=\"quickstart.html\">快速上手指南</a> 定义计算图。",
+			"quickInstallTitle": "单行快速安装与运行",
+			"quickInstallDesc": "通过 pip 快速安装，或直接在浏览器中启动零安装 WebGPU 实时演练室：",
+			"catShaders": "WGSL 着色器",
+			"catShadersOps": "逐元素一元/二元运算，2D Matmul 分块，Softmax 2-pass，LayerNorm 2-pass，In-place AXPY SGD 内核"
 		},
 		"whatIsForge": {
 			"pageTitle": "AMEVA-Forge: 什么是 Forge？",
@@ -1102,8 +1120,10 @@
 				"attention": "6. FlashAttention-2 比較器",
 				"quantization": "7. INT4/INT8 量子化ラボ",
 				"audio": "8. オーディオ DSP センター",
-				"nbody": "9. N-Body 物理シミュレータ"
-			}
+				"nbody": "9. N-Body 物理シミュレータ",
+				"aiSpecs": "AI エージェントプロトコル＆フィード"
+			},
+			"pypiBtn": "PyPI (pip)"
 		},
 		"home": {
 			"pageTitle": "AMEVA-Forge 公式ドキュメント",
@@ -1129,7 +1149,11 @@
 			"catOptim": "最適化手法 (Optimization)",
 			"catOptimOps": "<code>optim.SGD</code> (GPU In-Place AXPY カーネル加速と勾配バッファ自動解放)",
 			"gettingStartedTitle": "はじめに",
-			"gettingStartedDesc": "<a href=\"installation.html\">インストールガイド</a>を参照して AMEVA-Forge をセットアップするか、<a href=\"demo.html\">リアルタイム WebGPU スタジオ</a>をお試しください。<a href=\"quickstart.html\">クイックスタート</a>で計算グラフの定義方法をすぐに確認できます。"
+			"gettingStartedDesc": "<a href=\"installation.html\">インストールガイド</a>を参照して AMEVA-Forge をセットアップするか、<a href=\"demo.html\">リアルタイム WebGPU スタジオ</a>をお試しください。<a href=\"quickstart.html\">クイックスタート</a>で計算グラフの定義方法をすぐに確認できます。",
+			"quickInstallTitle": "1行クイックインストール＆実行",
+			"quickInstallDesc": "pip コマンドで即時インストールするか、ブラウザ上でゼロインストールの WebGPU ライブスタジオを起動します：",
+			"catShaders": "WGSL シェーダー",
+			"catShadersOps": "要素ごとの単項/二項演算、2D Matmul タイリング、Softmax 2-パス、LayerNorm 2-パス、In-place AXPY SGD カーネル"
 		},
 		"whatIsForge": {
 			"pageTitle": "AMEVA-Forge: Forge とは？",
@@ -1456,8 +1480,10 @@
 				"attention": "6. FlashAttention-2 तुलना",
 				"quantization": "7. INT4/INT8 परिमाणीकरण",
 				"audio": "8. ऑडियो डीएसपी केंद्र",
-				"nbody": "9. N-Body भौतिकी सिम्युलेटर"
-			}
+				"nbody": "9. N-Body भौतिकी सिम्युलेटर",
+				"aiSpecs": "AI एजेंट प्रोटोकॉल और फ़ीड"
+			},
+			"pypiBtn": "PyPI (pip)"
 		},
 		"home": {
 			"pageTitle": "AMEVA-Forge आधिकारिक दस्तावेज़",
@@ -1483,7 +1509,11 @@
 			"catOptim": "ऑप्टिमाइज़ेशन (Optimization)",
 			"catOptimOps": "<code>optim.SGD</code> (GPU In-Place AXPY कर्नेल के साथ स्वचालित ग्रेडिएंट बफर निपटान)",
 			"gettingStartedTitle": "शुरुआत करें",
-			"gettingStartedDesc": "AMEVA-Forge सेटअप करने के लिए <a href=\"installation.html\">इंस्टॉलेशन गाइड</a> देखें, <a href=\"demo.html\">लाइव स्टूडियो</a> आज़माएं, या <a href=\"quickstart.html\">क्विकस्टार्ट गाइड</a> देखें।"
+			"gettingStartedDesc": "AMEVA-Forge सेटअप करने के लिए <a href=\"installation.html\">इंस्टॉलेशन गाइड</a> देखें, <a href=\"demo.html\">लाइव स्टूडियो</a> आज़माएं, या <a href=\"quickstart.html\">क्विकस्टार्ट गाइड</a> देखें।",
+			"quickInstallTitle": "1-पंक्ति त्वरित स्थापना और निष्पादन",
+			"quickInstallDesc": "pip के माध्यम से स्थापित करें, या ब्राउज़र में सीधे शून्य-स्थापना WebGPU लाइव स्टूडियो लॉन्च करें:",
+			"catShaders": "WGSL शेडर्स",
+			"catShadersOps": "एलिमेंटवाइज अनरी/बाइनरी, 2D Matmul टाइल, Softmax 2-पास, LayerNorm 2-पास, इन-प्लेस AXPY SGD कर्नेल"
 		},
 		"whatIsForge": {
 			"pageTitle": "AMEVA-Forge: Forge क्या है?",
@@ -1810,8 +1840,10 @@
 				"attention": "6. FlashAttention-2 Comparador",
 				"quantization": "7. Laboratorio Cuantización INT4/INT8",
 				"audio": "8. Centro Audio DSP",
-				"nbody": "9. Simulador Físico N-Body"
-			}
+				"nbody": "9. Simulador Físico N-Body",
+				"aiSpecs": "Protocolos y Feeds para Agentes IA"
+			},
+			"pypiBtn": "PyPI (pip)"
 		},
 		"home": {
 			"pageTitle": "Documentación de AMEVA-Forge",
@@ -1837,7 +1869,11 @@
 			"catOptim": "Optimización (Optimization)",
 			"catOptimOps": "<code>optim.SGD</code> (Kernel GPU In-Place AXPY con liberación automática de buffers de gradiente)",
 			"gettingStartedTitle": "Primeros Pasos",
-			"gettingStartedDesc": "Consulte nuestra <a href=\"installation.html\">Guía de Instalación</a> para configurar AMEVA-Forge en su entorno, pruebe el <a href=\"demo.html\">Estudio Interactivo en Vivo</a> o explore la <a href=\"quickstart.html\">Guía de Inicio Rápido</a> para definir grafos de cómputo de inmediato."
+			"gettingStartedDesc": "Consulte nuestra <a href=\"installation.html\">Guía de Instalación</a> para configurar AMEVA-Forge en su entorno, pruebe el <a href=\"demo.html\">Estudio Interactivo en Vivo</a> o explore la <a href=\"quickstart.html\">Guía de Inicio Rápido</a> para definir grafos de cómputo de inmediato.",
+			"quickInstallTitle": "Instalación rápida en 1 línea",
+			"quickInstallDesc": "Instale mediante pip o inicie el estudio en vivo WebGPU sin instalación directamente en el navegador:",
+			"catShaders": "Sombreadores WGSL",
+			"catShadersOps": "Operaciones unarias/binarias por elementos, Matmul 2D en mosaico, Softmax de 2 pasos, LayerNorm de 2 pasos, núcleo AXPY SGD in situ"
 		},
 		"whatIsForge": {
 			"pageTitle": "AMEVA-Forge: ¿Qué es Forge?",

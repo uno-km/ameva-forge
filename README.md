@@ -2,10 +2,9 @@
 
 <div align="center">
 
-[![PyPI version](https://img.shields.io/pypi/v/ameva.svg?style=for-the-badge&color=007ec6&logo=pypi&logoColor=white)](https://pypi.org/project/ameva/)
-[![PyPI Downloads](https://img.shields.io/pypi/dm/ameva-forge.svg?style=for-the-badge&color=28a745&logo=pypi&logoColor=white&label=Monthly%20Downloads)](https://pypi.org/project/ameva/)
-[![PyPI Weekly](https://img.shields.io/pypi/dw/ameva-forge.svg?style=for-the-badge&color=brightgreen&label=Weekly%20Downloads)](https://pypi.org/project/ameva/)
-[![Python](https://img.shields.io/badge/Python-3.9_|_3.10_|_3.11_|_3.12_|_3.13-3776ab?style=for-the-badge&logo=python&logoColor=white)](https://pypi.org/project/ameva/)
+[![PyPI version](https://img.shields.io/pypi/v/ameva-forge.svg?style=for-the-badge&color=007ec6&logo=pypi&logoColor=white)](https://pypi.org/project/ameva-forge/)
+[![PyPI Release](https://img.shields.io/badge/PyPI-v0.1.0_Live-28a745?style=for-the-badge&logo=pypi&logoColor=white)](https://pypi.org/project/ameva-forge/)
+[![Python](https://img.shields.io/badge/Python-3.9_|_3.10_|_3.11_|_3.12_|_3.13-3776ab?style=for-the-badge&logo=python&logoColor=white)](https://pypi.org/project/ameva-forge/)
 [![WebGPU](https://img.shields.io/badge/WebGPU-Hardware_Accelerated-blueviolet?style=for-the-badge&logo=webgpu)](https://uno-km.github.io/ameva-forge/)
 [![Tests](https://img.shields.io/badge/Tests-292%2F292_Passed_(100%25)-brightgreen?style=for-the-badge)](https://github.com/uno-km/ameva-forge)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
@@ -14,7 +13,7 @@
 ### High-Performance Client-Side Deep Learning Engine & WebGPU Reverse-Mode Autograd Framework
 **An Official Open-Source Initiative of the AMEVA Foundation (아메바 재단)**
 
-[🚀 Live WebGPU Studio Demo](https://uno-km.github.io/ameva-forge/demo.html) • [📚 Official Documentation](https://uno-km.github.io/ameva-forge/) • [📦 PyPI Package](https://pypi.org/project/ameva/) • [💬 Issue Tracker](https://github.com/uno-km/ameva-forge/issues)
+[🚀 Live WebGPU Studio Demo](https://uno-km.github.io/ameva-forge/demo.html) • [📚 Official Documentation](https://uno-km.github.io/ameva-forge/) • [📦 PyPI Package](https://pypi.org/project/ameva-forge/) • [💬 Issue Tracker](https://github.com/uno-km/ameva-forge/issues)
 
 </div>
 
