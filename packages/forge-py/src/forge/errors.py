@@ -11,7 +11,7 @@ NL-07 Fix: Python errors.py와 TypeScript errors.ts의 에러 클래스 대칭 �
 """
 
 
-class AMEVAForgeError(Exception):
+class AMEVAForgeError(ValueError):
     """
     AMEVA-Forge 기본 에러 클래스.
     

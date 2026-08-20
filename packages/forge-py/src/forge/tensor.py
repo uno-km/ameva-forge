@@ -74,10 +74,11 @@ def build_lazy_topo(root: 'Tensor') -> List['Tensor']:
 
 # WHAT: GPU 리소스 해제가 필요한 텐서 핸들(문자열 등)을 임시로 모아두는 큐(집합)입니다.
 # WHY: 단일 텐서마다 즉각적으로 리소스를 해제(dispose)하면 오버헤드가 크므로, 모아서 일괄 처리(Batch GC)하기 위함입니다.
-# HOW: Python의 set 객체를 전역으로 생성해 중복 핸들 등록을 방지합니다.
+# HOW: Python의 set 객체를 전역으로 생성해 중복 핸들 등록을 방지하고 최대 크기를 제한합니다.
 _gc_queue: set = set()
 _gc_queued_bytes: int = 0
 _GC_BYTE_THRESHOLD: int = 32 * 1024 * 1024  # 32 MB
+_MAX_GC_QUEUE_SIZE: int = 10_000  # 최대 고아 핸들 큐 크기 제한 (메모리 고갈 방어)
 
 _gc_failures: int = 0
 _gc_next_retry_at: float = 0.0
@@ -85,7 +86,8 @@ _gc_next_retry_at: float = 0.0
 def flush_gc(force: bool = False) -> None:
     """
     WHAT: 보류 중인(큐에 쌓인) 리소스 해제 요청들을 모아 JS/WebGPU 브릿지로 일괄 전달하여 처리하는 함수입니다.
-    WHY: 성능 최적화를 위해 개별 해제 대신 Batch Dispose를 수행하며, 브릿지 일시 지연 시에도 핸들을 유실(drop)하지 않고 지수 백오프로 재시도하기 위함입니다.
+    WHY: 성능 최적화를 위해 개별 해제 대신 Batch Dispose를 수행하며, 브릿지 일시 지연 시 지수 백오프로 재시도하고,
+         연속 5회 이상 실패 시 메모리 누수를 막기 위해 큐를 강제 소각(Purge)합니다.
     HOW: 큐에 항목이 있으면 백오프 타임을 체크한 후 js_dispose_batch를 호출하고, 배치 성공 시에만 큐에서 제거합니다.
     """
     global _gc_failures, _gc_next_retry_at, _gc_queued_bytes
@@ -110,69 +112,27 @@ def flush_gc(force: bool = False) -> None:
         _gc_next_retry_at = 0.0
     except Exception as e:
         _gc_failures += 1
-        delay = min(2.0 ** _gc_failures, 30.0)
-        _gc_next_retry_at = now + delay
-        warnings.warn(
-            f"[AMEVA GC] disposeBatch failed; keeping {len(_gc_queue)} handles queued for retry in {delay:.1f}s: {e}",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-
-
-class _HandleCell:
-    """
-    WHAT: 실제 핸들과 할당 바이트 크기를 감싸는 레퍼런스 셀 클래스입니다.
-    WHY: C-01 Fix: weakref.finalize 시점에 최신 핸들과 바이트 크기를 안전하게 참조하기 위함입니다.
-    HOW: 슬롯(__slots__)을 사용하여 메모리를 절약하고 속성을 단일화한 클래스를 정의합니다.
-    """
-    __slots__ = ('handle', 'byte_length')
-
-    def __init__(self, handle: Optional[str], byte_length: int = 0) -> None:
-        """
-        WHAT: HandleCell 객체의 생성자입니다.
-        WHY: 객체 생성 시 초기 핸들 값과 예상 바이트 크기를 저장하기 위해 필요합니다.
-        HOW: 전달받은 인자들을 멤버 변수에 할당합니다.
-        """
-        self.handle = handle
-        self.byte_length = byte_length
-
-
-_gc_failures: int = 0
-_gc_next_retry_at: float = 0.0
-
-def flush_gc(force: bool = False) -> None:
-    """
-    WHAT: 보류 중인(큐에 쌓인) 리소스 해제 요청들을 모아 JS/WebGPU 브릿지로 일괄 전달하여 처리하는 함수입니다.
-    WHY: 성능 최적화를 위해 개별 해제 대신 Batch Dispose를 수행하며, 브릿지 일시 지연 시에도 핸들을 유실(drop)하지 않고 지수 백오프로 재시도하기 위함입니다.
-    HOW: 큐에 항목이 있으면 백오프 타임을 체크한 후 js_dispose_batch를 호출하고, 배치 성공 시에만 큐에서 제거합니다.
-    """
-    global _gc_failures, _gc_next_retry_at
-    import time
-    import warnings
-    
-    if not _gc_queue:
-        return
-        
-    now = time.monotonic()
-    if not force and now < _gc_next_retry_at:
-        return
-        
-    handles = list(_gc_queue)
-    try:
-        from .bridge import js_dispose_batch
-        js_dispose_batch(handles)
-        _gc_queue.difference_update(handles)
-        _gc_failures = 0
-        _gc_next_retry_at = 0.0
-    except Exception as e:
-        _gc_failures += 1
-        delay = min(2.0 ** _gc_failures, 30.0)
-        _gc_next_retry_at = now + delay
-        warnings.warn(
-            f"[AMEVA GC] disposeBatch failed; keeping {len(_gc_queue)} handles queued for retry in {delay:.1f}s: {e}",
-            RuntimeWarning,
-            stacklevel=2,
-        )
+        if _gc_failures >= 10:
+            # WHAT: WebGPU 브릿지 응답 불가 시 고아 핸들 큐를 강제 소각합니다.
+            # WHY: 호스트 CPU 메모리가 고갈(OOM DoS)되는 것을 차단하기 위함입니다.
+            warnings.warn(
+                f"[AMEVA-Forge Resource Alert] WebGPU bridge unresponsive for 10 consecutive attempts. "
+                f"Purging {len(_gc_queue)} stale GPU handles to prevent host memory leak. (Subsequent WebGPU calls may be degraded): {e}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            _gc_queue.clear()
+            _gc_queued_bytes = 0
+            _gc_failures = 0
+            _gc_next_retry_at = 0.0
+        else:
+            delay = min(2.0 ** _gc_failures, 30.0)
+            _gc_next_retry_at = now + delay
+            warnings.warn(
+                f"[AMEVA-Forge GC Warning] disposeBatch failed ({_gc_failures}/10); keeping {len(_gc_queue)} handles queued for retry in {delay:.1f}s: {e}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
 
 class _HandleCell:

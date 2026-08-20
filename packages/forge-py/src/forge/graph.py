@@ -9,6 +9,18 @@ graph.py - WebGPU 연산 그래프 빌더
 import json
 import numpy as np
 from typing import Any, Dict, List, Optional, Tuple
+from .errors import AMEVAForgeSecurityError, AMEVAForgeValidationError
+
+# WHAT: WebGPU 그래프 실행기가 허용하는 등록된 모든 정규 텐서 오퍼레이션의 화이트리스트
+# WHY: 미등록된 함수명, dunder 메서드, 프로토타입 오염 공격을 원천 차단하기 위함
+ALLOWED_OPS_WHITELIST = frozenset([
+    'upload', 'load', 'matmul', 'matmul_tiled', 'batched_matmul', 'relu', 'add', 'mul', 'transpose', 'relu_backward',
+    'sub', 'neg', 'div', 'exp', 'log', 'sigmoid', 'tanh', 'sigmoid_backward', 'tanh_backward',
+    'fill', 'sum', 'max', 'sum_axis', 'max_axis', 'max_axis_backward', 'axpy', 'cat', 'where', 'pad', 'gather', 'scatter',
+    'maxpool2d', 'avgpool2d', 'im2col', 'col2im', 'dropout', 'permute', 'matmul_bias_relu', 'reshape', 'slice', 'slice_backward',
+    'reduce_axes', 'flash_attention', 'rope', 'rmsnorm', 'swiglu', 'unpack_quant', 'embedding', 'embedding_backward',
+    'adam_step', 'sgd_momentum_step', 'sparse_cross_entropy', 'sparse_cross_entropy_backward', 'mse_loss', 'mse_loss_backward'
+])
 
 
 class GraphBuilder:
@@ -106,12 +118,13 @@ class GraphBuilder:
         어떻게: 입력 노드 ID 리스트(in_ids)를 의존성으로 기록하고, 추가 파라미터가 있다면 JSON 포맷에 맞게 형변환하여 딕셔너리에 추가한다.
         """
         if not isinstance(op_name, str) or not op_name.strip():
-            raise ValueError(f"op_name must be a valid non-empty string, got {op_name}")
-        if op_name in ("__proto__", "constructor", "prototype",
-                       "__import__", "eval", "exec", "compile",
-                       "__subclasses__", "__globals__", "__builtins__",
-                       "system", "popen", "subprocess"):
-            raise ValueError(f"Prohibited op_name: {op_name}")
+            raise AMEVAForgeValidationError(f"[AMEVA-Forge Error] op_name must be a valid non-empty string, got: {op_name}")
+        
+        if op_name not in ALLOWED_OPS_WHITELIST:
+            raise AMEVAForgeSecurityError(
+                f"[AMEVA-Forge Security Alert] Prohibited, unrecognized, or unregistered op '{op_name}' detected in computation graph. "
+                f"Execution halted to protect runtime integrity."
+            )
             
         if not isinstance(shape, (tuple, list)):
             raise TypeError(f"Shape must be a tuple or list of ints, got {type(shape)}")

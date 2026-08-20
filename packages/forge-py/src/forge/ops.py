@@ -423,6 +423,15 @@ class MatmulFunction(Function):
             return Tensor(shape=(M, N), dtype="float32", device="gpu",
                           op='matmul', parents=(a, b), op_params=[int(M), int(N), int(K)])
         else:
+            if int(M) * int(K) * int(N) > 8_000_000:
+                import warnings
+                warnings.warn(
+                    f"[AMEVA-Forge Performance Alert] Large matrix multiplication ({M}x{K} @ {K}x{N} = {2.0*M*K*N/1e9:.2f} GFLOPs) "
+                    f"executing on CPU fallback. Performance will be severely degraded on single-threaded CPU. "
+                    f"Call tensor.to('gpu') for WebGPU hardware acceleration.",
+                    RuntimeWarning,
+                    stacklevel=3
+                )
             data_a = _require_cpu_data(a, "a")
             data_b = _require_cpu_data(b, "b")
             res = np.matmul(data_a, data_b)
