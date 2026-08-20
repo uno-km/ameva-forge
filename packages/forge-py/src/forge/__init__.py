@@ -33,7 +33,8 @@ from .ops import (
     topk, sort, argsort, TopKResult, SortResult,
     isnan, isinf, isfinite, isclose, allclose, any_op, all_op,
     conv1d, pixel_shuffle, pixel_unshuffle, interpolate,
-    stack, chunk, split, unbind
+    stack, chunk, split, unbind,
+    multinomial, randint, bernoulli, normal
 )
 any = any_op
 all = all_op

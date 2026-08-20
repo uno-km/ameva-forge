@@ -3474,3 +3474,56 @@ def unbind(input: Tensor, dim: int = 0) -> Tuple[Tensor, ...]:
         results.append(input[tuple(slices)])
     return tuple(results)
 
+
+def multinomial(input: Tensor, num_samples: int, replacement: bool = False) -> Tensor:
+    """Returns a tensor where each row contains num_samples indices sampled from multinomial probability distribution."""
+    if num_samples <= 0:
+        raise ValueError(f"num_samples must be positive, got {num_samples}")
+    data = _require_cpu_data(input, "input")
+    if len(input.shape) == 1:
+        probs = data / np.sum(data)
+        if not replacement and num_samples > len(probs):
+            raise RuntimeError("cannot sample n_sample > prob_dist.size samples without replacement")
+        sampled = np.random.choice(len(probs), size=num_samples, replace=replacement, p=probs)
+        return Tensor(shape=(num_samples,), dtype="int32", device="cpu", data=sampled.astype(np.int32), requires_grad=False)
+    elif len(input.shape) == 2:
+        N, C = input.shape
+        if not replacement and num_samples > C:
+            raise RuntimeError("cannot sample n_sample > prob_dist.size samples without replacement")
+        res = np.zeros((N, num_samples), dtype=np.int32)
+        for i in range(N):
+            row = data[i]
+            row_sum = np.sum(row)
+            if row_sum <= 0:
+                probs = np.full(C, 1.0 / C)
+            else:
+                probs = row / row_sum
+            res[i] = np.random.choice(C, size=num_samples, replace=replacement, p=probs)
+        return Tensor(shape=(N, num_samples), dtype="int32", device="cpu", data=res, requires_grad=False)
+    else:
+        raise AMEVAForgeShapeError(f"multinomial expects 1D or 2D tensor, got shape {input.shape}")
+
+def randint(low: int, high: Optional[int] = None, size: Tuple[int, ...] = (), dtype: str = "int32", device: str = "cpu", requires_grad: bool = False) -> Tensor:
+    """Returns a tensor filled with random integers generated uniformly between low (inclusive) and high (exclusive)."""
+    if high is None:
+        low, high = 0, low
+    if low >= high:
+        raise ValueError(f"randint: low ({low}) must be less than high ({high})")
+    arr = np.random.randint(low, high, size=size).astype(np.int32)
+    return Tensor(shape=size, dtype=dtype, device=device, requires_grad=requires_grad, data=arr)
+
+def bernoulli(input: Tensor, p: Optional[float] = None) -> Tensor:
+    """Draws binary random numbers (0 or 1) from a Bernoulli distribution."""
+    data = _require_cpu_data(input, "input")
+    if p is not None:
+        probs = np.full(data.shape, p, dtype=np.float32)
+    else:
+        probs = data
+    res = (np.random.rand(*probs.shape) < probs).astype(np.float32)
+    return Tensor(shape=res.shape, dtype="float32", device=input.device, requires_grad=False, data=res)
+
+def normal(mean: float = 0.0, std: float = 1.0, size: Tuple[int, ...] = (), device: str = "cpu", dtype: str = "float32", requires_grad: bool = False) -> Tensor:
+    """Returns a tensor of random numbers drawn from separate normal distributions."""
+    arr = np.random.normal(loc=mean, scale=std, size=size).astype(np.float32)
+    return Tensor(shape=size, dtype=dtype, device=device, requires_grad=requires_grad, data=arr)
+

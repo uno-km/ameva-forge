@@ -557,6 +557,39 @@ def test_fuzz_stack_chunk_split_unbind_and_autograd():
     assert u2.shape == (2,)
     np.testing.assert_allclose(u0.numpy(), np.array([0.0, 1.0]))
 
+def test_fuzz_multinomial_randint_bernoulli_normal_sampling():
+    """Fuzz test multinomial, randint, bernoulli, normal."""
+    import forge as at
+    
+    # 1. multinomial 1D and 2D
+    p_1d = at.tensor(np.array([0.1, 0.8, 0.1], dtype=np.float32))
+    samples_1d = at.multinomial(p_1d, num_samples=10, replacement=True)
+    assert samples_1d.shape == (10,)
+    assert samples_1d.dtype == "int32"
+    
+    p_2d = at.tensor(np.array([[0.0, 1.0, 0.0], [0.99, 0.01, 0.0]], dtype=np.float32))
+    samples_2d = p_2d.multinomial(num_samples=2, replacement=True)
+    assert samples_2d.shape == (2, 2)
+    assert samples_2d.numpy()[0, 0] == 1  # 1.0 prob is at index 1
+    
+    # 2. randint
+    r = at.randint(10, 20, size=(3, 4))
+    assert r.shape == (3, 4)
+    assert (r.numpy() >= 10).all()
+    assert (r.numpy() < 20).all()
+    
+    # 3. bernoulli
+    b_p = at.tensor(np.full((5, 5), 0.5, dtype=np.float32))
+    b = b_p.bernoulli()
+    assert b.shape == (5, 5)
+    assert set(np.unique(b.numpy())).issubset({0.0, 1.0})
+    
+    # 4. normal
+    norm = at.normal(mean=5.0, std=0.01, size=(100,))
+    assert norm.shape == (100,)
+    np.testing.assert_allclose(norm.numpy().mean(), 5.0, atol=0.1)
+
+
 
 
 

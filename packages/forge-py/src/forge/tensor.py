@@ -1377,6 +1377,18 @@ class Tensor:
         from .ops import unbind
         return unbind(self, dim=dim)
 
+    def multinomial(self, num_samples: int, replacement: bool = False):
+        """Samples from multinomial distribution."""
+        self._check_disposed()
+        from .ops import multinomial
+        return multinomial(self, num_samples=num_samples, replacement=replacement)
+
+    def bernoulli(self, p: Optional[float] = None):
+        """Draws binary random numbers from Bernoulli distribution."""
+        self._check_disposed()
+        from .ops import bernoulli
+        return bernoulli(self, p=p)
+
     def __getitem__(self, key):
         """
         WHAT: 인덱싱 또는 슬라이싱 문법(예: tensor[0:2])을 사용하여 텐서의 부분 배열을 추출합니다.
