@@ -3,21 +3,37 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AMEVA-Forge: Browser-Native WebGPU Autograd & Deep Learning Framework</title>
     <meta name="description" data-i18n="home.metaDesc" content="AMEVA-Forge is a PyTorch-compatible WebGPU deep learning framework for educational autograd and in-browser training.">
     <link rel="icon" type="image/svg+xml" href="./favicon.svg">
     <link rel="alternate icon" href="./favicon.svg">
     <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="./assets/style.css">
     <script src="./dist/index.js"></script>
     <script src="./i18n.js"></script>
     <script src="./i18n-translations.js"></script>
 </head>
 <body>
     <header>
-        <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
-        <div class="header-badge-group">
-            <span class="apache-tag" data-i18n="common.releaseTag">Release 1.0.0</span>
-            <a href="./demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
-            <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
+        <a href="index.html" class="header-brand">
+            <img src="favicon.svg" alt="AMEVA-Forge Logo">
+            <h1 data-i18n="common.headerTitle">AMEVA-Forge</h1>
+        </a>
+        <div class="header-controls">
+            <span class="release-tag" data-i18n="common.releaseTag">Release 1.0.0</span>
+            <div class="lang-selector-wrapper">
+                <select class="lang-select" onchange="if(window.i18nManager) window.i18nManager.setLanguage(this.value); else if(window.I18n) window.I18n.setLanguage(this.value)">
+                    <option value="en">🇺🇸 English</option>
+                    <option value="ko">🇰🇷 한국어</option>
+                    <option value="ja">🇯🇵 日本語</option>
+                    <option value="zh">🇨🇳 简体中文</option>
+                    <option value="es">🇪🇸 Español</option>
+                    <option value="de">🇩🇪 Deutsch</option>
+                </select>
+            </div>
+            <a href="https://pypi.org/project/ameva-forge/" target="_blank" class="header-btn" data-i18n="common.pypiBtn">PyPI (pip)</a>
+            <a href="./demo.html" class="header-btn" data-i18n="common.liveStudioBtn">Live WebGPU Studio</a>
+            <a href="https://github.com/uno-km/ameva-forge" target="_blank" class="header-btn primary" data-i18n="common.githubBtn">GitHub</a>
         </div>
     </header>
 
@@ -43,12 +59,20 @@
                 <li><a href="what-is-forge.html"><strong data-i18n="common.nav.whatIsForge">What is Forge?</strong></a></li>
                 <li><a href="forge-vs-pytorch.html"><strong data-i18n="common.nav.forgeVsPytorch">Forge vs PyTorch</strong></a></li>
             </ul>
+            <h3 data-i18n="common.nav.aiSpecs">AI Agent Protocol &amp; Feeds</h3>
+            <ul>
+                <li><a href="llms.txt" target="_blank">llms.txt (AI Context)</a></li>
+                <li><a href="llms-full.txt" target="_blank">llms-full.txt (Full Spec)</a></li>
+                <li><a href="robots.txt" target="_blank">robots.txt (AI Crawlers)</a></li>
+                <li><a href="sitemap.xml" target="_blank">sitemap.xml (Sitemap)</a></li>
+            </ul>
         </nav>
 
         <main class="content">
             <h2 data-i18n="home.welcomeTitle">Welcome to AMEVA-Forge (Release 1.0.0)</h2>
+            <p class="subtitle" data-i18n-html="home.welcomeDesc"><strong>AMEVA-Forge</strong> is a lightweight deep learning framework engineered for educational autograd, small model experimentation, and client-side privacy-preserving computation across both native Python environments and modern web browsers via WebGPU.</p>
 
-                                    <div class="badges-bar">
+            <div class="badges-bar">
                 <a href="https://pypi.org/project/ameva-forge/" target="_blank"><img src="https://img.shields.io/pypi/v/ameva-forge.svg?color=blue" alt="PyPI Version"></a>
                 <a href="https://pepy.tech/projects/ameva-forge" target="_blank"><img src="https://img.shields.io/pepy/dt/ameva-forge?color=orange" alt="Total Downloads"></a>
                 <img src="https://img.shields.io/badge/python-3.9+-blue.svg" alt="Python Version">
@@ -57,14 +81,15 @@
                 <img src="https://img.shields.io/badge/tests-100%25%20PASS-success" alt="Tests">
             </div>
 
+            <!-- 1-Line Quick Installation -->
             <div class="alert alert-tip" style="margin-top: 20px;">
                 <span class="alert-title" data-i18n="home.quickInstallTitle">1-Line Quick Installation</span>
-                <p data-i18n="home.quickInstallDesc">Install via pip for local/Pyodide usage, or launch the zero-install WebGPU Live Studio:</p>
-                
-                <h4 style="margin: 14px 0 6px 0; color: #004499;">Python Edition (PyPI):</h4>
-                <pre><code>pip install ameva-forge</code></pre>
+                <p data-i18n="home.quickInstallDesc">Install via pip for native/Pyodide usage, or launch the zero-install WebGPU Live Studio:</p>
+                <div style="margin-top: 12px;">
+                    <h4 style="margin: 8px 0 4px 0; color: #0055cc;">🐍 Python Edition (PyPI):</h4>
+                    <pre><code>pip install ameva-forge</code></pre>
+                </div>
             </div>
-            <p data-i18n-html="home.welcomeDesc"><strong>AMEVA-Forge</strong> is a lightweight deep learning framework engineered for educational autograd, small model experimentation, and client-side privacy-preserving computation across both native Python environments and modern web browsers via WebGPU.</p>
 
             <h3 data-i18n="home.releaseScopeTitle">Release 1.0 Scope: 2-Layer MLP & Causal Attention</h3>
             <p data-i18n-html="home.releaseScopeDesc">Our Release 1.0 focus is laser-targeted on one goal: <strong>Enable users to build, train, and understand neural networks (2-Layer MLP, Causal Attention, In-Place SGD) entirely in the browser using Python without server compute costs.</strong></p>
@@ -78,7 +103,7 @@
             </ul>
 
             <h3 data-i18n="home.supportedOpsTitle">Supported Operations & Modules in Release 1.0</h3>
-            <table>
+            <table class="data-table">
                 <thead>
                     <tr>
                         <th style="width: 25%;" data-i18n="home.thCategory">Category</th>
@@ -99,19 +124,20 @@
                         <td data-i18n-html="home.catFuncOps"><code>F.scaled_dot_product_attention</code> (Causal), <code>F.softmax</code>, <code>F.log_softmax</code>, <code>F.cross_entropy</code>, <code>nn.MSELoss</code>, <code>F.relu</code></td>
                     </tr>
                     <tr>
-                        <td><strong data-i18n="home.catOptim">Optimization</strong></td>
-                        <td data-i18n-html="home.catOptimOps"><code>optim.SGD</code> (GPU In-Place AXPY kernel with automatic gradient buffer disposal)</td>
+                        <td><strong data-i18n="home.catOptim">Optimization (optim)</strong></td>
+                        <td data-i18n-html="home.catOptimOps"><code>optim.SGD</code> (In-place parameter updates with zero allocation overhead)</td>
+                    </tr>
+                    <tr>
+                        <td><strong data-i18n="home.catShaders">GPU Shader Kernels</strong></td>
+                        <td data-i18n-html="home.catShadersOps"><code>elementwise.wgsl</code>, <code>matmul.wgsl</code> (16x16 workgroup tiled), <code>softmax.wgsl</code>, <code>layernorm.wgsl</code>, <code>cross_entropy.wgsl</code></td>
                     </tr>
                 </tbody>
             </table>
-
-            <h3 data-i18n="home.gettingStartedTitle">Getting Started</h3>
-            <p data-i18n-html="home.gettingStartedDesc">Proceed to our <a href="installation.html">Installation Guide</a> to set up AMEVA-Forge in your environment, try the <a href="./demo.html">Interactive Live Studio</a>, or explore the <a href="quickstart.html">Quickstart Guide</a> to define computation graphs immediately.</p>
         </main>
     </div>
 
     <footer>
-        <span data-i18n="common.footerText">&copy; 2026 AMEVA-Forge Team. Released under the Apache-2.0 License.</span>
+        <span data-i18n="common.footerText">&copy; 2026 AMEVA Open-Source Foundation (AOSF) &amp; uno-km. Released under the Apache 2.0 License.</span>
     </footer>
 </body>
 </html>
