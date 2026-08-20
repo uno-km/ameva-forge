@@ -9,6 +9,7 @@ src/forge/device.py
 src/forge/errors.py
 src/forge/functional.py
 src/forge/graph.py
+src/forge/linalg.py
 src/forge/nn.py
 src/forge/nn.pyi
 src/forge/ops.py

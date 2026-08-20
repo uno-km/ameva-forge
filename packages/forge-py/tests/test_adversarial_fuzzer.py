@@ -945,6 +945,59 @@ def test_fuzz_ranking_losses_and_label_smoothing():
     l_ce.backward()
     assert logits.grad is not None
 
+def test_fuzz_linalg_suite():
+    """Fuzz test forge.linalg module: inv, det, pinv, cholesky, qr, svd, eigh, matrix_rank, norm with Autograd."""
+    import forge as at
+    from forge import linalg
+    
+    # 1. linalg.inv & backward
+    A_np = np.array([[4.0, 1.0], [1.0, 3.0]], dtype=np.float32)
+    A = at.tensor(A_np, requires_grad=True)
+    A_inv = linalg.inv(A)
+    assert A_inv.shape == (2, 2)
+    np.testing.assert_allclose(A_inv.numpy(), np.linalg.inv(A_np), atol=1e-4)
+    A_inv.sum().backward()
+    assert A.grad is not None
+    
+    # 2. linalg.det & backward
+    B = at.tensor(np.array([[2.0, 1.0], [1.0, 2.0]], dtype=np.float32), requires_grad=True)
+    d = linalg.det(B)
+    assert d.shape == ()
+    np.testing.assert_allclose(d.numpy(), 3.0, atol=1e-4)
+    d.backward()
+    assert B.grad is not None
+    
+    # 3. linalg.cholesky
+    L = linalg.cholesky(A)
+    assert L.shape == (2, 2)
+    np.testing.assert_allclose(L.numpy() @ L.numpy().T, A_np, atol=1e-4)
+    
+    # 4. linalg.qr
+    Q, R = linalg.qr(A)
+    assert Q.shape == (2, 2)
+    assert R.shape == (2, 2)
+    np.testing.assert_allclose(Q.numpy() @ R.numpy(), A_np, atol=1e-4)
+    
+    # 5. linalg.svd
+    U, S, Vh = linalg.svd(A)
+    assert U.shape == (2, 2)
+    assert S.shape == (2,)
+    assert Vh.shape == (2, 2)
+    reconstructed = U.numpy() @ np.diag(S.numpy()) @ Vh.numpy()
+    np.testing.assert_allclose(reconstructed, A_np, atol=1e-4)
+    
+    # 6. linalg.pinv & matrix_rank & norm
+    pinv_A = linalg.pinv(A)
+    assert pinv_A.shape == (2, 2)
+    np.testing.assert_allclose(pinv_A.numpy(), np.linalg.pinv(A_np), atol=1e-4)
+    
+    rank = linalg.matrix_rank(A)
+    assert int(rank.numpy()) == 2
+    
+    n = linalg.norm(A)
+    np.testing.assert_allclose(n.numpy(), np.linalg.norm(A_np), atol=1e-4)
+
+
 
 
 

@@ -101,12 +101,14 @@ from .data import DataLoader
 # 고수준 AI 모델, 강화학습, 파이프라인 모듈 임포트
 from . import models
 from . import rl
+from . import linalg
 from .pipeline import pipeline
 
 # WHAT: 외부에서 `from forge import *`를 호출할 때 노출될 이름들의 리스트입니다.
 # WHY: 패키지 내부에서만 쓰이는 숨겨진(private) 모듈이나 변수가 실수로 노출되지 않도록 제어하기 위해 사용합니다.
 # HOW: 외부에 공개해야 할 함수, 클래스, 서브모듈들의 이름을 문자열 리스트로 모아서 정의합니다.
 __all__ = [
+    "linalg",
     # 초기화
     "init",
     "is_available",
