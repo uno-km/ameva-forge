@@ -484,6 +484,39 @@ def test_fuzz_predicate_inspection_isnan_isclose_allclose():
     assert c.any().numpy() == True
     assert c.all(dim=1).numpy().tolist() == [False, True]
 
+def test_fuzz_conv1d_and_pixel_transformation_modules():
+    """Fuzz test Conv1d, PixelShuffle, PixelUnshuffle, Upsample with Autograd."""
+    import forge as at
+    import forge.nn as nn
+    
+    # 1. Conv1d forward & backward
+    conv1 = nn.Conv1d(in_channels=2, out_channels=4, kernel_size=3, stride=1, padding=1)
+    x = at.tensor(np.ones((2, 2, 8), dtype=np.float32), requires_grad=True)
+    out = conv1(x)
+    assert out.shape == (2, 4, 8)
+    loss = out.sum()
+    loss.backward()
+    assert x.grad is not None
+    assert conv1.weight.grad is not None
+    
+    # 2. PixelShuffle & PixelUnshuffle inverse symmetry
+    ps = nn.PixelShuffle(upscale_factor=2)
+    pus = nn.PixelUnshuffle(downscale_factor=2)
+    x_img = at.tensor(np.random.randn(2, 12, 4, 4).astype(np.float32), requires_grad=True)
+    shuffled = ps(x_img)
+    assert shuffled.shape == (2, 3, 8, 8)
+    unshuffled = pus(shuffled)
+    assert unshuffled.shape == (2, 12, 4, 4)
+    np.testing.assert_allclose(unshuffled.numpy(), x_img.numpy())
+    
+    # 3. Upsample nearest
+    up = nn.Upsample(scale_factor=2, mode='nearest')
+    x_low = at.tensor(np.array([[[[1.0, 2.0], [3.0, 4.0]]]], dtype=np.float32), requires_grad=True)
+    out_high = up(x_low)
+    assert out_high.shape == (1, 1, 4, 4)
+    np.testing.assert_allclose(out_high.numpy()[0, 0, 0:2, 0:2], np.full((2, 2), 1.0))
+
+
 
 
 

@@ -771,6 +771,76 @@ class Conv2d(Module):
         # HOW: 내부 C/C++ 기반 또는 최적화된 conv2d 함수로 넘깁니다.
         return conv2d(x, self.weight, self.bias, self.stride, self.padding)
 
+class Conv1d(Module):
+    """
+    무엇을: 1차원 합성곱(Convolution 1D) 계층 모듈입니다.
+    왜: 오디오 시그널, 시계열, 텍스트 CNN 등의 시퀀스 특징 추출을 위함입니다.
+    """
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int, stride: int = 1, padding: int = 0, bias: bool = True):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        
+        import math
+        k = 1 / math.sqrt(in_channels * kernel_size)
+        from .ops import tensor
+        import numpy as np
+        
+        weight_data = np.random.uniform(-k, k, (out_channels, in_channels, kernel_size)).astype(np.float32)
+        self.weight = tensor(weight_data, requires_grad=True)
+        
+        if bias:
+            bias_data = np.random.uniform(-k, k, (out_channels,)).astype(np.float32)
+            self.bias = tensor(bias_data, requires_grad=True)
+        else:
+            self.bias = None
+
+    def forward(self, x: Tensor) -> Tensor:
+        from .ops import conv1d
+        return conv1d(x, self.weight, self.bias, stride=self.stride, padding=self.padding)
+
+class PixelShuffle(Module):
+    """
+    무엇을: 채널 차원의 픽셀들을 공간(Spatial) 해상도로 재배열하는 픽셀 셔플(PixelShuffle) 모듈입니다.
+    왜: Super-Resolution (초해상도) 및 오토인코더 업샘플링을 위함입니다.
+    """
+    def __init__(self, upscale_factor: int):
+        super().__init__()
+        self.upscale_factor = upscale_factor
+
+    def forward(self, x: Tensor) -> Tensor:
+        from .ops import pixel_shuffle
+        return pixel_shuffle(x, self.upscale_factor)
+
+class PixelUnshuffle(Module):
+    """
+    무엇을: 공간 해상도를 채널 차원으로 다운샘플링하는 역 픽셀 셔플(PixelUnshuffle) 모듈입니다.
+    """
+    def __init__(self, downscale_factor: int):
+        super().__init__()
+        self.downscale_factor = downscale_factor
+
+    def forward(self, x: Tensor) -> Tensor:
+        from .ops import pixel_unshuffle
+        return pixel_unshuffle(x, self.downscale_factor)
+
+class Upsample(Module):
+    """
+    무엇을: 텐서의 공간 크기를 지정된 크기나 비율로 업샘플링하는 모듈입니다.
+    """
+    def __init__(self, size=None, scale_factor=None, mode: str = 'nearest'):
+        super().__init__()
+        self.size = size
+        self.scale_factor = scale_factor
+        self.mode = mode
+
+    def forward(self, x: Tensor) -> Tensor:
+        from .ops import interpolate
+        return interpolate(x, size=self.size, scale_factor=self.scale_factor, mode=self.mode)
+
 # WHAT: 레이어 정규화(Layer Normalization) 계층 클래스입니다.
 # WHY: 시퀀스 데이터나 자연어 처리에서 미니배치 차원이 아닌 피처(레이어) 차원에 대해 정규화를 수행해 학습을 돕기 위함입니다.
 # HOW: 각 샘플별로 주어진 차원들(normalized_shape)에 걸쳐 평균과 분산을 구하고 표준화합니다.

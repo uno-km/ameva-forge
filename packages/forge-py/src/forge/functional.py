@@ -464,6 +464,26 @@ def adaptive_max_pool2d(input, output_size):
     from .ops import adaptive_max_pool2d as ops_adaptive_max_pool2d
     return ops_adaptive_max_pool2d(input, output_size)
 
+def conv1d(input, weight, bias=None, stride: int = 1, padding: int = 0):
+    """Applies 1D convolution."""
+    from .ops import conv1d as ops_conv1d
+    return ops_conv1d(input, weight, bias=bias, stride=stride, padding=padding)
+
+def pixel_shuffle(input, upscale_factor: int):
+    """Pixel shuffle."""
+    from .ops import pixel_shuffle as ops_pixel_shuffle
+    return ops_pixel_shuffle(input, upscale_factor)
+
+def pixel_unshuffle(input, downscale_factor: int):
+    """Pixel unshuffle."""
+    from .ops import pixel_unshuffle as ops_pixel_unshuffle
+    return ops_pixel_unshuffle(input, downscale_factor)
+
+def interpolate(input, size=None, scale_factor=None, mode: str = 'nearest'):
+    """Interpolate."""
+    from .ops import interpolate as ops_interpolate
+    return ops_interpolate(input, size=size, scale_factor=scale_factor, mode=mode)
+
 def _move_tensor_state(dst, src) -> None:
     """
     WHAT: src 텐서의 상태와 지연 연산 그래프를 dst 텐서로 안전하게 이동(Move)합니다.

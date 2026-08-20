@@ -31,7 +31,8 @@ from .ops import (
     adaptive_avg_pool2d, adaptive_max_pool2d,
     binary_cross_entropy_with_logits, smooth_l1_loss, kl_div, l1_loss,
     topk, sort, argsort, TopKResult, SortResult,
-    isnan, isinf, isfinite, isclose, allclose, any_op, all_op
+    isnan, isinf, isfinite, isclose, allclose, any_op, all_op,
+    conv1d, pixel_shuffle, pixel_unshuffle, interpolate
 )
 any = any_op
 all = all_op
@@ -75,7 +76,8 @@ from .nn import (
     GELU, SiLU, LeakyReLU, ELU, CosineSimilarity,
     Identity, ConstantPad2d, ZeroPad2d, ReflectionPad2d, ReplicationPad2d,
     AdaptiveAvgPool2d, AdaptiveMaxPool2d,
-    CrossEntropyLoss, MSELoss, L1Loss, BCEWithLogitsLoss, SmoothL1Loss, KLDivLoss
+    CrossEntropyLoss, MSELoss, L1Loss, BCEWithLogitsLoss, SmoothL1Loss, KLDivLoss,
+    Conv1d, PixelShuffle, PixelUnshuffle, Upsample
 )
 # 최적화 알고리즘이 있는 optim 서브모듈과 학습률 스케줄러 임포트
 from . import optim  

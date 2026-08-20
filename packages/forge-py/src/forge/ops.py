@@ -2022,6 +2022,167 @@ class PadFunction(Function):
 def pad(x: Tensor, pad: Tuple[int, ...], mode='constant', value=0.0) -> Tensor:
     return PadFunction.apply(x, pad, mode, value)
 
+# WHAT: Conv2d 연산 클래스입니다.
+# WHY: 이미지 처리 및 특징 추출을 위한 합성곱 연산을 수행합니다.
+# HOW: im2col을 사용하여 합성곱을 행렬 곱셈으로 변환하거나 직접 구현합니다.
+class Conv2dFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, x: Tensor, weight: Tensor, bias: Optional[Tensor], stride: Any, padding: Any) -> Tensor:
+        ctx.save_for_backward(x, weight, bias)
+        ctx.stride = stride
+        ctx.padding = padding
+        
+        stride_h, stride_w = (stride, stride) if isinstance(stride, int) else stride
+        pad_h, pad_w = (padding, padding) if isinstance(padding, int) else padding
+        
+        N, C, H, W = x.shape
+        C_out, C_in, K_h, K_w = weight.shape
+        if C != C_in:
+            raise AMEVAForgeShapeError(f"Input channels {C} does not match weight channels {C_in}")
+            
+        H_out = (H + 2 * pad_h - K_h) // stride_h + 1
+        W_out = (W + 2 * pad_w - K_w) // stride_w + 1
+        
+        if x.device == "gpu" and (x.requires_grad or weight.requires_grad or (bias is not None and bias.requires_grad)):
+            raise AMEVAForgeUnsupportedOperationError(
+                "GPU Conv2d backward is not supported in Release 1. "
+                "Use CPU Conv2d training or mark tensors requires_grad=False for GPU inference."
+            )
+        
+        if _should_use_gpu(x, weight):
+            x_col = Tensor(shape=(N * H_out * W_out, C * K_h * K_w), dtype=x.dtype, device="gpu", requires_grad=False,
+                           op="im2col", parents=(x,), op_params=[N, C, H, W, K_h, K_w, stride_h, pad_h, H_out, W_out])
+            
+            weight_reshaped = weight.reshape((C_out, C * K_h * K_w))
+            weight_t = permute(weight_reshaped, (1, 0))
+            
+            out_2d = Tensor(shape=(N * H_out * W_out, C_out), dtype=x.dtype, device="gpu", requires_grad=False,
+                            op="matmul", parents=(x_col, weight_t), op_params=[N * H_out * W_out, C_out, C * K_h * K_w])
+                            
+            out = permute(out_2d.reshape((N, H_out, W_out, C_out)), (0, 3, 1, 2))
+            if bias is not None:
+                bias_reshaped = bias.reshape((1, C_out, 1, 1))
+                out = out + bias_reshaped
+            return out
+        else:
+            x_data = _require_cpu_data(x)
+            weight_data = _require_cpu_data(weight)
+            
+            x_col = np.zeros((N, H_out * W_out, C * K_h * K_w), dtype=np.float32)
+            for n in range(N):
+                for h_out in range(H_out):
+                    for w_out in range(W_out):
+                        h_start = h_out * stride_h - pad_h
+                        w_start = w_out * stride_w - pad_w
+                        patch = np.zeros((C, K_h, K_w), dtype=np.float32)
+                        for c in range(C):
+                            for k_h in range(K_h):
+                                for k_w in range(K_w):
+                                    h_in = h_start + k_h
+                                    w_in = w_start + k_w
+                                    if 0 <= h_in < H and 0 <= w_in < W:
+                                        patch[c, k_h, k_w] = x_data[n, c, h_in, w_in]
+                        x_col[n, h_out * W_out + w_out, :] = patch.flatten()
+            
+            weight_reshaped = weight_data.reshape((C_out, C * K_h * K_w))
+            out_data = np.zeros((N, C_out, H_out, W_out), dtype=np.float32)
+            for n in range(N):
+                out_2d = x_col[n] @ weight_reshaped.T
+                out_data[n] = out_2d.T.reshape((C_out, H_out, W_out))
+                
+            if bias is not None:
+                bias_data = _require_cpu_data(bias)
+                out_data += bias_data.reshape((1, C_out, 1, 1))
+                
+            return Tensor(shape=(N, C_out, H_out, W_out), dtype=x.dtype, device="cpu", requires_grad=False, data=out_data)
+
+    @staticmethod
+    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, ...]:
+        x, weight, bias = ctx.saved_tensors
+        stride = ctx.stride
+        padding = ctx.padding
+        stride_h, stride_w = (stride, stride) if isinstance(stride, int) else stride
+        pad_h, pad_w = (padding, padding) if isinstance(padding, int) else padding
+        
+        N, C, H, W = x.shape
+        C_out, C_in, K_h, K_w = weight.shape
+        H_out = (H + 2 * pad_h - K_h) // stride_h + 1
+        W_out = (W + 2 * pad_w - K_w) // stride_w + 1
+        
+        if bias is not None:
+            if bias.device == "gpu":
+                grad_bias = Tensor(
+                    shape=bias.shape,
+                    dtype=bias.dtype,
+                    device="gpu",
+                    requires_grad=False,
+                    op="conv2d_bias_backward",
+                    parents=(grad_output,),
+                    op_params=[N, C_out, H_out, W_out]
+                )
+            else:
+                grad_bias_data = np.sum(_require_cpu_data(grad_output), axis=(0, 2, 3))
+                grad_bias = Tensor(shape=bias.shape, dtype=bias.dtype, device="cpu", requires_grad=False, data=grad_bias_data)
+        else:
+            grad_bias = None
+            
+        if x.device == "gpu":
+            raise AMEVAForgeUnsupportedOperationError("GPU Conv2d backward is not supported in Release 1.")
+        else:
+            x_data = _require_cpu_data(x)
+            weight_data = _require_cpu_data(weight)
+            grad_out_data = _require_cpu_data(grad_output)
+            
+            x_col = np.zeros((N, H_out * W_out, C * K_h * K_w), dtype=np.float32)
+            for n in range(N):
+                for h_out in range(H_out):
+                    for w_out in range(W_out):
+                        h_start = h_out * stride_h - pad_h
+                        w_start = w_out * stride_w - pad_w
+                        patch = np.zeros((C, K_h, K_w), dtype=np.float32)
+                        for c in range(C):
+                            for k_h in range(K_h):
+                                for k_w in range(K_w):
+                                    h_in = h_start + k_h
+                                    w_in = w_start + k_w
+                                    if 0 <= h_in < H and 0 <= w_in < W:
+                                        patch[c, k_h, k_w] = x_data[n, c, h_in, w_in]
+                        x_col[n, h_out * W_out + w_out, :] = patch.flatten()
+            
+            grad_weight_data = np.zeros_like(weight_data)
+            grad_x_data = np.zeros_like(x_data)
+            weight_reshaped = weight_data.reshape((C_out, C * K_h * K_w))
+            
+            grad_out_2d = grad_out_data.transpose(0, 2, 3, 1).reshape(N, H_out * W_out, C_out)
+            grad_x_col = np.zeros_like(x_col)
+            for n in range(N):
+                gw = x_col[n].T @ grad_out_2d[n]
+                grad_weight_data += gw.T.reshape(weight.shape)
+                
+                gxc = grad_out_2d[n] @ weight_reshaped
+                grad_x_col[n] = gxc
+                
+                for h_out in range(H_out):
+                    for w_out in range(W_out):
+                        patch = grad_x_col[n, h_out * W_out + w_out].reshape(C, K_h, K_w)
+                        h_start = h_out * stride_h - pad_h
+                        w_start = w_out * stride_w - pad_w
+                        for c in range(C):
+                            for k_h in range(K_h):
+                                for k_w in range(K_w):
+                                    h_in = h_start + k_h
+                                    w_in = w_start + k_w
+                                    if 0 <= h_in < H and 0 <= w_in < W:
+                                        grad_x_data[n, c, h_in, w_in] += patch[c, k_h, k_w]
+                                        
+            grad_x = Tensor(shape=x.shape, dtype=x.dtype, device="cpu", requires_grad=False, data=grad_x_data)
+            grad_weight = Tensor(shape=weight.shape, dtype=weight.dtype, device="cpu", requires_grad=False, data=grad_weight_data)
+            
+            return grad_x, grad_weight, grad_bias
+
+def conv2d(x: Tensor, weight: Tensor, bias: Optional[Tensor] = None, stride: Any = 1, padding: Any = 0) -> Tensor:
+    return Conv2dFunction.apply(x, weight, bias, stride, padding)
+
 # WHAT: 인덱스 텐서를 기반으로 특정 축에서 데이터를 수집(Gather)하는 클래스입니다.
 # WHY: 임베딩 룩업(Embedding Lookup)이나 특정 위치의 값들을 모아 새로운 텐서를 만들기 위함입니다.
 # HOW: CPU는 np.take_along_axis를, GPU는 메타데이터와 stride를 계산해 커널 매개변수로 전달합니다.
@@ -2264,211 +2425,6 @@ class SliceFunction(Function):
 # HOW: SliceFunction.apply를 실행합니다.
 def slice_op(x: Tensor, key) -> Tensor:
     return SliceFunction.apply(x, key)
-
-# WHAT: 2차원 합성곱(Convolution 2D) 연산 클래스입니다.
-# WHY: 이미지 등 공간 정보를 가진 텐서에 필터(커널)를 적용하여 특징 맵을 추출하기 위함입니다.
-# HOW: CPU는 im2col 방식을 루프로 구현하고, GPU는 im2col 커널 후 matmul을 조합하여 계산합니다.
-class Conv2dFunction(Function):
-    @staticmethod
-    def forward(ctx: Context, x: Tensor, weight: Tensor, bias: Optional[Tensor], stride: int, padding: int) -> Tensor:
-        ctx.save_for_backward(x, weight, bias)
-        ctx.stride = stride
-        ctx.padding = padding
-        
-        N, C, H, W = x.shape
-        C_out, C_in, K_h, K_w = weight.shape
-        if C != C_in:
-            raise AMEVAForgeShapeError(f"Input channels {C} does not match weight channels {C_in}")
-            
-        # WHAT: 합성곱 이후의 출력 형태(Height, Width)를 계산합니다.
-        # WHY: 패딩과 스트라이드를 고려한 출력 텐서를 생성하기 위함입니다.
-        # HOW: 일반적인 Conv2D 출력 크기 공식을 적용합니다.
-        H_out = (H + 2 * padding - K_h) // stride + 1
-        W_out = (W + 2 * padding - K_w) // stride + 1
-        
-        if x.device == "gpu" and (x.requires_grad or weight.requires_grad or (bias is not None and bias.requires_grad)):
-            raise AMEVAForgeUnsupportedOperationError(
-                "GPU Conv2d backward is not supported in Release 1. "
-                "Use CPU Conv2d training or mark tensors requires_grad=False for GPU inference."
-            )
-        
-        if _should_use_gpu(x, weight):
-            # WHAT: GPU 경로에서 이미지를 열(Column)로 전개하는 im2col 연산을 수행합니다.
-            # WHY: 합성곱 연산을 행렬 곱셈(Matmul)으로 치환하여 GPU 병렬 처리 효율을 극대화하기 위함입니다.
-            # HOW: op="im2col"로 텐서를 띄웁니다.
-            x_col = Tensor(shape=(N * H_out * W_out, C * K_h * K_w), dtype=x.dtype, device="gpu", requires_grad=False,
-                           op="im2col", parents=(x,), op_params=[N, C, H, W, K_h, K_w, stride, padding, H_out, W_out])
-            
-            # WHAT: 4차원 가중치 텐서를 2차원으로 평탄화(reshape)하고 전치(permute)합니다.
-            # WHY: x_col과의 행렬 곱셈을 맞추기 위함입니다.
-            # HOW: reshape 후 permute를 호출합니다.
-            weight_reshaped = weight.reshape((C_out, C * K_h * K_w))
-            weight_t = permute(weight_reshaped, (1, 0))
-            
-            out_2d = Tensor(shape=(N * H_out * W_out, C_out), dtype=x.dtype, device="gpu", requires_grad=False,
-                            op="matmul", parents=(x_col, weight_t), op_params=[N * H_out * W_out, C_out, C * K_h * K_w])
-                            
-            out = permute(out_2d.reshape((N, H_out, W_out, C_out)), (0, 3, 1, 2))
-            if bias is not None:
-                bias_reshaped = bias.reshape((1, C_out, 1, 1))
-                out = out + bias_reshaped
-            return out
-        else:
-            # WHAT: CPU 경로에서 im2col 전개를 루프로 수행합니다.
-            # WHY: GPU 커널이 없을 때 Numpy만으로 합성곱을 계산해야 하기 때문입니다.
-            # HOW: 다중 루프를 돌며 patch를 추출해 x_col에 할당합니다.
-            x_data = _require_cpu_data(x)
-            weight_data = _require_cpu_data(weight)
-            
-            x_col = np.zeros((N, H_out * W_out, C * K_h * K_w), dtype=np.float32)
-            for n in range(N):
-                for h_out in range(H_out):
-                    for w_out in range(W_out):
-                        h_start = h_out * stride - padding
-                        w_start = w_out * stride - padding
-                        patch = np.zeros((C, K_h, K_w), dtype=np.float32)
-                        for c in range(C):
-                            for k_h in range(K_h):
-                                for k_w in range(K_w):
-                                    h_in = h_start + k_h
-                                    w_in = w_start + k_w
-                                    if 0 <= h_in < H and 0 <= w_in < W:
-                                        patch[c, k_h, k_w] = x_data[n, c, h_in, w_in]
-                        x_col[n, h_out * W_out + w_out, :] = patch.flatten()
-            
-            weight_reshaped = weight_data.reshape((C_out, C * K_h * K_w))
-            out_data = np.zeros((N, C_out, H_out, W_out), dtype=np.float32)
-            # WHAT: 전개된 x_col 행렬과 가중치 행렬을 곱합니다.
-            # WHY: 특징 맵(Feature Map)을 생성하기 위함입니다.
-            # HOW: 넘파이 행렬 곱(@)을 수행하고 원래 이미지 모양으로 복원합니다.
-            for n in range(N):
-                out_2d = x_col[n] @ weight_reshaped.T
-                out_data[n] = out_2d.T.reshape((C_out, H_out, W_out))
-                
-            if bias is not None:
-                bias_data = _require_cpu_data(bias)
-                out_data += bias_data.reshape((1, C_out, 1, 1))
-                
-            return Tensor(shape=(N, C_out, H_out, W_out), dtype=x.dtype, device="cpu", requires_grad=False, data=out_data)
-
-    @staticmethod
-    def backward(ctx: Context, grad_output: Tensor) -> Tuple[Tensor, ...]:
-        x, weight, bias = ctx.saved_tensors
-        stride = ctx.stride
-        padding = ctx.padding
-        
-        N, C, H, W = x.shape
-        C_out, C_in, K_h, K_w = weight.shape
-        H_out = grad_output.shape[2]
-        W_out = grad_output.shape[3]
-        
-        grad_bias = None
-        # WHAT: 편향(bias) 텐서의 기울기를 계산합니다.
-        # WHY: 편향은 모든 공간 픽셀과 배치에 대해 동일하게 더해졌으므로, 흘러온 기울기를 채널(C_out)만 남기고 싹 다 더해야 하기 때문입니다.
-        # HOW: 축 3, 2, 0 차례대로 sum_axis를 호출합니다.
-        if bias is not None and bias.requires_grad:
-            g = sum_axis(grad_output, 3)
-            g = sum_axis(g, 2)
-            g = sum_axis(g, 0)
-            grad_bias = g.reshape(bias.shape)
-            
-        if _should_use_gpu(x, weight):
-            # WHAT: GPU 기반 합성곱 역전파 처리입니다.
-            # WHY: 가중치 미분과 입력 미분을 행렬 연산과 col2im 연산으로 가속하기 위함입니다.
-            # HOW: grad_output을 2차원으로 눌러서 matmul 후, col2im 커널을 통해 이미지를 복원시킵니다.
-            grad_out_2d = permute(grad_output, (0, 2, 3, 1)).reshape((N * H_out * W_out, C_out))
-            x_col = Tensor(shape=(N * H_out * W_out, C * K_h * K_w), dtype=x.dtype, device="gpu", requires_grad=False,
-                           op="im2col", parents=(x,), op_params=[N, C, H, W, K_h, K_w, stride, padding, H_out, W_out])
-            
-            x_col_t = permute(x_col, (1, 0))
-            grad_weight_2d = Tensor(shape=(C * K_h * K_w, C_out), dtype=x.dtype, device="gpu", requires_grad=False,
-                                    op="matmul", parents=(x_col_t, grad_out_2d), op_params=[C * K_h * K_w, C_out, N * H_out * W_out])
-            grad_weight = permute(grad_weight_2d, (1, 0)).reshape(weight.shape)
-            
-            weight_reshaped = weight.reshape((C_out, C * K_h * K_w))
-            grad_x_col_2d = Tensor(shape=(N * H_out * W_out, C * K_h * K_w), dtype=x.dtype, device="gpu", requires_grad=False,
-                                   op="matmul", parents=(grad_out_2d, weight_reshaped), op_params=[N * H_out * W_out, C * K_h * K_w, C_out])
-            
-            grad_x = Tensor(shape=(N, C, H, W), dtype=x.dtype, device="gpu", requires_grad=False,
-                            op="col2im", parents=(grad_x_col_2d,), op_params=[N, C, H, W, K_h, K_w, stride, padding, H_out, W_out])
-            
-            return grad_x, grad_weight, grad_bias
-        else:
-            # WHAT: CPU 기반 합성곱 역전파 처리입니다.
-            # WHY: GPU 가속을 사용할 수 없을 때 넘파이만으로 가중치와 입력의 기울기를 구하기 위함입니다.
-            # HOW: 앞서 순전파와 동일하게 입력을 im2col로 전개하고, 루프를 돌며 grad_out과 행렬 곱을 수행합니다.
-            x_data = _require_cpu_data(x)
-            weight_data = _require_cpu_data(weight)
-            grad_out_data = _require_cpu_data(grad_output)
-            
-            x_col = np.zeros((N, H_out * W_out, C * K_h * K_w), dtype=np.float32)
-            # WHAT: CPU im2col 재계산 루프입니다.
-            # WHY: x_col을 역전파용으로 저장하지 않았기 때문에 메모리 절약을 위해 여기서 다시 계산합니다.
-            # HOW: 배치(N), 세로(H_out), 가로(W_out)를 순회하며 패치(patch)를 추출합니다.
-            for n in range(N):
-                for h_out in range(H_out):
-                    for w_out in range(W_out):
-                        h_start = h_out * stride - padding
-                        w_start = w_out * stride - padding
-                        patch = np.zeros((C, K_h, K_w), dtype=np.float32)
-                        for c in range(C):
-                            for k_h in range(K_h):
-                                for k_w in range(K_w):
-                                    h_in = h_start + k_h
-                                    w_in = w_start + k_w
-                                    if 0 <= h_in < H and 0 <= w_in < W:
-                                        patch[c, k_h, k_w] = x_data[n, c, h_in, w_in]
-                        x_col[n, h_out * W_out + w_out, :] = patch.flatten()
-            
-            grad_weight_data = np.zeros_like(weight_data)
-            grad_x_data = np.zeros_like(x_data)
-            weight_reshaped = weight_data.reshape((C_out, C * K_h * K_w))
-            
-            # WHAT: 출력의 기울기를 행렬 곱셈을 위해 평탄화(reshape)합니다.
-            # WHY: im2col 형태의 입력과 내적(dot product)하여 가중치와 입력 기울기를 도출하기 위함입니다.
-            # HOW: 전치(transpose) 후 reshape 합니다.
-            grad_out_2d = grad_out_data.transpose(0, 2, 3, 1).reshape(N, H_out * W_out, C_out)
-            
-            grad_x_col = np.zeros_like(x_col)
-            for n in range(N):
-                # WHAT: 가중치(weight)에 대한 기울기를 누적 계산합니다.
-                # WHY: dL/dW = x^T * dL/dY 공식을 따릅니다.
-                # HOW: x_col 전치행렬과 grad_out_2d를 곱해 원래 가중치 모양으로 더합니다.
-                gw = x_col[n].T @ grad_out_2d[n]
-                grad_weight_data += gw.T.reshape(weight.shape)
-                
-                # WHAT: 입력(x) 텐서의 열(col) 형태 기울기를 계산합니다.
-                # WHY: dL/dX_col = dL/dY * W 공식을 따릅니다.
-                # HOW: grad_out_2d와 weight_reshaped를 곱합니다.
-                gxc = grad_out_2d[n] @ weight_reshaped
-                grad_x_col[n] = gxc
-                
-                # WHAT: col2im 과정을 수동으로 루프를 돌며 수행합니다.
-                # WHY: 평탄화되었던 기울기를 다시 2차원 공간 좌표계(C, H, W)로 누적합하기 위함입니다.
-                # HOW: grad_x_col의 각 패치를 원래 이미지 인덱스 위치(h_in, w_in)에 더합니다.
-                for h_out in range(H_out):
-                    for w_out in range(W_out):
-                        patch = grad_x_col[n, h_out * W_out + w_out].reshape(C, K_h, K_w)
-                        h_start = h_out * stride - padding
-                        w_start = w_out * stride - padding
-                        for c in range(C):
-                            for k_h in range(K_h):
-                                for k_w in range(K_w):
-                                    h_in = h_start + k_h
-                                    w_in = w_start + k_w
-                                    if 0 <= h_in < H and 0 <= w_in < W:
-                                        grad_x_data[n, c, h_in, w_in] += patch[c, k_h, k_w]
-                                        
-            grad_x = Tensor(shape=x.shape, dtype=x.dtype, device="cpu", requires_grad=False, data=grad_x_data)
-            grad_weight = Tensor(shape=weight.shape, dtype=weight.dtype, device="cpu", requires_grad=False, data=grad_weight_data)
-            
-            return grad_x, grad_weight, grad_bias
-
-# WHAT: Conv2D 연산 편의 함수입니다.
-# WHY: 사용자가 nn 모듈 등에서 텐서에 2D 합성곱을 손쉽게 호출하기 위함입니다.
-# HOW: Conv2dFunction.apply를 실행합니다.
-def conv2d(x: Tensor, weight: Tensor, bias: Optional[Tensor] = None, stride: int = 1, padding: int = 0) -> Tensor:
-    return Conv2dFunction.apply(x, weight, bias, stride, padding)
 
 
 # WHAT: 2차원 공간 영역에서의 최대 풀링(Max Pooling 2D) 연산 클래스입니다.
@@ -3378,4 +3334,70 @@ def all_op(input: Tensor, dim: Optional[int] = None, keepdim: bool = False) -> T
     data = _require_cpu_data(input, "input")
     res = np.all(data, axis=dim, keepdims=keepdim)
     return Tensor(shape=res.shape if isinstance(res, np.ndarray) else (), dtype="bool", device="cpu", data=res if isinstance(res, np.ndarray) else np.array(res, dtype=bool), requires_grad=False)
+
+
+def conv1d(x: Tensor, weight: Tensor, bias: Optional[Tensor] = None, stride: int = 1, padding: int = 0) -> Tensor:
+    """Applies a 1D convolution over an input signal composed of several input planes."""
+    if len(x.shape) != 3 or len(weight.shape) != 3:
+        raise AMEVAForgeShapeError(f"conv1d expects 3D tensors (N, C, L), got x: {x.shape}, weight: {weight.shape}")
+    x_2d = x.unsqueeze(2)
+    w_2d = weight.unsqueeze(2)
+    out_2d = conv2d(x_2d, w_2d, bias=bias, stride=(1, stride), padding=(0, padding))
+    return out_2d.squeeze(2)
+
+def pixel_shuffle(input: Tensor, upscale_factor: int) -> Tensor:
+    """Rearranges elements in a tensor of shape (*, C * r^2, H, W) to a tensor of shape (*, C, H * r, W * r)."""
+    if len(input.shape) < 3:
+        raise AMEVAForgeShapeError(f"pixel_shuffle requires at least 3D tensor, got shape {input.shape}")
+    r = upscale_factor
+    *batch_dims, C, H, W = input.shape
+    if C % (r * r) != 0:
+        raise AMEVAForgeShapeError(f"pixel_shuffle channels {C} must be divisible by {r*r}")
+    C_out = C // (r * r)
+    x_reshaped = input.reshape((*batch_dims, C_out, r, r, H, W))
+    # permute: (*batch, C_out, H, r, W, r)
+    perm = list(range(len(batch_dims))) + [len(batch_dims), len(batch_dims) + 3, len(batch_dims) + 1, len(batch_dims) + 4, len(batch_dims) + 2]
+    x_perm = x_reshaped.permute(tuple(perm))
+    return x_perm.reshape((*batch_dims, C_out, H * r, W * r))
+
+def pixel_unshuffle(input: Tensor, downscale_factor: int) -> Tensor:
+    """Reverses the PixelShuffle operation by rearranging elements to shape (*, C * r^2, H / r, W / r)."""
+    if len(input.shape) < 3:
+        raise AMEVAForgeShapeError(f"pixel_unshuffle requires at least 3D tensor, got shape {input.shape}")
+    r = downscale_factor
+    *batch_dims, C, H, W = input.shape
+    if H % r != 0 or W % r != 0:
+        raise AMEVAForgeShapeError(f"pixel_unshuffle H ({H}) and W ({W}) must be divisible by {r}")
+    H_out = H // r
+    W_out = W // r
+    x_reshaped = input.reshape((*batch_dims, C, H_out, r, W_out, r))
+    # permute: (*batch, C, r, r, H_out, W_out)
+    perm = list(range(len(batch_dims))) + [len(batch_dims), len(batch_dims) + 2, len(batch_dims) + 4, len(batch_dims) + 1, len(batch_dims) + 3]
+    x_perm = x_reshaped.permute(tuple(perm))
+    return x_perm.reshape((*batch_dims, C * r * r, H_out, W_out))
+
+def interpolate(input: Tensor, size: Optional[Any] = None, scale_factor: Optional[float] = None, mode: str = 'nearest') -> Tensor:
+    """Down/up samples the input to either the given size or the given scale_factor."""
+    if len(input.shape) != 4:
+        raise AMEVAForgeShapeError(f"interpolate currently supports 4D tensor (N, C, H, W), got shape {input.shape}")
+    N, C, H, W = input.shape
+    if size is not None:
+        if isinstance(size, int):
+            out_h, out_w = size, size
+        else:
+            out_h, out_w = size
+    elif scale_factor is not None:
+        out_h = int(H * scale_factor)
+        out_w = int(W * scale_factor)
+    else:
+        raise ValueError("Either size or scale_factor must be specified")
+        
+    data = _require_cpu_data(input, "input")
+    if mode == 'nearest':
+        h_idx = (np.arange(out_h) * H // out_h).astype(np.int32)
+        w_idx = (np.arange(out_w) * W // out_w).astype(np.int32)
+        out_data = data[:, :, h_idx[:, None], w_idx]
+        return Tensor(shape=(N, C, out_h, out_w), dtype=input.dtype, device='cpu', data=out_data.astype(np.float32), requires_grad=input.requires_grad)
+    else:
+        raise NotImplementedError(f"Interpolation mode {mode!r} is not yet supported; use 'nearest'.")
 
