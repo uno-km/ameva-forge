@@ -341,6 +341,30 @@ def test_fuzz_activations_gelu_silu_leaky_elu_autograd():
     loss_e.backward()
     assert x_e.grad is not None
 
+def test_fuzz_identity_and_pad_modules():
+    """Fuzz test nn.Identity and 2D padding modules with autograd."""
+    import forge as at
+    import forge.nn as nn
+    
+    # 1. Identity module
+    ident = nn.Identity(54, unused_kwarg=True)
+    x = at.tensor(np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32), requires_grad=True)
+    y = ident(x)
+    assert y is x
+    loss = y.sum()
+    loss.backward()
+    np.testing.assert_allclose(x.grad.numpy(), np.ones((2, 2), dtype=np.float32))
+    
+    # 2. ZeroPad2d / ConstantPad2d / ReflectionPad2d
+    zpad = nn.ZeroPad2d((1, 1, 2, 2))
+    x_img = at.tensor(np.ones((1, 1, 4, 4), dtype=np.float32), requires_grad=True)
+    padded = zpad(x_img)
+    assert padded.shape == (1, 1, 8, 6)
+    loss_p = padded.sum()
+    loss_p.backward()
+    np.testing.assert_allclose(x_img.grad.numpy(), np.ones((1, 1, 4, 4), dtype=np.float32))
+
+
 
 
 

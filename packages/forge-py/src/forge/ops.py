@@ -1952,29 +1952,30 @@ def where(condition: Tensor, x: Tensor, y: Tensor) -> Tensor:
 # HOW: 파이토치와 유사하게 pad 튜플을 받아 앞뒤(좌우/상하)로 패딩을 삽입합니다.
 class PadFunction(Function):
     @staticmethod
-    def forward(ctx, x: Tensor, pad: Tuple[int, ...], mode='constant', value=0.0) -> Tensor:
+    def forward(ctx, x: Tensor, pad: Any, mode='constant', value=0.0) -> Tensor:
+        if isinstance(pad, int):
+            pad = (pad, pad, pad, pad)
+        elif isinstance(pad, (list, tuple)) and len(pad) == 2:
+            pad = (pad[0], pad[0], pad[1], pad[1])
+        pad = tuple(pad)
+        
         ctx.save_for_backward(x)
         ctx.pad = pad
         ctx.mode = mode
         ctx.value = value
         
-        out_shape = list(x.shape)
         rank = len(x.shape)
-        # WHAT: 각 차원별 패딩 크기를 앞뒤(before, after) 쌍으로 계산합니다.
-        # WHY: 뒤에서부터 차례대로(pad 튜플이 우측 차원부터 명시됨) 적용해야 하기 때문입니다.
-        # HOW: 역순으로 pad 배열을 읽어 pad_pairs 리스트 앞쪽에 insert합니다.
-        pad_pairs = []
-        for i in range(rank):
-            pad_before = pad[-(i * 2 + 2)] if len(pad) >= (i * 2 + 2) else 0
-            pad_after = pad[-(i * 2 + 1)] if len(pad) >= (i * 2 + 1) else 0
-            pad_pairs.insert(0, (pad_before, pad_after))
-            out_shape[i] += pad_before + pad_after
-            
-        out_shape = tuple(out_shape)
+        pad_pairs = [(0, 0)] * rank
+        num_pad_dims = len(pad) // 2
+        for k in range(num_pad_dims):
+            dim_idx = rank - 1 - k
+            if 0 <= dim_idx < rank:
+                pad_pairs[dim_idx] = (pad[2 * k], pad[2 * k + 1])
+                
+        ctx.pad_pairs = pad_pairs
+        out_shape = tuple(x.shape[d] + pad_pairs[d][0] + pad_pairs[d][1] for d in range(rank))
+        
         if _should_use_gpu(x):
-            # WHAT: GPU 커널이 다차원 배열을 계산할 수 있도록 보폭(strides)을 구합니다.
-            # WHY: VRAM은 1차원이므로 다차원 인덱스를 선형 오프셋으로 변환해야 하기 때문입니다.
-            # HOW: 차원들을 누적 곱하여 stride를 도출하는 헬퍼를 씁니다.
             def get_strides(s):
                 st = [1]*len(s)
                 for i in range(len(s)-2, -1, -1):
@@ -1984,9 +1985,6 @@ class PadFunction(Function):
             out_strides = get_strides(out_shape)
             pad_before_arr = [p[0] for p in pad_pairs]
             
-            # WHAT: GPU에 보낼 op_params 메타데이터 배열을 조립합니다.
-            # WHY: C++ 기반 백엔드가 구조체 없이 정수/실수 배열만으로 파라미터를 파싱하기 때문입니다.
-            # HOW: 리스트 평탄화를 수행하고 8차원 고정 크기로 0을 패딩해 맞춥니다.
             op_params = [
                 0, rank, value, 0,
                 *(in_strides + [0]*(8-rank)),
@@ -1997,28 +1995,25 @@ class PadFunction(Function):
             return Tensor(shape=out_shape, dtype=x.dtype, device='gpu', op='pad', parents=(x,), op_params=op_params)
         else:
             data = _require_cpu_data(x, "x")
-            res = np.pad(data, pad_pairs, mode=mode, constant_values=value)
-            return Tensor(shape=out_shape, dtype=x.dtype, device='cpu', data=res)
+            np_mode = 'edge' if mode == 'replicate' else mode
+            if np_mode == 'constant':
+                res = np.pad(data, pad_pairs, mode=np_mode, constant_values=value)
+            else:
+                res = np.pad(data, pad_pairs, mode=np_mode)
+            return Tensor(shape=out_shape, dtype=x.dtype, device='cpu', data=res.astype(np.float32))
             
     @staticmethod
     def backward(ctx, grad_output: Tensor) -> Tuple[Tensor]:
         x, = ctx.saved_tensors
         if grad_output.device == 'gpu':
-            # WHAT: GPU에서 패딩 역전파 시도 시 에러입니다.
-            # WHY: 패딩의 미분은 잘려나가는 부분(슬라이스)인데, GPU 슬라이스 커널이 없기 때문입니다.
-            # HOW: 강제로 에러를 냅니다.
             from .errors import AMEVAForgeDeviceError
             raise AMEVAForgeDeviceError("GPU pad backward requires a native slice kernel.")
             
-        # WHAT: 패딩된 부분은 기울기가 0이 되므로 중앙 원본 영역의 미분값만 잘라(slice)옵니다.
-        # WHY: 패딩은 상수로 추가된 값이므로 입력 데이터에 대한 미분(기여)이 없기 때문입니다.
-        # HOW: pad_before부터 원래 shape 크기만큼 슬라이싱합니다.
         slices = []
         rank = len(x.shape)
-        for i in range(rank):
-            pad_before = ctx.pad[-(i * 2 + 2)] if len(ctx.pad) >= (i * 2 + 2) else 0
-            slc = slice(pad_before, pad_before + x.shape[i])
-            slices.append(slc)
+        for d in range(rank):
+            p_before, _ = ctx.pad_pairs[d]
+            slices.append(slice(p_before, p_before + x.shape[d]))
         return (grad_output[tuple(slices)],)
 
 # WHAT: 패딩 편의 함수입니다.

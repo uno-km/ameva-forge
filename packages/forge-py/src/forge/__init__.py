@@ -66,7 +66,8 @@ from . import nn
 from .nn import (
     BatchNorm2d, Dropout, LayerNorm, MultiheadAttention, TransformerEncoderLayer,
     PositionalEncoding, RNNCell, LSTMCell, RNN, LSTM, RMSNorm, RotaryEmbedding, SwiGLU, ModuleList,
-    GELU, SiLU, LeakyReLU, ELU, CosineSimilarity
+    GELU, SiLU, LeakyReLU, ELU, CosineSimilarity,
+    Identity, ConstantPad2d, ZeroPad2d, ReflectionPad2d, ReplicationPad2d
 )
 # 최적화 알고리즘이 있는 optim 서브모듈과 학습률 스케줄러 임포트
 from . import optim  

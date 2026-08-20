@@ -429,6 +429,11 @@ def elu(x, alpha: float = 1.0):
     from .ops import elu as ops_elu
     return ops_elu(x, alpha=alpha)
 
+def pad(input, pad, mode: str = 'constant', value: float = 0.0):
+    """Pads tensor."""
+    from .ops import pad as ops_pad
+    return ops_pad(input, pad, mode=mode, value=value)
+
 def _move_tensor_state(dst, src) -> None:
     """
     WHAT: src 텐서의 상태와 지연 연산 그래프를 dst 텐서로 안전하게 이동(Move)합니다.

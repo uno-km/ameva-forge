@@ -344,6 +344,58 @@ class ELU(Module):
         from .ops import elu
         return elu(x, alpha=self.alpha)
 
+class Identity(Module):
+    """
+    무엇을: 입력을 변형 없이 그대로 전달하는 항등(Identity) 모듈입니다.
+    왜: ResNet 등의 스킵 연결(Skip Connection)이나 조건부 계층 대체 시 구조적 일관성을 유지하기 위함입니다.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+
+    def forward(self, x: Tensor) -> Tensor:
+        return x
+
+class ConstantPad2d(Module):
+    """Pads the input tensor boundaries with a constant value."""
+    def __init__(self, padding: Any, value: float = 0.0):
+        super().__init__()
+        self.padding = padding
+        self.value = value
+
+    def forward(self, x: Tensor) -> Tensor:
+        from .ops import pad
+        return pad(x, self.padding, mode='constant', value=self.value)
+
+class ZeroPad2d(Module):
+    """Pads the input tensor boundaries with zero."""
+    def __init__(self, padding: Any):
+        super().__init__()
+        self.padding = padding
+
+    def forward(self, x: Tensor) -> Tensor:
+        from .ops import pad
+        return pad(x, self.padding, mode='constant', value=0.0)
+
+class ReflectionPad2d(Module):
+    """Pads the input tensor using the reflection of the input boundary."""
+    def __init__(self, padding: Any):
+        super().__init__()
+        self.padding = padding
+
+    def forward(self, x: Tensor) -> Tensor:
+        from .ops import pad
+        return pad(x, self.padding, mode='reflect')
+
+class ReplicationPad2d(Module):
+    """Pads the input tensor using replication of the input boundary."""
+    def __init__(self, padding: Any):
+        super().__init__()
+        self.padding = padding
+
+    def forward(self, x: Tensor) -> Tensor:
+        from .ops import pad
+        return pad(x, self.padding, mode='replicate')
+
 
 # WHAT: 여러 신경망 계층들을 순차적으로 이어붙여 단일 모듈로 만들어주는 컨테이너 클래스입니다.
 # WHY: 복잡한 네트워크 구조를 리스트 형태로 쉽게 정의하고 한 번의 forward 호출로 연속 처리를 가능하게 하기 위함입니다.
