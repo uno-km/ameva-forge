@@ -25,7 +25,7 @@
         <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
         <div class="header-badge-group">
             <span class="apache-tag" data-i18n="common.releaseTag">Release 2.0.0</span>
-            <span id="gpuStatus" style="font-weight: bold; color: #003399;">⚡ Initializing WebGPU...</span>
+            <span id="gpuStatus" style="font-weight: bold; color: #003399;">Initializing WebGPU...</span>
             <a href="../../../demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
             <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
         </div>
@@ -88,7 +88,7 @@
                     </div>
 
                     <div style="display: flex; gap: 8px;">
-                        <button id="btnPlay" class="classic-btn" onclick="toggleAudio()">▶ Start 60fps Spectrogram</button>
+                        <button id="btnPlay" class="classic-btn" onclick="toggleAudio()">Start 60fps Spectrogram</button>
                     </div>
 
                     <div style="margin-top: 20px; font-size: 0.85em; color: #666;">
@@ -126,11 +126,11 @@
             isRunning = !isRunning;
             const btn = document.getElementById('btnPlay');
             if (isRunning) {
-                btn.textContent = '⏸ Pause Spectrogram';
+                btn.textContent = 'Pause Pause Spectrogram';
                 btn.classList.add('classic-btn-secondary');
                 renderLoop();
             } else {
-                btn.textContent = '▶ Start 60fps Spectrogram';
+                btn.textContent = 'Start 60fps Spectrogram';
                 btn.classList.remove('classic-btn-secondary');
                 cancelAnimationFrame(animId);
             }

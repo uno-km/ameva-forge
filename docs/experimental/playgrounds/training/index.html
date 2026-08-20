@@ -99,7 +99,7 @@
         <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
         <div class="header-badge-group">
             <span class="apache-tag" data-i18n="common.releaseTag">Release 2.0.0</span>
-            <span id="gpuStatus" style="font-weight: bold; color: #003399;">⚡ Initializing WebGPU...</span>
+            <span id="gpuStatus" style="font-weight: bold; color: #003399;">Initializing WebGPU...</span>
             <a href="../../../demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
             <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
         </div>
@@ -144,9 +144,9 @@
             <div class="train-card" style="margin-bottom: 15px;">
                 <h4 style="margin-top: 0; color: #003399;">1. Select Dataset Preset & Hyperparameters</h4>
                 <div class="preset-btn-group">
-                    <button class="classic-btn" id="btnPresetXOR" onclick="selectPreset('xor')">⚡ Non-linear XOR Problem (2D)</button>
-                    <button class="classic-btn-secondary" id="btnPresetSpiral" onclick="selectPreset('spiral')">🌀 2-Arm Spiral Separation</button>
-                    <button class="classic-btn-secondary" id="btnPresetCluster" onclick="selectPreset('cluster')">🎯 4-Cluster Ring Distribution</button>
+                    <button class="classic-btn" id="btnPresetXOR" onclick="selectPreset('xor')">Non-linear XOR Problem (2D)</button>
+                    <button class="classic-btn-secondary" id="btnPresetSpiral" onclick="selectPreset('spiral')">2-Arm Spiral Separation</button>
+                    <button class="classic-btn-secondary" id="btnPresetCluster" onclick="selectPreset('cluster')">4-Cluster Ring Distribution</button>
                 </div>
 
                 <div class="controls-row">
@@ -166,7 +166,7 @@
                         </select>
                     </div>
                     <div class="control-item" style="justify-content: flex-end; margin-left: auto;">
-                        <button class="classic-btn" id="btnTrain" onclick="runLiveTraining()" style="padding: 8px 16px; font-size: 1.0em; background: #008800; color: #fff; border-color: #006600;">▶ Run Live WebGPU Training</button>
+                        <button class="classic-btn" id="btnTrain" onclick="runLiveTraining()" style="padding: 8px 16px; font-size: 1.0em; background: #008800; color: #fff; border-color: #006600;">Run Live WebGPU Training</button>
                     </div>
                 </div>
             </div>
@@ -204,6 +204,37 @@
 Click [Run Live WebGPU Training] to start.
 </div>
                 </div>
+            </div>
+
+            
+            <!-- Live AMEVA-Forge Python Autograd & Optimizer Viewer -->
+            <div class="train-card" style="margin-top: 15px; background: #ffffff; border: 1px solid #cbd5e1; padding: 15px; border-radius: 4px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <h4 style="margin: 0; color: #003399; font-size: 0.95em;">AMEVA-Forge Python Autograd & In-Place Optimizer Loop (Running on WebGPU)</h4>
+                    <span style="font-size: 0.8em; color: #008800; font-family: Consolas, monospace; font-weight: bold;">[ loss.backward() & optim.Adam ]</span>
+                </div>
+                <pre style="background: #0f172a; color: #f8fafc; padding: 12px; border-radius: 4px; font-family: Consolas, monospace; font-size: 0.85em; overflow-x: auto; margin: 0; line-height: 1.45;"><code>import forge as torch
+import forge.nn as nn
+import forge.optim as optim
+
+# 1. Multi-Layer Perceptron on WebGPU
+model = nn.Sequential(
+    nn.Linear(2, 32),
+    nn.ReLU(),
+    nn.Linear(32, 16),
+    nn.ReLU(),
+    nn.Linear(16, 1)
+).to("gpu")
+
+opt = optim.Adam(model.parameters(), lr=0.04)
+
+# 2. In-Browser Reverse-Mode Autograd Training Loop
+for epoch in range(60):
+    opt.zero_grad()
+    pred = model(X_gpu)
+    loss = torch.sum((pred - Y_gpu) ** 2) * 0.5
+    loss.backward()  # WebGPU GPU Kernel Gradient Backpropagation!
+    opt.step()       # WebGPU In-Place VRAM Parameter Update!</code></pre>
             </div>
 
             <!-- Deep-Dive Mathematical & Algorithmic Explanation Zone -->
@@ -425,7 +456,7 @@ Click [Run Live WebGPU Training] to start.
             isTraining = true;
             const btn = document.getElementById('btnTrain');
             btn.disabled = true;
-            btn.textContent = "⏳ Training Live...";
+            btn.textContent = "Training Live...";
             btn.style.opacity = "0.7";
 
             const totalEpochs = parseInt(document.getElementById('inputEpochs').value);
@@ -545,7 +576,7 @@ json.dumps({
             log(`\n>>> TRAINING COMPLETE: Final Loss ${history[history.length - 1].loss.toFixed(6)} in ${totalTime.toFixed(1)}ms! <<<`);
 
             btn.disabled = false;
-            btn.textContent = "▶ Run Live WebGPU Training";
+            btn.textContent = "Run Live WebGPU Training";
             btn.style.opacity = "1.0";
             isTraining = false;
         }

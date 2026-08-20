@@ -24,7 +24,7 @@
         <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
         <div class="header-badge-group">
             <span class="apache-tag" data-i18n="common.releaseTag">Release 2.0.0</span>
-            <span id="gpuStatus" style="font-weight: bold; color: #003399;">⚡ Initializing WebGPU...</span>
+            <span id="gpuStatus" style="font-weight: bold; color: #003399;">Initializing WebGPU...</span>
             <a href="../../../demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
             <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
         </div>
@@ -83,8 +83,8 @@
                     </div>
 
                     <div style="display: flex; gap: 8px;">
-                        <button class="classic-btn" onclick="toggleSim()" id="btnSim">⏸ Pause Simulation</button>
-                        <button class="classic-btn-secondary" onclick="resetGalaxy()">↺ Reset Positions</button>
+                        <button class="classic-btn" onclick="toggleSim()" id="btnSim">Pause Pause Simulation</button>
+                        <button class="classic-btn-secondary" onclick="resetGalaxy()">Reset Reset Positions</button>
                     </div>
 
                     <div style="margin-top: 20px; font-size: 0.85em; color: #666;">
@@ -159,11 +159,11 @@
             isRunning = !isRunning;
             const btn = document.getElementById('btnSim');
             if (isRunning) {
-                btn.textContent = '⏸ Pause Simulation';
+                btn.textContent = 'Pause Pause Simulation';
                 btn.classList.remove('classic-btn-secondary');
                 loop();
             } else {
-                btn.textContent = '▶ Resume Simulation';
+                btn.textContent = 'Resume Simulation';
                 btn.classList.add('classic-btn-secondary');
                 cancelAnimationFrame(animId);
             }

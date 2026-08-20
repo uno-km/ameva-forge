@@ -50,6 +50,7 @@ tests/test_gpu_optimizers.py
 tests/test_gpu_sgd_contract.py
 tests/test_graph_monster.py
 tests/test_hub_models_and_rl.py
+tests/test_inplace_version_lock.py
 tests/test_loss_functions.py
 tests/test_machine_gun.py
 tests/test_massive_cpu.py

@@ -90,7 +90,7 @@
         <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
         <div class="header-badge-group">
             <span class="apache-tag" data-i18n="common.releaseTag">Release 2.0.0</span>
-            <span id="gpuStatus" style="font-weight: bold; color: #003399;">⚡ Initializing WebGPU...</span>
+            <span id="gpuStatus" style="font-weight: bold; color: #003399;">Initializing WebGPU...</span>
             <a href="../../../demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
             <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
         </div>
@@ -140,23 +140,23 @@
                         <canvas id="canvasIn" width="300" height="300"></canvas>
                     </div>
                     <div style="margin-top: 8px;">
-                        <button class="classic-btn-secondary" style="padding: 2px 8px; font-size: 0.8em;" onclick="drawDefaultImage()">↺ Reset Pattern</button>
+                        <button class="classic-btn-secondary" style="padding: 2px 8px; font-size: 0.8em;" onclick="drawDefaultImage()">Reset Reset Pattern</button>
                     </div>
                 </div>
 
                 <!-- Central Control Buttons -->
                 <div class="controls-col">
                     <button class="classic-btn filter-btn active" id="btnEdge" onclick="applyFilter('edge')">
-                        <span>⚡ Sobel Edge</span><span>&rsaquo;</span>
+                        <span>Sobel Edge</span><span>&rsaquo;</span>
                     </button>
                     <button class="classic-btn-secondary filter-btn" id="btnSharpen" onclick="applyFilter('sharpen')">
-                        <span>✨ Laplacian Sharpen</span><span>&rsaquo;</span>
+                        <span>Laplacian Sharpen</span><span>&rsaquo;</span>
                     </button>
                     <button class="classic-btn-secondary filter-btn" id="btnBlur" onclick="applyFilter('blur')">
-                        <span>🌫️ Gaussian Blur</span><span>&rsaquo;</span>
+                        <span>Gaussian Blur</span><span>&rsaquo;</span>
                     </button>
                     <button class="classic-btn-secondary filter-btn" id="btnInvert" onclick="applyFilter('invert')">
-                        <span>🔄 Color Invert</span><span>&rsaquo;</span>
+                        <span>Color Invert</span><span>&rsaquo;</span>
                     </button>
                 </div>
 
@@ -175,12 +175,32 @@
             <!-- Live WebGPU Processing Streamer Console -->
             <div class="canvas-card" style="margin-top: 15px; text-align: left;">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <h4 style="margin: 0; color: #003399; font-size: 0.92em;">⚡ Real-time WebGPU Kernel Dispatch Streamer</h4>
+                    <h4 style="margin: 0; color: #003399; font-size: 0.92em;">Real-time WebGPU Kernel Dispatch Streamer</h4>
                     <span id="streamerStatus" style="font-size: 0.8em; color: #008800; font-weight: bold;">[ GPU Context Active ]</span>
                 </div>
                 <div class="streamer-box" id="gpuStreamer">System idle. WebGPU Compute Pipeline compiled.
 90,000 GPU threads mapped to workgroups. Ready to dispatch filters.
 </div>
+            </div>
+
+            
+            <!-- Live AMEVA-Forge Python Conv2D Architecture Viewer -->
+            <div class="train-card" style="margin-top: 15px; background: #ffffff; border: 1px solid #cbd5e1; padding: 15px; border-radius: 4px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <h4 style="margin: 0; color: #003399; font-size: 0.95em;">AMEVA-Forge Python Conv2D Spatial Convolution (Running on WebGPU)</h4>
+                    <span style="font-size: 0.8em; color: #008800; font-family: Consolas, monospace; font-weight: bold;">[ torch.nn.Conv2d Drop-in ]</span>
+                </div>
+                <pre style="background: #0f172a; color: #f8fafc; padding: 12px; border-radius: 4px; font-family: Consolas, monospace; font-size: 0.85em; overflow-x: auto; margin: 0; line-height: 1.45;"><code>import forge as torch
+import forge.nn as nn
+
+# 1. Define 2D Convolutional Layer on WebGPU
+conv_op = nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, padding=1).to("gpu")
+conv_op.weight = torch.tensor(spatial_kernel_3x3, device="gpu")
+
+# 2. Upload raw image pixel tensor to GPU VRAM & Dispatch 90k parallel threads
+img_gpu = torch.tensor(raw_image_rgb, device="gpu") # [1, 3, 300, 300]
+filtered_tensor = conv_op(img_gpu)
+await filtered_tensor.realize() # WebGPU WGSL compute realization</code></pre>
             </div>
 
             <!-- Deep-Dive Mathematical & Algorithmic Explanation Zone (Dynamically updated per filter) -->

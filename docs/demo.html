@@ -19,7 +19,7 @@
         <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
         <div class="header-badge-group">
             <span class="apache-tag" data-i18n="common.releaseTag">Release 1.0.0</span>
-            <span id="gpuStatus" style="font-weight: bold; color: #003399;">⚡ Initializing WebGPU...</span>
+            <span id="gpuStatus" style="font-weight: bold; color: #003399;">Initializing WebGPU...</span>
             <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
         </div>
     </header>
@@ -76,8 +76,8 @@
                     <h4 data-i18n="demo.editorTitle">Python Execution Script (Pyodide WebGPU)</h4>
                     <textarea id="pythonEditor" class="editor-textarea" spellcheck="false"></textarea>
                     <div style="margin-top: 10px; display: flex; gap: 8px;">
-                        <button id="btnRun" class="classic-btn" disabled data-i18n="demo.btnRun">▶ Run Experiment</button>
-                        <button id="btnReset" class="classic-btn-secondary" data-i18n="demo.btnReset">↺ Reset Code</button>
+                        <button id="btnRun" class="classic-btn" disabled data-i18n="demo.btnRun">Run Experiment</button>
+                        <button id="btnReset" class="classic-btn-secondary" data-i18n="demo.btnReset">Reset Reset Code</button>
                     </div>
                 </div>
 
@@ -699,7 +699,7 @@ import gc; gc.collect()
 import forge as torch
 print(f"[Ready] forge v0.1.0 ready on Pyodide. WebGPU bridge active.")
 `);
-                log('[Ready] Studio initialized. Click "▶ Run Experiment" to start!');
+                log('[Ready] Studio initialized. Click "Run Experiment" to start!');
                 btnRun.disabled = false;
             } catch (err) {
                 log('[Pyodide Error] ' + err.message);
