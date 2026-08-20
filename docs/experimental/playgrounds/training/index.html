@@ -18,7 +18,7 @@
             gap: 20px;
             margin-top: 15px;
         }
-        @media (max-width: 900px) {
+        @media (max-width: 960px) {
             .training-grid { grid-template-columns: 1fr; }
         }
         .train-card {
@@ -33,11 +33,25 @@
             flex-wrap: wrap;
             margin-bottom: 12px;
         }
+        .canvas-container {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            justify-content: center;
+        }
         .chart-canvas {
             border: 1px solid #003399;
             background: #0f172a;
             border-radius: 4px;
             width: 100%;
+            height: 220px;
+            display: block;
+        }
+        .decision-canvas {
+            border: 1px solid #003399;
+            background: #ffffff;
+            border-radius: 4px;
+            width: 220px;
             height: 220px;
             display: block;
         }
@@ -53,12 +67,34 @@
             white-space: pre-wrap;
             line-height: 1.4;
         }
-        
+        .controls-row {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+            margin-top: 10px;
+            background: #f8fafc;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #e2e8f0;
+        }
+        .control-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            font-size: 0.88em;
+        }
+        .math-block {
+            background: #f1f5f9;
+            padding: 8px 12px;
+            border-left: 3px solid #003399;
+            font-family: 'Times New Roman', Times, serif;
+            font-size: 1.05em;
+            margin: 6px 0;
+        }
     </style>
 </head>
 <body>
-    
-
     <header>
         <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
         <div class="header-badge-group">
@@ -94,48 +130,78 @@
         </nav>
         
         <main class="content">
-            <h2 data-i18n="playgrounds.trainingH2">3. WebGPU Real-time Training Demo</h2>
-            <p data-i18n="playgrounds.trainingDesc">Select a training scale below to train neural networks entirely within your browser utilizing WebGPU acceleration. No server processing involved.</p>
+            <h2 data-i18n="playgrounds.trainingH2">3. WebGPU Real-time Training Demo & Interactive Decision Boundary</h2>
+            <p data-i18n="playgrounds.trainingDesc">Live neural network training directly on your GPU via WebGPU. Watch the loss curve converge and the 2D decision boundary evolve frame-by-frame in real-time.</p>
 
             <div class="metric-bar">
                 <div class="metric-item"><span>Device Target:</span> <strong id="metricDevice">WebGPU</strong></div>
-                <div class="metric-item"><span>Epoch:</span> <strong id="metricEpoch">-- / --</strong></div>
+                <div class="metric-item"><span>Epoch:</span> <strong id="metricEpoch">0 / 0</strong></div>
                 <div class="metric-item"><span>Current Loss:</span> <strong id="metricLoss" style="color: #008800;">--</strong></div>
                 <div class="metric-item"><span>Step Latency:</span> <strong id="metricStepTime">0.0 ms</strong></div>
             </div>
 
-            <!-- Training Scale Preset Selector -->
+            <!-- Training Scale Preset Selector & Hyperparameters -->
             <div class="train-card" style="margin-bottom: 15px;">
-                <h4 style="margin-top: 0; color: #003399;">Select Training Scale & Preset</h4>
+                <h4 style="margin-top: 0; color: #003399;">1. Select Dataset Preset & Hyperparameters</h4>
                 <div class="preset-btn-group">
-                    <button class="classic-btn" onclick="startTraining('low')">⚡ Low Capacity (XOR Problem)</button>
-                    <button class="classic-btn" onclick="startTraining('medium')">🧠 Medium Capacity (4-Cluster MLP)</button>
-                    <button class="classic-btn-secondary" style="border-color: #d32f2f; color: #d32f2f;" onclick="startTraining('extreme')">🔥 Extreme Capacity (VRAM Crusher)</button>
+                    <button class="classic-btn" id="btnPresetXOR" onclick="selectPreset('xor')">⚡ Non-linear XOR Problem (2D)</button>
+                    <button class="classic-btn-secondary" id="btnPresetSpiral" onclick="selectPreset('spiral')">🌀 2-Arm Spiral Separation</button>
+                    <button class="classic-btn-secondary" id="btnPresetCluster" onclick="selectPreset('cluster')">🎯 4-Cluster Ring Distribution</button>
+                </div>
+
+                <div class="controls-row">
+                    <div class="control-item">
+                        <label><strong>Epochs:</strong> <span id="valEpochs">60</span></label>
+                        <input type="range" id="inputEpochs" min="20" max="150" value="60" step="10" oninput="document.getElementById('valEpochs').innerText = this.value">
+                    </div>
+                    <div class="control-item">
+                        <label><strong>Learning Rate:</strong> <span id="valLr">0.04</span></label>
+                        <input type="range" id="inputLr" min="0.01" max="0.10" value="0.04" step="0.01" oninput="document.getElementById('valLr').innerText = this.value">
+                    </div>
+                    <div class="control-item">
+                        <label><strong>Optimizer:</strong></label>
+                        <select id="selectOpt" style="padding: 4px; font-family: Consolas, monospace;">
+                            <option value="adam" selected>Adam (In-Place WebGPU)</option>
+                            <option value="sgd">SGD + Momentum (0.9)</option>
+                        </select>
+                    </div>
+                    <div class="control-item" style="justify-content: flex-end; margin-left: auto;">
+                        <button class="classic-btn" id="btnTrain" onclick="runLiveTraining()" style="padding: 8px 16px; font-size: 1.0em; background: #008800; color: #fff; border-color: #006600;">▶ Run Live WebGPU Training</button>
+                    </div>
                 </div>
             </div>
 
-            <!-- 2-Column Grid: Loss Curve Chart (Left) + Console Output (Right) -->
+            <!-- 2-Column Grid: Visualizations (Left) + Console Output (Right) -->
             <div class="training-grid">
-                <!-- Left: Real-time Loss Convergence Chart -->
+                <!-- Left: Decision Boundary & Loss Chart -->
                 <div class="train-card">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                        <h4 style="margin: 0; color: #003399;">Real-time Loss Convergence Chart</h4>
-                        <span id="chartStatus" style="font-size: 0.8em; color: #008800; font-weight: bold;">[ Ready ]</span>
+                        <h4 style="margin: 0; color: #003399;">2. Live 2D Decision Boundary & Loss Curve</h4>
+                        <span id="chartStatus" style="font-size: 0.85em; color: #008800; font-weight: bold;">[ Ready ]</span>
                     </div>
-                    <canvas id="lossCanvas" class="chart-canvas" width="450" height="220"></canvas>
+                    
+                    <div style="display: grid; grid-template-columns: 200px 1fr; gap: 12px; align-items: center;">
+                        <div style="text-align: center;">
+                            <canvas id="decisionCanvas" class="decision-canvas" width="200" height="200"></canvas>
+                            <div style="font-size: 0.78em; color: #64748b; margin-top: 4px;">2D Neural Decision Field</div>
+                        </div>
+                        <div>
+                            <canvas id="lossCanvas" class="chart-canvas" width="280" height="200"></canvas>
+                            <div style="font-size: 0.78em; color: #64748b; margin-top: 4px; text-align: center;">Real-time Loss Convergence</div>
+                        </div>
+                    </div>
                 </div>
 
-                <!-- Right: Live WebGPU Log Console -->
+                <!-- Right: Live WebGPU Execution Console -->
                 <div class="train-card">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                        <h4 style="margin: 0; color: #003399;">Training Log Console</h4>
+                        <h4 style="margin: 0; color: #003399;">3. WebGPU Execution Log Console</h4>
                         <button class="classic-btn-secondary" style="padding: 2px 8px; font-size: 0.8em;" onclick="document.getElementById('trainLog').textContent = ''">Clear</button>
                     </div>
-                    <div class="log-box" id="trainLog">System idle. Waiting for task...
-[gpuCore.ts] init started
-[gpuCore.ts] calling initWebGPU...
-[gpuCore.ts] initWebGPU finished
-Pyodide & WebGPU Training Engine Ready!
+                    <div class="log-box" id="trainLog">System idle. Ready to train.
+[gpuCore.ts] WebGPU Context initialized.
+[Pyodide Bridge] Autograd and in-place tensor buffers registered.
+Click [Run Live WebGPU Training] to start.
 </div>
                 </div>
             </div>
@@ -155,63 +221,167 @@ Pyodide & WebGPU Training Engine Ready!
 
     <script>
         let pyodide = null;
+        let currentPreset = 'xor';
+        let isTraining = false;
+
         const logBox = document.getElementById('trainLog');
         const lossCanvas = document.getElementById('lossCanvas');
-        const ctx = lossCanvas.getContext('2d');
+        const ctxLoss = lossCanvas.getContext('2d');
+        const decCanvas = document.getElementById('decisionCanvas');
+        const ctxDec = decCanvas.getContext('2d');
 
         function log(msg) {
             logBox.textContent += msg + '\n';
             logBox.scrollTop = logBox.scrollHeight;
         }
 
-        function drawChart(lossHistory) {
-            ctx.fillStyle = '#0f172a';
-            ctx.fillRect(0, 0, lossCanvas.width, lossCanvas.height);
+        function selectPreset(preset) {
+            currentPreset = preset;
+            document.getElementById('btnPresetXOR').className = preset === 'xor' ? 'classic-btn' : 'classic-btn-secondary';
+            document.getElementById('btnPresetSpiral').className = preset === 'spiral' ? 'classic-btn' : 'classic-btn-secondary';
+            document.getElementById('btnPresetCluster').className = preset === 'cluster' ? 'classic-btn' : 'classic-btn-secondary';
+            drawInitialDataset();
+        }
 
-            // Draw gridlines
-            ctx.strokeStyle = '#1e293b';
-            ctx.lineWidth = 1;
-            for (let y = 30; y < lossCanvas.height; y += 40) {
-                ctx.beginPath();
-                ctx.moveTo(30, y);
-                ctx.lineTo(lossCanvas.width - 15, y);
-                ctx.stroke();
+        function getDataset(preset) {
+            if (preset === 'xor') {
+                return {
+                    X: [[0.1, 0.1], [0.1, 0.9], [0.9, 0.1], [0.9, 0.9], [0.2, 0.15], [0.15, 0.85], [0.85, 0.15], [0.85, 0.85]],
+                    Y: [[0], [1], [1], [0], [0], [1], [1], [0]]
+                };
+            } else if (preset === 'spiral') {
+                const pts = [];
+                const labels = [];
+                for (let i = 0; i < 16; i++) {
+                    const r = (i / 16.0) * 0.4 + 0.05;
+                    const t = 1.75 * i / 16.0 * Math.PI * 2;
+                    pts.push([0.5 + r * Math.sin(t), 0.5 + r * Math.cos(t)]);
+                    labels.push([0]);
+                    pts.push([0.5 - r * Math.sin(t), 0.5 - r * Math.cos(t)]);
+                    labels.push([1]);
+                }
+                return { X: pts, Y: labels };
+            } else {
+                // 4-Cluster
+                const pts = [];
+                const labels = [];
+                for (let i = 0; i < 20; i++) {
+                    const angle = (i / 20.0) * Math.PI * 2;
+                    const r_inner = 0.18 + Math.random() * 0.06;
+                    const r_outer = 0.38 + Math.random() * 0.06;
+                    pts.push([0.5 + r_inner * Math.cos(angle), 0.5 + r_inner * Math.sin(angle)]);
+                    labels.push([1]);
+                    pts.push([0.5 + r_outer * Math.cos(angle), 0.5 + r_outer * Math.sin(angle)]);
+                    labels.push([0]);
+                }
+                return { X: pts, Y: labels };
+            }
+        }
+
+        function drawInitialDataset() {
+            ctxDec.fillStyle = '#ffffff';
+            ctxDec.fillRect(0, 0, decCanvas.width, decCanvas.height);
+
+            const data = getDataset(currentPreset);
+            data.X.forEach((pt, idx) => {
+                const x = pt[0] * decCanvas.width;
+                const y = (1.0 - pt[1]) * decCanvas.height;
+                const isPos = data.Y[idx][0] > 0.5;
+                ctxDec.beginPath();
+                ctxDec.arc(x, y, 5, 0, Math.PI * 2);
+                ctxDec.fillStyle = isPos ? '#0033cc' : '#cc0033';
+                ctxDec.fill();
+                ctxDec.strokeStyle = '#ffffff';
+                ctxDec.lineWidth = 1.5;
+                ctxDec.stroke();
+            });
+
+            drawLossChart([]);
+        }
+
+        function drawDecisionBoundary(gridPreds) {
+            const size = Math.sqrt(gridPreds.length);
+            const cellW = decCanvas.width / size;
+            const cellH = decCanvas.height / size;
+
+            for (let r = 0; r < size; r++) {
+                for (let c = 0; c < size; c++) {
+                    const prob = gridPreds[r * size + c];
+                    // Blue for Class 1 (prob > 0.5), Red for Class 0 (prob <= 0.5)
+                    if (prob > 0.5) {
+                        const alpha = Math.min((prob - 0.5) * 1.6, 0.7);
+                        ctxDec.fillStyle = `rgba(0, 51, 204, ${alpha})`;
+                    } else {
+                        const alpha = Math.min((0.5 - prob) * 1.6, 0.7);
+                        ctxDec.fillStyle = `rgba(204, 0, 51, ${alpha})`;
+                    }
+                    ctxDec.fillRect(c * cellW, r * cellH, cellW + 1, cellH + 1);
+                }
             }
 
-            if (!lossHistory || lossHistory.length < 2) return;
+            // Redraw points on top
+            const data = getDataset(currentPreset);
+            data.X.forEach((pt, idx) => {
+                const x = pt[0] * decCanvas.width;
+                const y = (1.0 - pt[1]) * decCanvas.height;
+                const isPos = data.Y[idx][0] > 0.5;
+                ctxDec.beginPath();
+                ctxDec.arc(x, y, 4.5, 0, Math.PI * 2);
+                ctxDec.fillStyle = isPos ? '#00e5ff' : '#ff3366';
+                ctxDec.fill();
+                ctxDec.strokeStyle = '#000000';
+                ctxDec.lineWidth = 1;
+                ctxDec.stroke();
+            });
+        }
 
-            const maxLoss = Math.max(...lossHistory.map(h => h.loss), 0.1);
-            const minLoss = Math.min(...lossHistory.map(h => h.loss), 0.0);
+        function drawLossChart(history) {
+            ctxLoss.fillStyle = '#0f172a';
+            ctxLoss.fillRect(0, 0, lossCanvas.width, lossCanvas.height);
+
+            // Gridlines
+            ctxLoss.strokeStyle = '#1e293b';
+            ctxLoss.lineWidth = 1;
+            for (let y = 30; y < lossCanvas.height; y += 40) {
+                ctxLoss.beginPath();
+                ctxLoss.moveTo(35, y);
+                ctxLoss.lineTo(lossCanvas.width - 15, y);
+                ctxLoss.stroke();
+            }
+
+            if (!history || history.length < 2) return;
+
+            const maxLoss = Math.max(...history.map(h => h.loss), 0.5);
+            const minLoss = Math.min(...history.map(h => h.loss), 0.0);
             const range = Math.max(maxLoss - minLoss, 1e-4);
 
-            const padLeft = 40;
-            const padRight = 20;
+            const padLeft = 35;
+            const padRight = 15;
             const padTop = 20;
-            const padBottom = 30;
+            const padBottom = 25;
             const w = lossCanvas.width - padLeft - padRight;
             const h = lossCanvas.height - padTop - padBottom;
 
-            // Draw Loss Curve
-            ctx.strokeStyle = '#00ff66';
-            ctx.lineWidth = 2.5;
-            ctx.beginPath();
+            ctxLoss.strokeStyle = '#00ff66';
+            ctxLoss.lineWidth = 2.5;
+            ctxLoss.beginPath();
 
-            lossHistory.forEach((pt, i) => {
-                const x = padLeft + (i / (lossHistory.length - 1)) * w;
-                const normalizedY = (pt.loss - minLoss) / range;
-                const y = padTop + (1.0 - normalizedY) * h;
-                if (i === 0) ctx.moveTo(x, y);
-                else ctx.lineTo(x, y);
+            history.forEach((pt, i) => {
+                const x = padLeft + (i / (history.length - 1)) * w;
+                const normY = (pt.loss - minLoss) / range;
+                const y = padTop + (1.0 - normY) * h;
+                if (i === 0) ctxLoss.moveTo(x, y);
+                else ctxLoss.lineTo(x, y);
             });
-            ctx.stroke();
+            ctxLoss.stroke();
 
-            // Labels
-            ctx.fillStyle = '#94a3b8';
-            ctx.font = '10px Consolas, monospace';
-            ctx.fillText(`Max: ${maxLoss.toFixed(4)}`, 5, padTop + 10);
-            ctx.fillText(`Min: ${minLoss.toFixed(4)}`, 5, lossCanvas.height - padBottom);
-            ctx.fillText(`Epoch 1`, padLeft, lossCanvas.height - 10);
-            ctx.fillText(`Epoch ${lossHistory[lossHistory.length - 1].epoch}`, lossCanvas.width - 60, lossCanvas.height - 10);
+            // Text labels
+            ctxLoss.fillStyle = '#94a3b8';
+            ctxLoss.font = '10px Consolas, monospace';
+            ctxLoss.fillText(`Max: ${maxLoss.toFixed(3)}`, 5, padTop + 8);
+            ctxLoss.fillText(`Min: ${minLoss.toFixed(3)}`, 5, lossCanvas.height - padBottom);
+            ctxLoss.fillText(`Ep 1`, padLeft, lossCanvas.height - 8);
+            ctxLoss.fillText(`Ep ${history[history.length - 1].epoch}`, lossCanvas.width - 45, lossCanvas.height - 8);
         }
 
         async function initDashboard() {
@@ -239,24 +409,45 @@ Pyodide & WebGPU Training Engine Ready!
                     }
                 }
 
-                drawChart([]);
-                const s = document.getElementById('gpuStatus'); if(s) { s.innerHTML = '[ WebGPU Ready ]'; s.style.color = '#008800'; }
+                const s = document.getElementById('gpuStatus');
+                if (s) { s.innerHTML = '[ WebGPU Ready ]'; s.style.color = '#008800'; }
+
+                drawInitialDataset();
             } catch (e) {
-                const s = document.getElementById('gpuStatus'); if(s) { s.innerHTML = '[ WebGPU Error ]'; s.style.color = '#d32f2f'; } console.error("FATAL ERROR: " + e.message);
+                const s = document.getElementById('gpuStatus');
+                if (s) { s.innerHTML = '[ WebGPU Error ]'; s.style.color = '#d32f2f'; }
+                console.error(e);
             }
         }
 
-        async function startTraining(scale) {
-            if (!pyodide) return;
-            const epochs = scale === 'low' ? 50 : (scale === 'medium' ? 100 : 200);
-            document.getElementById('chartStatus').textContent = '[ Training... ]';
+        async function runLiveTraining() {
+            if (!pyodide || isTraining) return;
+            isTraining = true;
+            const btn = document.getElementById('btnTrain');
+            btn.disabled = true;
+            btn.textContent = "⏳ Training Live...";
+            btn.style.opacity = "0.7";
+
+            const totalEpochs = parseInt(document.getElementById('inputEpochs').value);
+            const lr = parseFloat(document.getElementById('inputLr').value);
+            const optType = document.getElementById('selectOpt').value;
+            const data = getDataset(currentPreset);
+
+            document.getElementById('chartStatus').textContent = '[ Training Live... ]';
             document.getElementById('chartStatus').style.color = '#003399';
-            log(`\n[*] Initializing ${scale.toUpperCase()} Training (${epochs} Epochs on WebGPU)...`);
 
-            pyodide.globals.set("train_scale", scale);
-            pyodide.globals.set("num_epochs", epochs);
+            log(`\n======================================================`);
+            log(`[*] Starting Real-time WebGPU Training (${currentPreset.toUpperCase()})`);
+            log(`[*] Target Epochs: ${totalEpochs} | LR: ${lr} | Optimizer: ${optType.toUpperCase()}`);
+            log(`======================================================`);
 
-            const resJson = await pyodide.runPythonAsync(`
+            pyodide.globals.set("dataset_X", data.X);
+            pyodide.globals.set("dataset_Y", data.Y);
+            pyodide.globals.set("lr_val", lr);
+            pyodide.globals.set("opt_choice", optType);
+
+            // Initialize Model in Python
+            await pyodide.runPythonAsync(`
 import time
 import json
 import numpy as np
@@ -264,98 +455,99 @@ import forge as fg
 import forge.nn as nn
 import forge.optim as optim
 
-if train_scale == 'low':
-    # XOR 2D
-    X_np = np.array([[0,0],[0,1],[1,0],[1,1]], dtype=np.float32)
-    Y_np = np.array([[0],[1],[1],[0]], dtype=np.float32)
-    class Model(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.fc1 = nn.Linear(2, 16)
-            self.relu = nn.ReLU()
-            self.fc2 = nn.Linear(16, 1)
-        def forward(self, x):
-            return self.fc2(self.relu(self.fc1(x)))
-elif train_scale == 'medium':
-    # 4-Cluster non-linear
-    X_np = np.random.randn(64, 4).astype(np.float32)
-    Y_np = (np.sum(X_np ** 2, axis=1, keepdims=True) > 4.0).astype(np.float32)
-    class Model(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.fc1 = nn.Linear(4, 32)
-            self.relu1 = nn.ReLU()
-            self.fc2 = nn.Linear(32, 16)
-            self.relu2 = nn.ReLU()
-            self.fc3 = nn.Linear(16, 1)
-        def forward(self, x):
-            return self.fc3(self.relu2(self.fc2(self.relu1(self.fc1(x)))))
-else: # extreme VRAM crusher
-    X_np = np.random.randn(128, 16).astype(np.float32)
-    Y_np = np.random.randn(128, 1).astype(np.float32)
-    class Model(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.fc1 = nn.Linear(16, 64)
-            self.relu1 = nn.ReLU()
-            self.fc2 = nn.Linear(64, 64)
-            self.relu2 = nn.ReLU()
-            self.fc3 = nn.Linear(64, 1)
-        def forward(self, x):
-            return self.fc3(self.relu2(self.fc2(self.relu1(self.fc1(x)))))
+X_tensor = fg.tensor(np.array(dataset_X, dtype=np.float32))
+Y_tensor = fg.tensor(np.array(dataset_Y, dtype=np.float32))
 
-X = fg.tensor(X_np)
-Y = fg.tensor(Y_np)
-model = Model()
-opt = optim.Adam(model.parameters(), lr=0.03)
+class InteractiveMLP(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(2, 32)
+        self.relu1 = nn.ReLU()
+        self.fc2 = nn.Linear(32, 16)
+        self.relu2 = nn.ReLU()
+        self.fc3 = nn.Linear(16, 1)
+    def forward(self, x):
+        return self.fc3(self.relu2(self.fc2(self.relu1(self.fc1(x)))))
 
-loss_history = []
-t0 = time.perf_counter()
+model = InteractiveMLP()
+if opt_choice == 'adam':
+    opt = optim.Adam(model.parameters(), lr=lr_val)
+else:
+    opt = optim.SGD(model.parameters(), lr=lr_val, momentum=0.9)
 
-for ep in range(1, num_epochs + 1):
+# 25x25 grid for 2D decision field
+grid_pts = []
+for r in range(25):
+    y_coord = 1.0 - (r / 24.0)
+    for c in range(25):
+        x_coord = c / 24.0
+        grid_pts.append([x_coord, y_coord])
+grid_tensor = fg.tensor(np.array(grid_pts, dtype=np.float32))
+            `);
+
+            const history = [];
+            const t0 = performance.now();
+            const stepBatch = Math.max(1, Math.floor(totalEpochs / 20));
+
+            for (let ep = 1; ep <= totalEpochs; ep += stepBatch) {
+                const chunkEpochs = Math.min(stepBatch, totalEpochs - ep + 1);
+                pyodide.globals.set("chunk_steps", chunkEpochs);
+
+                const chunkResult = await pyodide.runPythonAsync(`
+t_chunk_start = time.perf_counter()
+chunk_losses = []
+
+for _ in range(chunk_steps):
     opt.zero_grad()
-    pred = model(X)
-    diff = pred - Y
+    pred = model(X_tensor)
+    diff = pred - Y_tensor
     loss = fg.sum(diff * diff) * 0.5
     loss.backward()
     opt.step()
-    
-    lv = float(loss.numpy())
-    loss_history.append({"epoch": ep, "loss": lv})
+    chunk_losses.append(float(loss.numpy()))
 
-total_time = (time.perf_counter() - t0) * 1000.0
-step_time = total_time / num_epochs
+# Compute decision field
+grid_pred = model(grid_tensor)
+grid_probs = 1.0 / (1.0 + np.exp(-grid_pred.numpy().flatten()))
 
-res = {
-    "scale": train_scale,
-    "epochs": num_epochs,
-    "final_loss": loss_history[-1]["loss"],
-    "step_time_ms": step_time,
-    "total_time_ms": total_time,
-    "history": loss_history
-}
+json.dumps({
+    "losses": chunk_losses,
+    "grid": grid_probs.tolist(),
+    "step_ms": (time.perf_counter() - t_chunk_start) * 1000.0 / chunk_steps
+})
+                `);
 
-json.dumps(res)
-            `);
+                const res = JSON.parse(chunkResult);
+                res.losses.forEach((l, idx) => {
+                    history.push({ epoch: ep + idx, loss: l });
+                });
 
-            const data = JSON.parse(resJson);
-            document.getElementById('metricEpoch').textContent = `${data.epochs} / ${data.epochs}`;
-            document.getElementById('metricLoss').textContent = data.final_loss.toFixed(6);
-            document.getElementById('metricStepTime').textContent = `${data.step_time_ms.toFixed(2)} ms`;
+                const currentLoss = history[history.length - 1].loss;
+                const currentEp = history[history.length - 1].epoch;
+
+                document.getElementById('metricEpoch').textContent = `${currentEp} / ${totalEpochs}`;
+                document.getElementById('metricLoss').textContent = currentLoss.toFixed(6);
+                document.getElementById('metricStepTime').textContent = `${res.step_ms.toFixed(2)} ms`;
+
+                drawLossChart(history);
+                drawDecisionBoundary(res.grid);
+
+                log(`Epoch ${currentEp.toString().padStart(3, ' ')}/${totalEpochs} | Loss: ${currentLoss.toFixed(6)} | WebGPU Step: ${res.step_ms.toFixed(2)}ms`);
+
+                // Yield to browser UI loop so user literally watches the network learn
+                await new Promise(resolve => setTimeout(resolve, 25));
+            }
+
+            const totalTime = performance.now() - t0;
             document.getElementById('chartStatus').textContent = '[ Converged ]';
             document.getElementById('chartStatus').style.color = '#008800';
 
-            drawChart(data.history);
+            log(`\n>>> TRAINING COMPLETE: Final Loss ${history[history.length - 1].loss.toFixed(6)} in ${totalTime.toFixed(1)}ms! <<<`);
 
-            // Log key milestones
-            const step = Math.max(1, Math.floor(data.epochs / 10));
-            data.history.forEach((h, idx) => {
-                if (h.epoch % step === 0 || h.epoch === data.epochs) {
-                    log(`Epoch ${h.epoch.toString().padStart(3, ' ')}/${data.epochs} | Loss: ${h.loss.toFixed(6)} | Step: ${data.step_time_ms.toFixed(2)}ms`);
-                }
-            });
-
-            log(`\n>>> SUCCESS: ${data.scale.toUpperCase()} training converged! Final Loss: ${data.final_loss.toFixed(6)} (${data.total_time_ms.toFixed(1)}ms total) <<<`);
+            btn.disabled = false;
+            btn.textContent = "▶ Run Live WebGPU Training";
+            btn.style.opacity = "1.0";
+            isTraining = false;
         }
 
         initDashboard();
