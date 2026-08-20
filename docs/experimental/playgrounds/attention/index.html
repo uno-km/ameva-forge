@@ -22,21 +22,17 @@
         .bar-fill-std { height: 100%; background: #cc3300; width: 0%; transition: width 0.3s ease; }
         .bar-fill-flash { height: 100%; background: #008800; width: 0%; transition: width 0.3s ease; }
         .bar-val { width: 80px; text-align: right; font-weight: bold; }
-        #loadingOverlay { position: fixed; top:0; left:0; right:0; bottom:0; background: rgba(255, 255, 255, 0.95); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 1000; }
-        .hidden { display: none !important; }
+        
     </style>
 </head>
 <body>
-    <div id="loadingOverlay">
-        <h1 style="color: #003399;">Loading WebGPU FlashAttention Engine...</h1>
-        <h2 id="loadingText">Compiling Fused WGSL Attention Shaders...</h2>
-    </div>
+    
 
     <header>
         <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
         <div class="header-badge-group">
             <span class="apache-tag" data-i18n="common.releaseTag">Release 2.0.0</span>
-            <span id="gpuStatus" style="font-weight: bold; color: #008800;">[ WebGPU Ready ]</span>
+            <span id="gpuStatus" style="font-weight: bold; color: #003399;">⚡ Initializing WebGPU...</span>
             <a href="../../../demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
             <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
         </div>
@@ -189,10 +185,10 @@
                     }
                 }
 
-                document.getElementById('loadingOverlay').classList.add('hidden');
+                const s = document.getElementById('gpuStatus'); if(s) { s.innerHTML = '[ WebGPU Ready ]'; s.style.color = '#008800'; }
                 profileAttention();
             } catch (e) {
-                document.getElementById('loadingText').innerText = "FATAL ERROR: " + e.message;
+                const s = document.getElementById('gpuStatus'); if(s) { s.innerHTML = '[ WebGPU Error ]'; s.style.color = '#d32f2f'; } console.error("FATAL ERROR: " + e.message);
             }
         }
 

@@ -46,6 +46,19 @@ header h1 {
     font-family: Consolas, monospace;
 }
 
+#gpuStatus {
+    transition: color 0.3s ease;
+}
+
+@keyframes pulseStatus {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+.status-pulsing {
+    animation: pulseStatus 1.5s infinite ease-in-out;
+}
+
 /* ── Main Layout Container ────────────────────────────────────────────────── */
 .container {
     display: flex;

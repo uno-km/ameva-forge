@@ -15,21 +15,17 @@
         .audio-grid { display: grid; grid-template-columns: 320px 1fr; gap: 20px; margin-top: 15px; }
         @media (max-width: 900px) { .audio-grid { grid-template-columns: 1fr; } }
         .spectrogram-wrapper { border: 2px solid #003399; background: #000; width: 100%; height: 260px; border-radius: 4px; }
-        #loadingOverlay { position: fixed; top:0; left:0; right:0; bottom:0; background: rgba(255, 255, 255, 0.95); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 1000; }
-        .hidden { display: none !important; }
+        
     </style>
 </head>
 <body>
-    <div id="loadingOverlay">
-        <h1 style="color: #003399;">Loading WebGPU Audio DSP Engine...</h1>
-        <h2 id="loadingText">Initializing WebGPU 1D Conv & STFT Pipelines...</h2>
-    </div>
+    
 
     <header>
         <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
         <div class="header-badge-group">
             <span class="apache-tag" data-i18n="common.releaseTag">Release 2.0.0</span>
-            <span id="gpuStatus" style="font-weight: bold; color: #008800;">[ WebGPU Ready ]</span>
+            <span id="gpuStatus" style="font-weight: bold; color: #003399;">⚡ Initializing WebGPU...</span>
             <a href="../../../demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
             <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
         </div>
@@ -185,7 +181,7 @@
         // Initialize canvas
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        document.getElementById('loadingOverlay').classList.add('hidden');
+        const s = document.getElementById('gpuStatus'); if(s) { s.innerHTML = '[ WebGPU Ready ]'; s.style.color = '#008800'; }
     </script>
 </body>
 </html>
