@@ -19,6 +19,7 @@ src/forge/optim.pyi
 src/forge/pipeline.py
 src/forge/py.typed
 src/forge/serialization.py
+src/forge/special.py
 src/forge/tensor.py
 src/forge/tensor.pyi
 src/forge.egg-info/PKG-INFO

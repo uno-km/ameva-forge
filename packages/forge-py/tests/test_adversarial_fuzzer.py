@@ -1037,6 +1037,59 @@ def test_fuzz_fft_suite():
     unshifted = fft.ifftshift(shifted)
     np.testing.assert_allclose(unshifted.numpy(), freqs.numpy(), atol=1e-4)
 
+def test_fuzz_special_functions_suite():
+    """Fuzz test forge.special module: erf, erfc, erfinv, gammaln, digamma, expm1, log1p, expit, logit, sinc, i0, xlogy with Autograd."""
+    import forge as at
+    from forge import special
+    import math
+    
+    # 1. erf, erfc, erfinv & backward
+    x_val = np.array([-0.5, 0.0, 0.5], dtype=np.float32)
+    x = at.tensor(x_val, requires_grad=True)
+    y_erf = special.erf(x)
+    assert y_erf.shape == (3,)
+    y_erf.sum().backward()
+    assert x.grad is not None
+    # d/dx erf(x) at 0 is 2/sqrt(pi) = 1.128379
+    np.testing.assert_allclose(x.grad.numpy()[1], 2.0 / np.sqrt(np.pi), atol=1e-4)
+    
+    # 2. expm1 & log1p & Autograd
+    t = at.tensor(np.array([0.1, 0.2], dtype=np.float32), requires_grad=True)
+    e = special.expm1(t)
+    l = special.log1p(e)
+    l.sum().backward()
+    assert t.grad is not None
+    np.testing.assert_allclose(t.grad.numpy(), np.ones(2, dtype=np.float32), atol=1e-4)
+    
+    # 3. gammaln & digamma
+    g_in = at.tensor(np.array([1.0, 2.0, 3.0], dtype=np.float32), requires_grad=True)
+    g_out = special.gammaln(g_in)
+    assert g_out.shape == (3,)
+    g_out.sum().backward()
+    assert g_in.grad is not None
+    
+    # 4. expit & logit
+    p = at.tensor(np.array([0.25, 0.5, 0.75], dtype=np.float32))
+    logits = special.logit(p)
+    probs = special.expit(logits)
+    np.testing.assert_allclose(probs.numpy(), p.numpy(), atol=1e-4)
+    
+    # 5. sinc, i0, xlogy
+    s = special.sinc(at.tensor(np.array([0.0, 1.0], dtype=np.float32)))
+    np.testing.assert_allclose(s.numpy(), np.array([1.0, 0.0], dtype=np.float32), atol=1e-4)
+    
+    b = special.i0(at.tensor(np.array([0.0], dtype=np.float32)))
+    np.testing.assert_allclose(b.numpy(), np.array([1.0], dtype=np.float32), atol=1e-4)
+    
+    x1 = at.tensor(np.array([0.0, 2.0], dtype=np.float32), requires_grad=True)
+    y1 = at.tensor(np.array([5.0, 5.0], dtype=np.float32), requires_grad=True)
+    xy = special.xlogy(x1, y1)
+    xy.sum().backward()
+    assert x1.grad is not None
+    assert y1.grad is not None
+    np.testing.assert_allclose(xy.numpy(), np.array([0.0, 2.0 * np.log(5.0)], dtype=np.float32), atol=1e-4)
+
+
 
 
 
