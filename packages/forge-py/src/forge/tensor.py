@@ -1299,6 +1299,24 @@ class Tensor:
         from .ops import std
         return std(self, axis, unbiased)
 
+    def topk(self, k: int, dim: int = -1, largest: bool = True, sorted: bool = True):
+        """Returns the k largest (or smallest) elements along dim."""
+        self._check_disposed()
+        from .ops import topk
+        return topk(self, k, dim=dim, largest=largest, sorted=sorted)
+
+    def sort(self, dim: int = -1, descending: bool = False, stable: bool = False):
+        """Sorts the elements of the tensor along dim."""
+        self._check_disposed()
+        from .ops import sort
+        return sort(self, dim=dim, descending=descending, stable=stable)
+
+    def argsort(self, dim: int = -1, descending: bool = False, stable: bool = False):
+        """Returns indices that sort the tensor along dim."""
+        self._check_disposed()
+        from .ops import argsort
+        return argsort(self, dim=dim, descending=descending, stable=stable)
+
     def __getitem__(self, key):
         """
         WHAT: 인덱싱 또는 슬라이싱 문법(예: tensor[0:2])을 사용하여 텐서의 부분 배열을 추출합니다.

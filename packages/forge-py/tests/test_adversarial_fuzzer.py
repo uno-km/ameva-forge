@@ -434,6 +434,35 @@ def test_fuzz_advanced_loss_functions_and_autograd():
     assert log_probs.grad is not None
     np.testing.assert_allclose(log_probs.grad.numpy(), np.array([[-0.8, -0.2]], dtype=np.float32))
 
+def test_fuzz_topk_sort_argsort_and_autograd():
+    """Fuzz test topk, sort, argsort and autograd gradient routing."""
+    import forge as at
+    
+    # 1. topk largest
+    x = at.tensor(np.array([[10.0, 50.0, 20.0, 40.0], [5.0, 1.0, 9.0, 3.0]], dtype=np.float32), requires_grad=True)
+    res = at.topk(x, k=2, dim=-1, largest=True)
+    np.testing.assert_allclose(res.values.numpy(), np.array([[50.0, 40.0], [9.0, 5.0]], dtype=np.float32))
+    np.testing.assert_allclose(res.indices.numpy(), np.array([[1, 3], [2, 0]], dtype=np.int32))
+    
+    loss_topk = res.values.sum()
+    loss_topk.backward()
+    expected_grad = np.array([[0.0, 1.0, 0.0, 1.0], [1.0, 0.0, 1.0, 0.0]], dtype=np.float32)
+    np.testing.assert_allclose(x.grad.numpy(), expected_grad)
+    
+    # 2. sort and argsort
+    y = at.tensor(np.array([30.0, 10.0, 20.0], dtype=np.float32), requires_grad=True)
+    s_res = y.sort(descending=False)
+    np.testing.assert_allclose(s_res.values.numpy(), np.array([10.0, 20.0, 30.0], dtype=np.float32))
+    np.testing.assert_allclose(s_res.indices.numpy(), np.array([1, 2, 0], dtype=np.int32))
+    
+    idx = y.argsort(descending=True)
+    np.testing.assert_allclose(idx.numpy(), np.array([0, 2, 1], dtype=np.int32))
+    
+    loss_s = s_res.values.sum()
+    loss_s.backward()
+    np.testing.assert_allclose(y.grad.numpy(), np.ones(3, dtype=np.float32))
+
+
 
 
 

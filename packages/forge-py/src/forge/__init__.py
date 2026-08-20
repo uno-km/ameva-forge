@@ -29,7 +29,8 @@ from .ops import (
     maximum, minimum, clamp,
     arange, eye, linspace, triu, tril,
     adaptive_avg_pool2d, adaptive_max_pool2d,
-    binary_cross_entropy_with_logits, smooth_l1_loss, kl_div, l1_loss
+    binary_cross_entropy_with_logits, smooth_l1_loss, kl_div, l1_loss,
+    topk, sort, argsort, TopKResult, SortResult
 )
 # 텐서 객체 자체를 정의하는 클래스 및 GC 함수 임포트
 from .tensor import Tensor, flush_gc

@@ -3246,3 +3246,92 @@ def pow_op(x: Tensor, exponent: float) -> Tensor:
         return PowFunction.apply(x, float(exponent))
     raise TypeError(f"Exponent must be a float or int, got {type(exponent)}")
 
+
+from collections import namedtuple
+TopKResult = namedtuple('TopKResult', ['values', 'indices'])
+SortResult = namedtuple('SortResult', ['values', 'indices'])
+
+class TopKFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, input: Tensor, k: int, dim: int = -1, largest: bool = True, sorted: bool = True):
+        ctx.save_for_backward(input)
+        ctx.k = k
+        rank = len(input.shape)
+        norm_dim = dim if dim >= 0 else dim + rank
+        ctx.dim = norm_dim
+        
+        data = _require_cpu_data(input, "input")
+        if largest:
+            idx = np.argsort(-data, axis=norm_dim)
+        else:
+            idx = np.argsort(data, axis=norm_dim)
+            
+        slc = [slice(None)] * rank
+        slc[norm_dim] = slice(0, k)
+        topk_idx = idx[tuple(slc)]
+        topk_val = np.take_along_axis(data, topk_idx, axis=norm_dim)
+        
+        ctx.topk_idx = topk_idx
+        
+        val_tensor = Tensor(shape=topk_val.shape, dtype="float32", device="cpu", data=topk_val)
+        idx_tensor = Tensor(shape=topk_idx.shape, dtype="int32", device="cpu", data=topk_idx.astype(np.int32), requires_grad=False)
+        return val_tensor, idx_tensor
+
+    @staticmethod
+    def backward(ctx: Context, grad_val: Tensor, grad_idx: Optional[Tensor] = None) -> Tuple[Tensor, None, None, None, None]:
+        input, = ctx.saved_tensors
+        norm_dim = ctx.dim
+        data_in = _require_cpu_data(input, "input")
+        g_val = _require_cpu_data(grad_val, "grad_val")
+        
+        grad_in = np.zeros_like(data_in)
+        np.put_along_axis(grad_in, ctx.topk_idx, g_val, axis=norm_dim)
+        return (Tensor(shape=input.shape, dtype="float32", device="cpu", data=grad_in), None, None, None, None)
+
+def topk(input: Tensor, k: int, dim: int = -1, largest: bool = True, sorted: bool = True) -> TopKResult:
+    """Returns the k largest (or smallest) elements of the given input tensor along a given dimension."""
+    v, i = TopKFunction.apply(input, k, dim, largest, sorted)
+    return TopKResult(values=v, indices=i)
+
+class SortFunction(Function):
+    @staticmethod
+    def forward(ctx: Context, input: Tensor, dim: int = -1, descending: bool = False, stable: bool = False):
+        ctx.save_for_backward(input)
+        rank = len(input.shape)
+        norm_dim = dim if dim >= 0 else dim + rank
+        ctx.dim = norm_dim
+        
+        data = _require_cpu_data(input, "input")
+        kind = 'stable' if stable else 'quicksort'
+        if descending:
+            idx = np.argsort(-data, axis=norm_dim, kind=kind)
+        else:
+            idx = np.argsort(data, axis=norm_dim, kind=kind)
+            
+        val = np.take_along_axis(data, idx, axis=norm_dim)
+        ctx.sort_idx = idx
+        
+        val_tensor = Tensor(shape=val.shape, dtype="float32", device="cpu", data=val)
+        idx_tensor = Tensor(shape=idx.shape, dtype="int32", device="cpu", data=idx.astype(np.int32), requires_grad=False)
+        return val_tensor, idx_tensor
+
+    @staticmethod
+    def backward(ctx: Context, grad_val: Tensor, grad_idx: Optional[Tensor] = None) -> Tuple[Tensor, None, None, None]:
+        input, = ctx.saved_tensors
+        norm_dim = ctx.dim
+        data_in = _require_cpu_data(input, "input")
+        g_val = _require_cpu_data(grad_val, "grad_val")
+        
+        grad_in = np.zeros_like(data_in)
+        np.put_along_axis(grad_in, ctx.sort_idx, g_val, axis=norm_dim)
+        return (Tensor(shape=input.shape, dtype="float32", device="cpu", data=grad_in), None, None, None)
+
+def sort(input: Tensor, dim: int = -1, descending: bool = False, stable: bool = False) -> SortResult:
+    """Sorts the elements of the input tensor along a given dimension in ascending order by value."""
+    v, i = SortFunction.apply(input, dim, descending, stable)
+    return SortResult(values=v, indices=i)
+
+def argsort(input: Tensor, dim: int = -1, descending: bool = False, stable: bool = False) -> Tensor:
+    """Returns the indices that sort a tensor along a given dimension in ascending order by value."""
+    return sort(input, dim=dim, descending=descending, stable=stable).indices
+

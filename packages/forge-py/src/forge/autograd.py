@@ -150,19 +150,22 @@ class Function:
         result = cls.forward(ctx, *args, **kwargs)
 
         if requires_grad:
-            # 결과 텐서가 미분 가능해야 하므로 requires_grad를 True로 설정합니다.
-            result.requires_grad = True
-            # 역전파 시 필요한 데이터가 담긴 ctx를 결과 텐서에 연결합니다.
-            result._ctx = ctx
-            # 현재 텐서를 만들어낸 연산 클래스가 무엇인지 기록합니다.
-            result._op_cls = cls
-            # 역전파 과정에서 부모 노드로 거슬러 올라가기 위해, 미분 가능한 입력 인자들만 추려 _grad_parents 튜플로 저장합니다.
-            # NC-05 Fix: autograd 부모를 _grad_parents에 저장 (레이지 그래프의 _parents를 덮어쓰지 않음)
-            # NH-08 Fix: isinstance 대신 hasattr로 Tensor 여부 확인 (서브클래스도 처리)
-            result._grad_parents = tuple(
+            grad_parents = tuple(
                 a for a in args
                 if hasattr(a, 'requires_grad') and hasattr(a, 'shape')
             )
+            if isinstance(result, (tuple, list)):
+                for r in result:
+                    if hasattr(r, 'requires_grad'):
+                        r.requires_grad = (r.dtype in ('float32', 'float64', 'float16'))
+                        r._ctx = ctx
+                        r._op_cls = cls
+                        r._grad_parents = grad_parents
+            else:
+                result.requires_grad = True
+                result._ctx = ctx
+                result._op_cls = cls
+                result._grad_parents = grad_parents
 
         return result
 
