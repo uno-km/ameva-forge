@@ -1150,13 +1150,14 @@ class MultiheadAttention(Module):
     # WHAT: MultiheadAttention의 초기화 메서드입니다.
     # WHY: 임베딩 차원, 헤드 개수를 정하고 프로젝션을 위한 선형 레이어(Linear)를 구성하기 위함입니다.
     # HOW: 각 프로젝션(q, k, v, out)용 Linear 인스턴스를 생성해 속성으로 등록합니다.
-    def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.0, bias: bool = True):
+    def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.0, bias: bool = True, batch_first: bool = False, **kwargs):
         super().__init__()
         if embed_dim % num_heads != 0:
             raise AMEVAForgeValidationError(f"embed_dim ({embed_dim}) must be divisible by num_heads ({num_heads})")
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.dropout = dropout
+        self.batch_first = batch_first
         self.head_dim = embed_dim // num_heads
         
         self.q_proj = Linear(embed_dim, embed_dim, bias=bias)
