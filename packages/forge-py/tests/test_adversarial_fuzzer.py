@@ -195,6 +195,32 @@ def test_fuzz_llama_gqa_and_mismatched_kv_heads():
     assert x.grad is not None
     assert not np.isnan(x.grad.numpy()).any()
 
+def test_fuzz_batch_norm2d_affine_false_and_no_running_stats():
+    """Fuzz test BatchNorm2d with affine=False, track_running_stats=False, and shape invariants."""
+    import forge.nn as nn
+    from forge.errors import AMEVAForgeShapeError
+    
+    # 1. 3D input shape error
+    bn = nn.BatchNorm2d(num_features=16)
+    with pytest.raises(AMEVAForgeShapeError):
+        bn(tensor(np.random.randn(2, 16, 4).astype(np.float32)))
+        
+    # 2. affine=False, track_running_stats=False
+    bn_stateless = nn.BatchNorm2d(num_features=8, affine=False, track_running_stats=False)
+    x = tensor(np.random.randn(4, 8, 7, 7).astype(np.float32), requires_grad=True)
+    out = bn_stateless(x)
+    assert out.shape == (4, 8, 7, 7)
+    assert bn_stateless.weight is None
+    assert bn_stateless.bias is None
+    assert bn_stateless.running_mean is None
+    assert bn_stateless.running_var is None
+    
+    loss = out.sum()
+    loss.backward()
+    assert x.grad is not None
+    assert not np.isnan(x.grad.numpy()).any()
+
+
 
 
 

@@ -442,46 +442,28 @@ class BatchNorm2d(Module):
     # WHAT: BatchNorm2d 초기화 메서드입니다.
     # WHY: 정규화 시 채널 개수에 맞는 학습 파라미터(감마, 베타)와 이동 평균 데이터를 준비하기 위함입니다.
     # HOW: 가중치(1)와 편향(0)은 학습 파라미터로, 이동 평균과 분산은 비학습 텐서로 초기화하여 속성에 할당합니다.
-    def __init__(self, num_features, eps=1e-5, momentum=0.1):
+    def __init__(self, num_features: int, eps: float = 1e-5, momentum: float = 0.1, affine: bool = True, track_running_stats: bool = True):
         super().__init__()
-        # WHAT: 입력 텐서의 채널 수입니다.
-        # WHY: 각 파라미터들의 크기 형상을 결정하기 위함입니다.
-        # HOW: 클래스 내부에 저장합니다.
         self.num_features = num_features
-        
-        # WHAT: 분모에 더해지는 매우 작은 상숫값입니다.
-        # WHY: 분산이 0에 가까울 때 발생할 수 있는 0으로 나누기 오류나 수치적 불안정을 방지하기 위함입니다.
-        # HOW: 엡실론 값을 멤버 변수로 저장하여 식에 사용합니다.
         self.eps = eps
-        
-        # WHAT: 이동 평균과 분산을 업데이트할 때 사용되는 모멘텀 수치입니다.
-        # WHY: 과거 통계량과 현재 배치의 통계량을 어느 비율로 섞을지 정하여 학습을 안정화하기 위함입니다.
-        # HOW: 지수 이동 평균 공식에 모멘텀 가중치로 활용됩니다.
         self.momentum = momentum
+        self.affine = affine
+        self.track_running_stats = track_running_stats
         
-        # WHAT: 정규화된 값에 곱해지는 스케일(감마) 파라미터 텐서입니다.
-        # WHY: 정규화 후에도 네트워크가 기존 데이터의 표현력을 회복할 수 있게 학습시키기 위함입니다.
-        # HOW: 채널 크기만큼 1로 초기화되며 그래디언트 계산을 활성화(requires_grad=True)합니다.
-        self.weight = Tensor(shape=(num_features,), dtype='float32', device='cpu', data=np.ones(num_features, dtype=np.float32), requires_grad=True)
-        
-        # WHAT: 정규화된 값에 더해지는 이동(베타) 파라미터 텐서입니다.
-        # WHY: 원점을 유연하게 조정하여 모델의 비선형적 성능을 유지하기 위함입니다.
-        # HOW: 채널 크기만큼 0으로 초기화되며 학습을 활성화합니다.
-        self.bias = Tensor(shape=(num_features,), dtype='float32', device='cpu', data=np.zeros(num_features, dtype=np.float32), requires_grad=True)
-        
-        # WHAT: 전체 훈련 데이터의 채널별 평균을 추적하는 이동 평균 텐서입니다.
-        # WHY: 평가(eval) 시 현재 배치가 아닌 전체 데이터 분포를 기반으로 정규화하기 위함입니다.
-        # HOW: 0으로 초기화하고 백프로퍼게이션에 참여하지 않도록 requires_grad=False로 설정합니다.
-        self.running_mean = Tensor(shape=(num_features,), dtype='float32', device='cpu', data=np.zeros(num_features, dtype=np.float32), requires_grad=False)
-        
-        # WHAT: 전체 훈련 데이터의 채널별 분산을 추적하는 이동 분산 텐서입니다.
-        # WHY: 평가 시 변동성이 큰 단일 배치의 분산 대신 누적된 전역 분산을 사용하기 위함입니다.
-        # HOW: 1로 초기화하고 학습(requires_grad=False) 대상에서 제외합니다.
-        self.running_var = Tensor(shape=(num_features,), dtype='float32', device='cpu', data=np.ones(num_features, dtype=np.float32), requires_grad=False)
+        if affine:
+            self.weight = Tensor(shape=(num_features,), dtype='float32', device='cpu', data=np.ones(num_features, dtype=np.float32), requires_grad=True)
+            self.bias = Tensor(shape=(num_features,), dtype='float32', device='cpu', data=np.zeros(num_features, dtype=np.float32), requires_grad=True)
+        else:
+            self.weight = None
+            self.bias = None
+            
+        if track_running_stats:
+            self.running_mean = Tensor(shape=(num_features,), dtype='float32', device='cpu', data=np.zeros(num_features, dtype=np.float32), requires_grad=False)
+            self.running_var = Tensor(shape=(num_features,), dtype='float32', device='cpu', data=np.ones(num_features, dtype=np.float32), requires_grad=False)
+        else:
+            self.running_mean = None
+            self.running_var = None
 
-    # WHAT: BatchNorm2d의 순전파 메서드입니다.
-    # WHY: 입력 데이터를 정규화하고 아핀(affine) 변환을 수행하기 위함입니다.
-    # HOW: functional 모듈의 batch_norm2d를 호출하며, 훈련/평가 모드 플래그(self.training)를 함께 전달합니다.
     def forward(self, x):
         from .functional import batch_norm2d
         return batch_norm2d(x, self.running_mean, self.running_var, self.weight, self.bias, self.training, self.momentum, self.eps)

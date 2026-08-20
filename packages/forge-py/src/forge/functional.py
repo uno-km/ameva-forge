@@ -433,79 +433,84 @@ def _move_tensor_state(dst, src) -> None:
     src._data = None
     src._handle_cell = None
 
-def batch_norm2d(x, running_mean, running_var, weight, bias, training=False, momentum=0.1, eps=1e-5):
+def batch_norm2d(x, running_mean, running_var, weight=None, bias=None, training=False, momentum=0.1, eps=1e-5):
     """
     무엇을: 2D 배치 정규화(Batch Normalization)를 수행한다.
-    왜: 신경망 각 층의 입력을 정규화하여 학습(Internal Covariate Shift 방지)을 안정적이고 빠르게 만들기 위함이다.
-    어떻게: 채널(Channel) 차원을 기준으로 배치, 높이, 너비에 대한 평균과 분산을 구하고, 이를 이용해 데이터를 정규화한 뒤 학습 가능한 weight와 bias를 적용한다.
+    왜: 채널(Channel) 차원을 기준으로 정규화하여 학습 안정성을 부여한다.
+    어떻게: weight/bias=None (affine=False) 및 running_stats=None (track_running_stats=False)을 완벽 지원한다.
     """
     from .ops import sub, mul, div, add, reshape, mean_axis, tensor, sqrt, full
+    from .errors import AMEVAForgeShapeError
     import numpy as np
     
-    if training:
-        # 무엇을: 배치 차원(0)과 공간 차원(2, 3)을 순차적으로 평균 내어 채널별 평균을 구한다.
-        # 왜: 채널 단위의 분포 통계량을 얻기 위함이다.
-        # 어떻게: mean_axis를 연쇄 호출한다.
+    if len(x.shape) != 4:
+        raise AMEVAForgeShapeError(f"batch_norm2d expected 4D input [Batch, Channels, Height, Width], but got shape {x.shape}")
+        
+    num_channels = x.shape[1]
+    
+    if training or running_mean is None or running_var is None:
         m_c = mean_axis(mean_axis(mean_axis(x, 0), 1), 1)
-        m_view = reshape(m_c, (1, x.shape[1], 1, 1))
+        m_view = reshape(m_c, (1, num_channels, 1, 1))
         
         diff = sub(x, m_view)
         diff_sq = mul(diff, diff)
         v_c = mean_axis(mean_axis(mean_axis(diff_sq, 0), 1), 1)
-        v_view = reshape(v_c, (1, x.shape[1], 1, 1))
+        v_view = reshape(v_c, (1, num_channels, 1, 1))
         
         n = x.shape[0] * x.shape[2] * x.shape[3]
-        if x.device == 'cpu':
-            unbiased_v = v_c._data * (n / (n - 1)) if n > 1 else v_c._data
-            # 무엇을: 이동 평균(running stats)을 업데이트한다.
-            # 왜: 추론(Inference) 시 현재 배치가 아닌 전체 데이터셋의 통계량을 사용하기 위해 모멘텀을 적용해 누적하기 위함이다.
-            # 어떻게: 지수 이동 평균(EMA) 수식을 적용한다.
-            running_mean._data = (1 - momentum) * running_mean._data + momentum * m_c._data
-            running_var._data = (1 - momentum) * running_var._data + momentum * unbiased_v
-            running_mean._version += 1
-            running_var._version += 1
-        else:
-            old_rm = Tensor(
-                shape=running_mean.shape,
-                dtype=running_mean.dtype,
-                device=running_mean.device,
-                handle=running_mean._handle,
-                data=running_mean._data,
-                op=running_mean._lazy_op,
-                parents=running_mean._parents,
-                op_params=running_mean._lazy_params,
-                handle_cell=getattr(running_mean, "_handle_cell", None),
-            )
-            old_rv = Tensor(
-                shape=running_var.shape,
-                dtype=running_var.dtype,
-                device=running_var.device,
-                handle=running_var._handle,
-                data=running_var._data,
-                op=running_var._lazy_op,
-                parents=running_var._parents,
-                op_params=running_var._lazy_params,
-                handle_cell=getattr(running_var, "_handle_cell", None),
-            )
-            new_rm = add(mul(old_rm, full(running_mean.shape, 1 - momentum, device=x.device)), mul(m_c, full(m_c.shape, momentum, device=x.device)))
-            unbiased_v = mul(v_c, full(v_c.shape, n / (n - 1) if n > 1 else 1.0, device=x.device))
-            new_rv = add(mul(old_rv, full(running_var.shape, 1 - momentum, device=x.device)), mul(unbiased_v, full(unbiased_v.shape, momentum, device=x.device)))
-            _move_tensor_state(running_mean, new_rm)
-            _move_tensor_state(running_var, new_rv)
-            
+        if training and running_mean is not None and running_var is not None:
+            if x.device == 'cpu':
+                unbiased_v = v_c._data * (n / (n - 1)) if n > 1 else v_c._data
+                running_mean._data = (1 - momentum) * running_mean._data + momentum * m_c._data
+                running_var._data = (1 - momentum) * running_var._data + momentum * unbiased_v
+                running_mean._version += 1
+                running_var._version += 1
+            else:
+                old_rm = Tensor(
+                    shape=running_mean.shape,
+                    dtype=running_mean.dtype,
+                    device=running_mean.device,
+                    handle=running_mean._handle,
+                    data=running_mean._data,
+                    op=running_mean._lazy_op,
+                    parents=running_mean._parents,
+                    op_params=running_mean._lazy_params,
+                    handle_cell=getattr(running_mean, "_handle_cell", None),
+                )
+                old_rv = Tensor(
+                    shape=running_var.shape,
+                    dtype=running_var.dtype,
+                    device=running_var.device,
+                    handle=running_var._handle,
+                    data=running_var._data,
+                    op=running_var._lazy_op,
+                    parents=running_var._parents,
+                    op_params=running_var._lazy_params,
+                    handle_cell=getattr(running_var, "_handle_cell", None),
+                )
+                new_rm = add(mul(old_rm, full(running_mean.shape, 1 - momentum, device=x.device)), mul(m_c, full(m_c.shape, momentum, device=x.device)))
+                unbiased_v = mul(v_c, full(v_c.shape, n / (n - 1) if n > 1 else 1.0, device=x.device))
+                new_rv = add(mul(old_rv, full(running_var.shape, 1 - momentum, device=x.device)), mul(unbiased_v, full(unbiased_v.shape, momentum, device=x.device)))
+                _move_tensor_state(running_mean, new_rm)
+                _move_tensor_state(running_var, new_rv)
+                
         mean_use, var_use = m_view, v_view
     else:
-        mean_use = reshape(running_mean, (1, x.shape[1], 1, 1))
-        var_use = reshape(running_var, (1, x.shape[1], 1, 1))
+        mean_use = reshape(running_mean, (1, num_channels, 1, 1))
+        var_use = reshape(running_var, (1, num_channels, 1, 1))
         
     eps_t = full(var_use.shape, eps, device=x.device)
     denom = sqrt(add(var_use, eps_t))
-    x_norm = div(sub(x, mean_use), denom)
+    out = div(sub(x, mean_use), denom)
     
-    w_view = reshape(weight, (1, x.shape[1], 1, 1))
-    b_view = reshape(bias, (1, x.shape[1], 1, 1))
-    
-    out = add(mul(x_norm, w_view), b_view)
+    if weight is not None:
+        w_view = reshape(weight, (1, num_channels, 1, 1))
+        out = mul(out, w_view)
+        
+    if bias is not None:
+        b_view = reshape(bias, (1, num_channels, 1, 1))
+        out = add(out, b_view)
+        
     return out
 
 def layer_norm(x, normalized_shape, weight=None, bias=None, eps=1e-5):
