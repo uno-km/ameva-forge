@@ -327,14 +327,24 @@ await C_gpu.realize() # Realizes GPU texture & buffers</code></pre>
             const cpuIters = N >= 2048 ? 1 : (N >= 1024 ? 2 : (N >= 512 ? 3 : 5));
             const gpuIters = N >= 2048 ? 2 : 5;
 
-            // 1. Immediate UI Reset
-            document.getElementById('barCpuGflops').style.width = '0%';
-            document.getElementById('barGpuGflops').style.width = '0%';
+            const barCpu = document.getElementById('barCpuGflops');
+            const barGpu = document.getElementById('barGpuGflops');
+
+            // 1. Instant Hard Snap to 0% (Disable transition and force reflow)
+            barCpu.style.transition = 'none';
+            barGpu.style.transition = 'none';
+            barCpu.style.width = '0%';
+            barGpu.style.width = '0%';
+            void barCpu.offsetWidth;
+            void barGpu.offsetWidth;
+            barCpu.style.transition = 'width 0.4s ease';
+            barGpu.style.transition = 'width 0.4s ease';
+
             document.getElementById('valCpuGflops').textContent = 'Computing CPU...';
             document.getElementById('valGpuGflops').textContent = 'Waiting for CPU...';
             document.getElementById('metricGflops').textContent = '-- GFLOPS';
             document.getElementById('metricSpeedup').textContent = '--';
-            document.getElementById('metricStatus').textContent = `Running Stage 1/2 (CPU NumPy)... `;
+            document.getElementById('metricStatus').textContent = `Running Stage 1/2 (CPU NumPy)...`;
             document.getElementById('benchStageIndicator').textContent = `[ 1/2 Running CPU NumPy (${N}x${N}) ]`;
             document.getElementById('benchStageIndicator').style.color = '#003399';
             btn.textContent = `[ Running CPU (1/2)... ]`;
@@ -344,8 +354,8 @@ await C_gpu.realize() # Realizes GPU texture & buffers</code></pre>
             log(`[*] Theoretical Workload: ${totalFlopsGiga.toFixed(2)} GFLOPs per multiply`);
             log(`[Stage 1/2] Executing CPU NumPy (${cpuIters} iterations)...`);
 
-            // Yield to browser UI loop so the reset bars render immediately!
-            await new Promise(r => setTimeout(r, 30));
+            // Yield to browser UI loop so the 0% bars and status render on screen
+            await new Promise(r => setTimeout(r, 50));
 
             pyodide.globals.set("dim_N", N);
             pyodide.globals.set("cpu_iters", cpuIters);
@@ -379,9 +389,10 @@ json.dumps({
 
             const cpuRes = JSON.parse(cpuJson);
 
-            // Update Stage 1 (CPU) Visuals
+            // Update Stage 1 (CPU Done, GPU Still 0%!)
             document.getElementById('valCpuGflops').textContent = `${cpuRes.cpu_gflops.toFixed(1)} GFLOPS (${cpuRes.t_cpu_ms.toFixed(1)} ms)`;
-            document.getElementById('barCpuGflops').style.width = '45%';
+            barCpu.style.width = '35%';
+            barGpu.style.width = '0%';
             document.getElementById('metricStatus').textContent = `Stage 1 Done (${cpuRes.t_cpu_ms.toFixed(1)}ms) -> Stage 2/2 (WebGPU)...`;
             document.getElementById('benchStageIndicator').textContent = `[ 2/2 Dispatching WebGPU (${N}x${N}) ]`;
             document.getElementById('benchStageIndicator').style.color = '#008800';
@@ -390,8 +401,8 @@ json.dumps({
             log(`[CPU NumPy] Latency: ${cpuRes.t_cpu_ms.toFixed(1)} ms | Throughput: ${cpuRes.cpu_gflops.toFixed(1)} GFLOPS`);
             log(`[Stage 2/2] Dispatching WebGPU Forge Tiled GEMM (${gpuIters} iterations)...`);
 
-            // Yield to browser UI loop so CPU bar and logs render BEFORE WebGPU starts!
-            await new Promise(r => setTimeout(r, 40));
+            // Yield to browser UI loop so CPU bar visibly paints while GPU bar stays at 0%
+            await new Promise(r => setTimeout(r, 60));
 
             // -----------------------------------------------------------
             // Stage 2: WebGPU Forge Benchmark
@@ -422,8 +433,8 @@ json.dumps({
             const speedup = (cpuRes.t_cpu_ms / Math.max(gpuRes.t_gpu_ms, 0.001));
             const maxG = Math.max(cpuRes.cpu_gflops, gpuRes.gpu_gflops, 0.1);
 
-            document.getElementById('barCpuGflops').style.width = `${Math.max(8, (cpuRes.cpu_gflops / maxG) * 100)}%`;
-            document.getElementById('barGpuGflops').style.width = `${Math.max(8, (gpuRes.gpu_gflops / maxG) * 100)}%`;
+            barCpu.style.width = `${Math.max(6, (cpuRes.cpu_gflops / maxG) * 100)}%`;
+            barGpu.style.width = `${Math.max(6, (gpuRes.gpu_gflops / maxG) * 100)}%`;
             document.getElementById('valGpuGflops').textContent = `${gpuRes.gpu_gflops.toFixed(1)} GFLOPS (${gpuRes.t_gpu_ms.toFixed(1)} ms)`;
             document.getElementById('metricGflops').textContent = `${gpuRes.gpu_gflops.toFixed(1)} GFLOPS`;
             document.getElementById('metricSpeedup').textContent = `${speedup.toFixed(1)}x`;
@@ -432,7 +443,7 @@ json.dumps({
             document.getElementById('benchStageIndicator').style.color = '#008800';
 
             log(`[WebGPU Forge] Latency: ${gpuRes.t_gpu_ms.toFixed(1)} ms | Throughput: ${gpuRes.gpu_gflops.toFixed(1)} GFLOPS`);
-            log(`>>> VERDICT: WebGPU Forge is ${speedup.toFixed(1)}x faster than CPU NumPy! <<<`);
+            log(`>>> VERDICT: WebGPU Forge is ${speedup.toFixed(1)}x faster than CPU NumPy! <<<\n`);
 
             btn.disabled = false;
             btn.textContent = "Run Matmul Benchmark";
