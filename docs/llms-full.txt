@@ -1,0 +1,20 @@
+# AMEVA-Forge Full AI Specification & API Reference
+> Comprehensive Reference for AI Agents, LLMs, and RAG Pipelines
+
+## Architecture & Principles
+1. 100% Client-Side WebGPU: Zero cloud server costs, 100% data privacy.
+2. WGSL Compute Shaders: Parallel matrix multiplication, elementwise ops, and gradient backward shaders.
+3. PyTorch Drop-in API: Familiar `.backward()`, `requires_grad=True`, `zero_grad()`, `step()`.
+4. Zero VRAM Memory Leak: WebGPU ring buffer pooling and weakref lifetime management.
+
+## API Reference
+- `forge.tensor(data, requires_grad=False, device='webgpu')`
+- `tensor.backward()`
+- `forge.nn.Linear(in_features, out_features)`
+- `forge.optim.Adam(params, lr=0.001)`
+- `forge.optim.SGD(params, lr=0.01)`
+
+## Package & Source
+- PyPI Package: `ameva` (https://pypi.org/project/ameva/)
+- License: Apache-2.0
+- Author: Eunho Kim (@uno-km), AMEVA Open-Source Foundation

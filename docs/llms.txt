@@ -1,0 +1,33 @@
+# AMEVA-Forge (Browser-Native WebGPU Autograd Engine)
+> Machine-Readable Context for LLM & AI Agents
+
+## Overview
+AMEVA-Forge (`pip install ameva`) is a high-performance, browser-native deep learning tensor and autograd engine powered by WebGPU and WGSL compute shaders. It provides drop-in PyTorch syntax compatibility and requires 0 server backend.
+
+## Quick Installation
+```bash
+pip install ameva
+```
+
+## Python / Pyodide WebGPU Usage
+```python
+import ameva as forge
+
+# 1. Create tensors with autograd
+x = forge.tensor([1.0, 2.0, 3.0], requires_grad=True, device="webgpu")
+w = forge.tensor([2.0, 3.0, 4.0], requires_grad=True, device="webgpu")
+
+# 2. Forward computation
+y = (x * w).sum()
+
+# 3. Backward propagation via WGSL shaders
+y.backward()
+
+print("x.grad:", x.grad)
+```
+
+## Key Documentation Links
+- Homepage: https://uno-km.vercel.app/lib/forge/
+- Live Demo: https://uno-km.vercel.app/lib/forge/demo.html
+- PyPI: https://pypi.org/project/ameva/
+- GitHub: https://github.com/uno-km/ameva-forge
