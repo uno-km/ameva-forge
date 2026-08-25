@@ -1,6 +1,23 @@
 {
-  "dependencies": {
-    "express": "^5.2.1",
-    "puppeteer": "^25.5.0"
+  "name": "@uno-km/ameva-forge",
+  "version": "1.0.0",
+  "description": "Server-cost zero Browser-Native WebGPU Autograd & Deep Learning Engine",
+  "main": "experimental/playgrounds/autograd/index.html",
+  "keywords": [
+    "webgpu",
+    "autograd",
+    "deep-learning",
+    "wgsl",
+    "pytorch-wasm",
+    "browser-ai"
+  ],
+  "author": "uno-km (hosequelbo@gmail.com)",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/uno-km/ameva-forge.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   }
 }

@@ -1,7 +1,7 @@
 {
   "name": "@ameva/forge",
   "version": "0.1.0",
-  "description": "Browser-native Tensor Runtime for WebGPU and Pyodide",
+  "description": "High-Performance Browser-Native Tensor Computation Engine & Reverse-Mode Autograd Framework Powered by WebGPU",
   "repository": {
     "type": "git",
     "url": "https://github.com/uno-km/ameva-forge.git"
