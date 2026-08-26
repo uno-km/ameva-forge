@@ -3,8 +3,8 @@
 <div align="center">
 
 [![Official Documentation](https://img.shields.io/badge/docs-uno--km.vercel.app%2Flib%2Fforge-004499?style=for-the-badge&logo=vercel)](https://uno-km.vercel.app/lib/forge/)
-[![PyPI version](https://img.shields.io/pypi/v/ameva.svg?style=for-the-badge&color=007ec6&logo=pypi&logoColor=white)](https://pypi.org/project/ameva/)
-[![Python](https://img.shields.io/badge/Python-3.9_|_3.10_|_3.11_|_3.12_|_3.13-3776ab?style=for-the-badge&logo=python&logoColor=white)](https://pypi.org/project/ameva/)
+[![PyPI version](https://img.shields.io/pypi/v/ameva-forge.svg?style=for-the-badge&color=007ec6&logo=pypi&logoColor=white)](https://pypi.org/project/ameva-forge/)
+[![Python](https://img.shields.io/badge/Python-3.9_|_3.10_|_3.11_|_3.12_|_3.13-3776ab?style=for-the-badge&logo=python&logoColor=white)](https://pypi.org/project/ameva-forge/)
 [![WebGPU](https://img.shields.io/badge/WebGPU-Pure_WGSL_Compute-blueviolet?style=for-the-badge&logo=webgpu)](https://uno-km.vercel.app/lib/forge/)
 [![Tests](https://img.shields.io/badge/Tests-292%2F292_Passed_(100%25)-brightgreen?style=for-the-badge)](https://uno-km.vercel.app/lib/forge/benchmarks.html)
 [![Open Collective](https://img.shields.io/badge/Open_Collective-AOSF_Fund-004499?style=flat&logo=opencollective)](https://opencollective.com/ameva-fund)
@@ -15,7 +15,7 @@
 ### High-Performance Client-Side Deep Learning Engine & WebGPU Reverse-Mode Autograd Framework
 **An Official Tier 1 Top-Level Open-Source Project of the AMEVA Foundation (AOSF)**
 
-[🚀 Live WebGPU Studio Demo](https://uno-km.vercel.app/lib/forge/demo.html) • [📚 Official Documentation](https://uno-km.vercel.app/lib/forge/) • [📦 PyPI Package](https://pypi.org/project/ameva/) • [💬 Issue Tracker](https://github.com/uno-km/ameva-forge/issues)
+[🚀 Live WebGPU Studio Demo](https://uno-km.vercel.app/lib/forge/demo.html) • [📚 Official Documentation](https://uno-km.vercel.app/lib/forge/) • [📦 PyPI Package](https://pypi.org/project/ameva-forge/) • [💬 Issue Tracker](https://github.com/uno-km/ameva-forge/issues)
 
 </div>
 

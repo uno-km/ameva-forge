@@ -29,5 +29,5 @@ print("x.grad:", x.grad)
 ## Key Documentation Links
 - Homepage: https://uno-km.vercel.app/lib/forge/
 - Live Demo: https://uno-km.vercel.app/lib/forge/demo.html
-- PyPI: https://pypi.org/project/ameva/
+- PyPI: https://pypi.org/project/ameva-forge/
 - GitHub: https://github.com/uno-km/ameva-forge
