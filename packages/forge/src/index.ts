@@ -42,6 +42,10 @@ export * from "./tensor/kernels/group_norm.wgsl";
 export * from "./diffusion/scheduler";
 export * from "./diffusion/vaeDecoder";
 export * from "./diffusion/resnetBlock";
+export * from "./diffusion/autoencoderKL";
+export * from "./diffusion/clipTokenizer";
+export * from "./diffusion/clipTextEncoder";
+export * from "./diffusion/unetGraph";
 export * from "./diffusion/pipeline";
 
 /**

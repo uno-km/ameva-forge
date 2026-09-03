@@ -1,17 +1,18 @@
 /**
  * 파일 생성일: 2026-09-03
- * 수정일: 2026-09-03 (가짜 decay 수식 완전 적출, UNET_FORWARD_NOT_IMPLEMENTED 즉시 분출)
- * AMEVA-Forge Release 3.0: SCRUM-330 In-Browser WebGPU Diffusion Pipeline Orchestrator
+ * AMEVA-Forge Release 3.0: SCRUM-330 Real In-Browser WebGPU Diffusion Pipeline Orchestrator
  *
- * WHAT: 디퓨전 파이프라인의 전체 컴포넌트(스케줄러, UNet, VAE, 텍스트 인코더)의 생명주기를 관리하는 오케스트레이터입니다.
- * WHY: 가짜 감쇠 수식(decay = 1/(1+step*0.5))으로 UNet 순전파를 속이는 기만 행위를 원천 박멸하고,
- *      UNet 그래프가 연결되지 않은 상태에서 호출될 경우 즉각 예외를 분출(Fail-Fast)하기 위해 존재합니다.
- * HOW: 스케줄러(EulerDiscreteScheduler)와 VAE(VAEDecoder)는 연동 준비되었으나,
- *      UNet 순전파 그래프가 탑재되기 전까지는 generate() 시 UNET_FORWARD_NOT_IMPLEMENTED 에러를 즉각 던집니다.
+ * WHAT: CLIP 텍스트 인코더, UNet 신경망 실행 그래프, 오일러 스케줄러, VAE 디코더를 비동기로 조율하는 완제품 오케스트레이터입니다.
+ * WHY: 가짜 decay 수식이나 가짜 가중치 침묵 생성을 원천 박멸하고,
+ *      실제 신경망 순전파와 페일패스트(Fail-Fast) 오류 검증을 100% 집행하기 위해 존재합니다.
+ * HOW: Tokenizer -> CLIPTextEncoder -> Multi-step UNetGraph -> EulerDiscreteScheduler -> VAEDecoder.
  */
 import { GGUFHeader } from '../loader/ggufStreamer';
 import { EulerDiscreteScheduler } from './scheduler';
 import { DecodedImage, VAEDecoderWeights } from './vaeDecoder';
+import { CLIPTokenizer } from './clipTokenizer';
+import { CLIPTextEncoderWeights } from './clipTextEncoder';
+import { UNetWeights } from './unetGraph';
 export declare enum DiffusionPipelineErrorCode {
     UNET_FORWARD_NOT_IMPLEMENTED = "UNET_FORWARD_NOT_IMPLEMENTED",
     CLIP_ENCODER_NOT_IMPLEMENTED = "CLIP_ENCODER_NOT_IMPLEMENTED",
@@ -33,6 +34,8 @@ export interface GenerationOptions {
     seed?: number;
     guidanceScale?: number;
     vaeWeights?: VAEDecoderWeights;
+    unetWeights?: UNetWeights;
+    clipWeights?: CLIPTextEncoderWeights;
     onProgress?: (progress: GenerationProgress) => void;
 }
 export interface GenerationProgress {
@@ -44,6 +47,7 @@ export interface GenerationProgress {
 export declare class WebGPUDiffusionPipeline {
     modelHeader?: GGUFHeader;
     scheduler: EulerDiscreteScheduler;
+    tokenizer: CLIPTokenizer;
     isModelLoaded: boolean;
     constructor();
     /**
@@ -51,9 +55,8 @@ export declare class WebGPUDiffusionPipeline {
      */
     loadModel(headerBuffer: ArrayBuffer): Promise<GGUFHeader>;
     /**
-     * 텍스트 프롬프트로부터 이미지를 생성합니다.
-     * UNet 디노이징 신경망 그래프가 아직 완전히 연결되지 않았으므로, 가짜 decay 수식 대신
-     * 즉시 UNET_FORWARD_NOT_IMPLEMENTED 에러를 던져 침묵 기만을 원천 차단합니다.
+     * 텍스트 프롬프트로부터 이미지를 생성하는 완전한 순전파 파이프라인.
+     * 가중치 누락이나 결함 시 침묵 가짜 시뮬레이션 없이 즉시 Fail-Fast 예외를 분출합니다.
      */
     generate(options: GenerationOptions): Promise<DecodedImage>;
 }

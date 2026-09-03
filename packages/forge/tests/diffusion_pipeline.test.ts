@@ -135,7 +135,16 @@ describe('In-Browser Diffusion Pipeline (SCRUM-327 ~ SCRUM-330)', () => {
   });
 
   describe('4. WebGPUDiffusionPipeline Fail-Fast Boundaries (SCRUM-330)', () => {
-    it('strictly throws UNET_FORWARD_NOT_IMPLEMENTED instead of silently faking UNet with decay formulas', async () => {
+    it('strictly throws VAE_WEIGHTS_REQUIRED when vaeWeights are missing in pipeline.generate()', async () => {
+      const pipeline = new WebGPUDiffusionPipeline();
+      await expect(pipeline.generate({
+        prompt: 'test without weights',
+        width: 64,
+        height: 64,
+      } as any)).rejects.toThrow('VAE_WEIGHTS_REQUIRED');
+    });
+
+    it('strictly throws UNET_FORWARD_NOT_IMPLEMENTED when unetWeights are missing', async () => {
       const pipeline = new WebGPUDiffusionPipeline();
       const weights = VAEDecoderTestFixtures.createSyntheticWeights();
 
@@ -149,13 +158,143 @@ describe('In-Browser Diffusion Pipeline (SCRUM-327 ~ SCRUM-330)', () => {
       })).rejects.toThrow('UNET_FORWARD_NOT_IMPLEMENTED');
     });
 
-    it('strictly throws VAE_WEIGHTS_REQUIRED when vaeWeights are missing in pipeline.generate()', async () => {
+    it('strictly throws CLIP_ENCODER_NOT_IMPLEMENTED when clipWeights are missing', async () => {
       const pipeline = new WebGPUDiffusionPipeline();
+      const vaeWeights = VAEDecoderTestFixtures.createSyntheticWeights();
+      const unetWeights: any = {
+        convInWeight: new Float32Array(32 * 4 * 3 * 3).fill(0.01),
+        timeMlp1Weight: new Float32Array(320 * 4 * 320).fill(0.01),
+        timeMlp1Bias: new Float32Array(320 * 4).fill(0.0),
+        timeMlp2Weight: new Float32Array(320 * 4 * 320 * 4).fill(0.01),
+        timeMlp2Bias: new Float32Array(320 * 4).fill(0.0),
+        downBlocks: [],
+        midBlock: {
+          resnet1: {
+            norm1Gamma: new Float32Array(32).fill(1.0),
+            norm1Beta: new Float32Array(32).fill(0.0),
+            conv1Weight: new Float32Array(32 * 32 * 3 * 3).fill(0.01),
+            norm2Gamma: new Float32Array(32).fill(1.0),
+            norm2Beta: new Float32Array(32).fill(0.0),
+            conv2Weight: new Float32Array(32 * 32 * 3 * 3).fill(0.01),
+          },
+          attention: {
+            normGamma: new Float32Array(32).fill(1.0),
+            normBeta: new Float32Array(32).fill(0.0),
+            qWeight: new Float32Array(32 * 32).fill(0.01),
+            kWeight: new Float32Array(32 * 768).fill(0.01),
+            vWeight: new Float32Array(32 * 768).fill(0.01),
+            outWeight: new Float32Array(32 * 32).fill(0.01),
+          },
+          resnet2: {
+            norm1Gamma: new Float32Array(32).fill(1.0),
+            norm1Beta: new Float32Array(32).fill(0.0),
+            conv1Weight: new Float32Array(32 * 32 * 3 * 3).fill(0.01),
+            norm2Gamma: new Float32Array(32).fill(1.0),
+            norm2Beta: new Float32Array(32).fill(0.0),
+            conv2Weight: new Float32Array(32 * 32 * 3 * 3).fill(0.01),
+          },
+        },
+        upBlocks: [],
+        normOutGamma: new Float32Array(32).fill(1.0),
+        normOutBeta: new Float32Array(32).fill(0.0),
+        convOutWeight: new Float32Array(4 * 32 * 3 * 3).fill(0.01),
+      };
+
       await expect(pipeline.generate({
-        prompt: 'test without weights',
+        prompt: 'test prompt',
         width: 64,
         height: 64,
-      } as any)).rejects.toThrow('VAE_WEIGHTS_REQUIRED');
+        vaeWeights,
+        unetWeights,
+      })).rejects.toThrow('CLIP_ENCODER_NOT_IMPLEMENTED');
+    });
+
+    it('orchestrates complete genuine E2E pipeline when all weights are provided', async () => {
+      const pipeline = new WebGPUDiffusionPipeline();
+      const vaeWeights = VAEDecoderTestFixtures.createSyntheticWeights();
+      const unetWeights: any = {
+        convInWeight: new Float32Array(32 * 4 * 3 * 3).fill(0.01),
+        timeMlp1Weight: new Float32Array(320 * 4 * 320).fill(0.01),
+        timeMlp1Bias: new Float32Array(320 * 4).fill(0.0),
+        timeMlp2Weight: new Float32Array(320 * 4 * 320 * 4).fill(0.01),
+        timeMlp2Bias: new Float32Array(320 * 4).fill(0.0),
+        downBlocks: [],
+        midBlock: {
+          resnet1: {
+            norm1Gamma: new Float32Array(32).fill(1.0),
+            norm1Beta: new Float32Array(32).fill(0.0),
+            conv1Weight: new Float32Array(32 * 32 * 3 * 3).fill(0.01),
+            norm2Gamma: new Float32Array(32).fill(1.0),
+            norm2Beta: new Float32Array(32).fill(0.0),
+            conv2Weight: new Float32Array(32 * 32 * 3 * 3).fill(0.01),
+          },
+          attention: {
+            normGamma: new Float32Array(32).fill(1.0),
+            normBeta: new Float32Array(32).fill(0.0),
+            qWeight: new Float32Array(32 * 32).fill(0.01),
+            kWeight: new Float32Array(32 * 768).fill(0.01),
+            vWeight: new Float32Array(32 * 768).fill(0.01),
+            outWeight: new Float32Array(32 * 32).fill(0.01),
+          },
+          resnet2: {
+            norm1Gamma: new Float32Array(32).fill(1.0),
+            norm1Beta: new Float32Array(32).fill(0.0),
+            conv1Weight: new Float32Array(32 * 32 * 3 * 3).fill(0.01),
+            norm2Gamma: new Float32Array(32).fill(1.0),
+            norm2Beta: new Float32Array(32).fill(0.0),
+            conv2Weight: new Float32Array(32 * 32 * 3 * 3).fill(0.01),
+          },
+        },
+        upBlocks: [],
+        normOutGamma: new Float32Array(32).fill(1.0),
+        normOutBeta: new Float32Array(32).fill(0.0),
+        convOutWeight: new Float32Array(4 * 32 * 3 * 3).fill(0.01),
+      };
+      const clipWeights: any = {
+        tokenEmbedding: new Float32Array(50000 * 768).fill(0.01),
+        positionEmbedding: new Float32Array(77 * 768).fill(0.01),
+        layers: [{
+          norm1Gamma: new Float32Array(768).fill(1.0),
+          norm1Beta: new Float32Array(768).fill(0.0),
+          qProjWeight: new Float32Array(768 * 768).fill(0.001),
+          qProjBias: new Float32Array(768).fill(0.0),
+          kProjWeight: new Float32Array(768 * 768).fill(0.001),
+          kProjBias: new Float32Array(768).fill(0.0),
+          vProjWeight: new Float32Array(768 * 768).fill(0.001),
+          vProjBias: new Float32Array(768).fill(0.0),
+          outProjWeight: new Float32Array(768 * 768).fill(0.001),
+          outProjBias: new Float32Array(768).fill(0.0),
+          norm2Gamma: new Float32Array(768).fill(1.0),
+          norm2Beta: new Float32Array(768).fill(0.0),
+          mlpFc1Weight: new Float32Array(3072 * 768).fill(0.001),
+          mlpFc1Bias: new Float32Array(3072).fill(0.0),
+          mlpFc2Weight: new Float32Array(768 * 3072).fill(0.001),
+          mlpFc2Bias: new Float32Array(768).fill(0.0),
+        }],
+        finalNormGamma: new Float32Array(768).fill(1.0),
+        finalNormBeta: new Float32Array(768).fill(0.0),
+      };
+
+      const progressSteps: number[] = [];
+      const image = await pipeline.generate({
+        prompt: 'a cinematic cybernetic cat in neon city',
+        numSteps: 2,
+        width: 64,
+        height: 64,
+        seed: 42,
+        vaeWeights,
+        unetWeights,
+        clipWeights,
+        onProgress: (p) => {
+          progressSteps.push(p.step);
+        },
+      });
+
+      expect(image).toBeDefined();
+      expect(image.width).toBe(64);
+      expect(image.height).toBe(64);
+      expect(image.rgbaData.length).toBe(64 * 64 * 4);
+      expect(progressSteps).toEqual([1, 2]);
     });
   });
 });
