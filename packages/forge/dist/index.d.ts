@@ -26,6 +26,10 @@ export { executeGraph, configureRuntime, getRuntimeConfig, type ForgeRuntimeConf
 export * from "./bridge/safeCopy";
 export * from "./bridge/pyodideBridge";
 export * from "./devtools/inspector";
+export * from "./loader/ggufStreamer";
+export * from "./tensor/kernels/silu.wgsl";
+export * from "./tensor/kernels/upsample2d.wgsl";
+export * from "./tensor/kernels/group_norm.wgsl";
 /**
  * WHAT: 테스트 환경(E2E / Jest)에서만 제어 가능한 결함 주입(Fault Injection) 훅입니다.
  * WHY: 프로덕션 환경에 raw GPUDevice를 노출하지 않으면서도 OOM, Validation, Device Lost 복구력을 엄격히 검증하기 위함입니다.

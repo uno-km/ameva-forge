@@ -8907,6 +8907,536 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     /**
+     * 파일 생성일: 2026-09-03
+     * AMEVA-Forge Release 3.0: SCRUM-318 Zero-Heap GGUF Header & Tensor Streaming Parser
+     *
+     * WHAT: GGUF(v2/v3) 바이너리 모델 파일의 헤더 및 텐서 메타데이터를 파싱하고,
+     *      가중치 데이터를 WASM 힙 메모리를 우회하여 WebGPU VRAM 버퍼로 직접 주입(Direct DMA)하는 고성능 스트리머입니다.
+     * WHY: 32비트 WebAssembly(WASM) 환경의 2GB 힙 한계로 인한 브라우저 OOM 크래시를 원천 차단하고,
+     *      1.5GB 이상의 Stable Diffusion GGUF 가중치를 Zero-Heap으로 VRAM에 안전하게 적재하기 위해 존재합니다.
+     * HOW: 최초 1~2MB 헤더 블록만 읽어 메타데이터 딕셔너리와 텐서 테이블을 구축한 후,
+     *      HTTP Range-Request 또는 OPFS 스트림을 통해 필요한 텐서 청크만 직접 WebGPU Queue.writeBuffer로 전송합니다.
+     */
+    exports.GGMLType = void 0;
+    (function (GGMLType) {
+        GGMLType[GGMLType["F32"] = 0] = "F32";
+        GGMLType[GGMLType["F16"] = 1] = "F16";
+        GGMLType[GGMLType["Q4_0"] = 2] = "Q4_0";
+        GGMLType[GGMLType["Q4_1"] = 3] = "Q4_1";
+        GGMLType[GGMLType["Q5_0"] = 6] = "Q5_0";
+        GGMLType[GGMLType["Q5_1"] = 7] = "Q5_1";
+        GGMLType[GGMLType["Q8_0"] = 8] = "Q8_0";
+        GGMLType[GGMLType["Q8_1"] = 9] = "Q8_1";
+        GGMLType[GGMLType["Q2_K"] = 10] = "Q2_K";
+        GGMLType[GGMLType["Q3_K"] = 11] = "Q3_K";
+        GGMLType[GGMLType["Q4_K"] = 12] = "Q4_K";
+        GGMLType[GGMLType["Q5_K"] = 13] = "Q5_K";
+        GGMLType[GGMLType["Q6_K"] = 14] = "Q6_K";
+        GGMLType[GGMLType["Q8_K"] = 15] = "Q8_K";
+        GGMLType[GGMLType["I8"] = 16] = "I8";
+        GGMLType[GGMLType["I16"] = 17] = "I16";
+        GGMLType[GGMLType["I32"] = 18] = "I32";
+        GGMLType[GGMLType["COUNT"] = 19] = "COUNT";
+    })(exports.GGMLType || (exports.GGMLType = {}));
+    class GGUFStreamer {
+        static GGUF_MAGIC = 0x46554747; // 'GGUF' in LE
+        /**
+         * 헤더 바이트 버퍼를 파싱하여 메타데이터와 텐서 디스크립터를 추출합니다.
+         * 전체 가중치 바이너리가 아닌 헤더 영역(통상 512KB ~ 2MB)만 입력받습니다.
+         */
+        static parseHeader(headerBuffer) {
+            const view = new DataView(headerBuffer);
+            let offset = 0;
+            // 1. Magic 검증
+            const magic = view.getUint32(offset, true);
+            offset += 4;
+            if (magic !== this.GGUF_MAGIC) {
+                throw new Error(`[GGUFStreamer] Invalid magic: expected 0x46554747 (GGUF), got 0x${magic.toString(16)}`);
+            }
+            // 2. Version 검증
+            const version = view.getUint32(offset, true);
+            offset += 4;
+            if (version !== 2 && version !== 3) {
+                throw new Error(`[GGUFStreamer] Unsupported GGUF version: ${version} (expected v2 or v3)`);
+            }
+            // 3. Tensor count & Metadata count (uint64)
+            const tensorCount = Number(view.getBigUint64(offset, true));
+            offset += 8;
+            const metadataKVCount = Number(view.getBigUint64(offset, true));
+            offset += 8;
+            const metadata = {};
+            // 4. Metadata KV 파싱
+            for (let i = 0; i < metadataKVCount; i++) {
+                const keyLen = Number(view.getBigUint64(offset, true));
+                offset += 8;
+                const keyBytes = new Uint8Array(headerBuffer, offset, keyLen);
+                const key = new TextDecoder('utf-8').decode(keyBytes);
+                offset += keyLen;
+                const valType = view.getUint32(offset, true);
+                offset += 4;
+                const [val, newOffset] = this.readMetadataValue(view, offset, valType, headerBuffer);
+                offset = newOffset;
+                metadata[key] = val;
+            }
+            const alignment = metadata['general.alignment'] ? Number(metadata['general.alignment']) : 32;
+            // 5. Tensors Table 파싱
+            const tensors = new Map();
+            for (let i = 0; i < tensorCount; i++) {
+                const nameLen = Number(view.getBigUint64(offset, true));
+                offset += 8;
+                const nameBytes = new Uint8Array(headerBuffer, offset, nameLen);
+                const name = new TextDecoder('utf-8').decode(nameBytes);
+                offset += nameLen;
+                const nDims = view.getUint32(offset, true);
+                offset += 4;
+                const dimensions = [];
+                let totalElements = 1;
+                for (let d = 0; d < nDims; d++) {
+                    const dim = Number(view.getBigUint64(offset, true));
+                    offset += 8;
+                    dimensions.push(dim);
+                    totalElements *= dim;
+                }
+                const type = view.getUint32(offset, true);
+                offset += 4;
+                const tensorOffset = Number(view.getBigUint64(offset, true));
+                offset += 8;
+                const byteSize = this.calculateTensorByteSize(type, totalElements);
+                tensors.set(name, {
+                    name,
+                    nDimensions: nDims,
+                    dimensions,
+                    type,
+                    offset: tensorOffset,
+                    byteSize,
+                });
+            }
+            // 6. Data 섹션 시작 주소 정렬 (alignment padding)
+            const remainder = offset % alignment;
+            const dataOffset = remainder === 0 ? offset : offset + (alignment - remainder);
+            return {
+                magic: 'GGUF',
+                version,
+                tensorCount,
+                metadataKVCount,
+                metadata,
+                tensors,
+                dataOffset,
+            };
+        }
+        /**
+         * 개별 텐서 바이너리를 수신하여 WASM 힙을 거치지 않고 WebGPU GPUBuffer로 직분사(Direct Injection)합니다.
+         */
+        static async injectTensorToWebGPU(device, tensorInfo, chunkFetcher, usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST) {
+            // 1. VRAM 버퍼 할당 (4바이트 배수 올림)
+            const alignedSize = Math.ceil(tensorInfo.byteSize / 4) * 4;
+            const gpuBuffer = device.createBuffer({
+                label: `gguf_tensor_${tensorInfo.name}`,
+                size: alignedSize,
+                usage,
+            });
+            // 2. 외부 청크 페치 (네트워크 스트림 or OPFS)
+            const binaryChunk = await chunkFetcher();
+            if (binaryChunk.byteLength < tensorInfo.byteSize) {
+                throw new Error(`[GGUFStreamer] Chunk size mismatch for tensor ${tensorInfo.name}: expected ${tensorInfo.byteSize} bytes, got ${binaryChunk.byteLength}`);
+            }
+            // 3. WebGPU 큐를 통한 비동기 직분사 DMA (Zero WASM Heap)
+            device.queue.writeBuffer(gpuBuffer, 0, binaryChunk, 0, tensorInfo.byteSize);
+            return gpuBuffer;
+        }
+        static calculateTensorByteSize(type, numElements) {
+            switch (type) {
+                case exports.GGMLType.F32:
+                    return numElements * 4;
+                case exports.GGMLType.F16:
+                    return numElements * 2;
+                case exports.GGMLType.Q8_0: {
+                    // block size 32: 32 elements = 2 bytes scale (fp16) + 32 bytes quants = 34 bytes
+                    const blocks = Math.ceil(numElements / 32);
+                    return blocks * 34;
+                }
+                case exports.GGMLType.Q4_0: {
+                    // block size 32: 32 elements = 2 bytes scale (fp16) + 16 bytes quants (4bit) = 18 bytes
+                    const blocks = Math.ceil(numElements / 32);
+                    return blocks * 18;
+                }
+                case exports.GGMLType.Q4_K: {
+                    // block size 256: 256 elements = 144 bytes
+                    const blocks = Math.ceil(numElements / 256);
+                    return blocks * 144;
+                }
+                default:
+                    // 폴백 기본 계산 (안전 마진)
+                    return numElements * 4;
+            }
+        }
+        static readMetadataValue(view, offset, valType, buffer) {
+            switch (valType) {
+                case 0: // UINT8
+                    return [view.getUint8(offset), offset + 1];
+                case 1: // INT8
+                    return [view.getInt8(offset), offset + 1];
+                case 2: // UINT16
+                    return [view.getUint16(offset, true), offset + 2];
+                case 3: // INT16
+                    return [view.getInt16(offset, true), offset + 2];
+                case 4: // UINT32
+                    return [view.getUint32(offset, true), offset + 4];
+                case 5: // INT32
+                    return [view.getInt32(offset, true), offset + 4];
+                case 6: // FLOAT32
+                    return [view.getFloat32(offset, true), offset + 4];
+                case 7: // BOOL
+                    return [view.getUint8(offset) !== 0, offset + 1];
+                case 8: { // STRING
+                    const strLen = Number(view.getBigUint64(offset, true));
+                    offset += 8;
+                    const strBytes = new Uint8Array(buffer, offset, strLen);
+                    const str = new TextDecoder('utf-8').decode(strBytes);
+                    return [str, offset + strLen];
+                }
+                case 9: { // ARRAY
+                    const itemType = view.getUint32(offset, true);
+                    offset += 4;
+                    const arrLen = Number(view.getBigUint64(offset, true));
+                    offset += 8;
+                    const arr = [];
+                    for (let i = 0; i < arrLen; i++) {
+                        const [elem, nextOffset] = this.readMetadataValue(view, offset, itemType, buffer);
+                        arr.push(elem);
+                        offset = nextOffset;
+                    }
+                    return [arr, offset];
+                }
+                case 10: // UINT64
+                    return [view.getBigUint64(offset, true), offset + 8];
+                case 11: // INT64
+                    return [view.getBigInt64(offset, true), offset + 8];
+                case 12: // FLOAT64
+                    return [view.getFloat64(offset, true), offset + 8];
+                default:
+                    throw new Error(`[GGUFStreamer] Unknown metadata value type: ${valType}`);
+            }
+        }
+    }
+
+    /**
+     * 파일 생성일: 2026-09-03
+     * AMEVA-Forge Release 3.0: SCRUM-311 SiLU (Swish) Fused Activation WGSL Compute Kernel
+     *
+     * WHAT: 디퓨전(Stable Diffusion UNet) 신경망의 표준 활성화 함수인 SiLU(x * sigmoid(x))의 GPU 순전파 및 역전파 WGSL 커널입니다.
+     * WHY: Stable Diffusion UNet ResNet 블록 전반에 수십 번 적용되는 SiLU를 메모리 복사 없이 초고속 In-place / Streaming GPU 커널로 실행하기 위해 존재합니다.
+     * HOW: 수치 안정성을 위해 sigmoid(x) = 1.0 / (1.0 + exp(-clamp(x, -88.0, 88.0)))을 적용하고 x * sigmoid(x)를 계산합니다.
+     *      Uniform 레이아웃은 WebGPU 16바이트 정렬 규격을 100% 준수합니다 (4 x 4바이트 = 16바이트).
+     */
+    const SILU_WGSL = `
+struct Params {
+  num_elements: u32,  // 총 계산 원소 개수
+  workgroups_x: u32,  // 2D 디스패치 X축 워크그룹 크기
+  pad0: u32,          // 16바이트 유니폼 정렬용 패딩 1
+  pad1: u32,          // 16바이트 유니폼 정렬용 패딩 2
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> input: array<f32>;
+@group(0) @binding(2) var<storage, read_write> output: array<f32>;
+
+fn stable_sigmoid(x: f32) -> f32 {
+  let clamped_x = clamp(x, -88.0, 88.0);
+  return 1.0 / (1.0 + exp(-clamped_x));
+}
+
+@compute @workgroup_size(64, 1, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let idx = (workgroup_id.x + workgroup_id.y * params.workgroups_x) * 64u + local_id.x;
+
+  if (idx >= params.num_elements) {
+    return;
+  }
+
+  let x = input[idx];
+  let sig = stable_sigmoid(x);
+  output[idx] = x * sig;
+}
+`;
+    const SILU_BACKWARD_WGSL = `
+struct Params {
+  num_elements: u32,
+  workgroups_x: u32,
+  pad0: u32,
+  pad1: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> grad_output: array<f32>;
+@group(0) @binding(2) var<storage, read> input: array<f32>;
+@group(0) @binding(3) var<storage, read_write> grad_input: array<f32>;
+
+fn stable_sigmoid(x: f32) -> f32 {
+  let clamped_x = clamp(x, -88.0, 88.0);
+  return 1.0 / (1.0 + exp(-clamped_x));
+}
+
+@compute @workgroup_size(64, 1, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let idx = (workgroup_id.x + workgroup_id.y * params.workgroups_x) * 64u + local_id.x;
+
+  if (idx >= params.num_elements) {
+    return;
+  }
+
+  let x = input[idx];
+  let sig = stable_sigmoid(x);
+  let d_act = sig * (1.0 + x * (1.0 - sig));
+  grad_input[idx] = grad_output[idx] * d_act;
+}
+`;
+
+    /**
+     * 파일 생성일: 2026-09-03
+     * AMEVA-Forge Release 3.0: SCRUM-326 2D Nearest & Bilinear Upsampling WGSL Compute Kernel
+     *
+     * WHAT: 디퓨전(Stable Diffusion UNet 업샘플링 블록 및 VAE 디코더)의 핵심 공간 해상도 2배 확대 연산 WGSL 커널입니다.
+     * WHY: 잠재 공간(Latent: 64x64)에서 고해상도 픽셀 맵(512x512)으로의 점진적 복원을 고속 WebGPU 병렬 연산으로 처리하기 위해 존재합니다.
+     * HOW: Nearest Neighbor(모드 0)와 Bilinear Interpolation(모드 1)을 단일 컴퓨트 파이프라인에서 지원하며,
+     *      16바이트 정렬 규격(8 x 4바이트 = 32바이트)을 100% 준수합니다.
+     */
+    const UPSAMPLE2D_WGSL = `
+struct Params {
+  N: u32,             // 배치 크기
+  C: u32,             // 채널 개수
+  H_in: u32,          // 입력 특징 맵 높이
+  W_in: u32,          // 입력 특징 맵 너비
+  H_out: u32,         // 출력 특징 맵 높이
+  W_out: u32,         // 출력 특징 맵 너비
+  mode: u32,          // 0: Nearest, 1: Bilinear
+  workgroups_x: u32,  // 2D 디스패치 선형 복원용 X 크기
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> input: array<f32>;
+@group(0) @binding(2) var<storage, read_write> output: array<f32>;
+
+@compute @workgroup_size(64, 1, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let idx = (workgroup_id.x + workgroup_id.y * params.workgroups_x) * 64u + local_id.x;
+  let total_elements = params.N * params.C * params.H_out * params.W_out;
+
+  if (idx >= total_elements) {
+    return;
+  }
+
+  // 1D 인덱스를 N, C, H_out, W_out 좌표로 역산
+  let w_out = idx % params.W_out;
+  var rem = idx / params.W_out;
+  let h_out = rem % params.H_out;
+  rem = rem / params.H_out;
+  let c = rem % params.C;
+  let n = rem / params.C;
+
+  let base_in_offset = (n * params.C + c) * (params.H_in * params.W_in);
+
+  if (params.mode == 0u) {
+    // 1. Nearest Neighbor Mode
+    let scale_h = f32(params.H_out) / f32(params.H_in);
+    let scale_w = f32(params.W_out) / f32(params.W_in);
+
+    let h_in = min(u32(floor(f32(h_out) / scale_h)), params.H_in - 1u);
+    let w_in = min(u32(floor(f32(w_out) / scale_w)), params.W_in - 1u);
+
+    let in_idx = base_in_offset + h_in * params.W_in + w_in;
+    output[idx] = input[in_idx];
+  } else {
+    // 2. Bilinear Interpolation Mode (align_corners = false)
+    let scale_h = f32(params.H_in) / f32(params.H_out);
+    let scale_w = f32(params.W_in) / f32(params.W_out);
+
+    let real_h = (f32(h_out) + 0.5) * scale_h - 0.5;
+    let real_w = (f32(w_out) + 0.5) * scale_w - 0.5;
+
+    let h0 = u32(max(0.0, floor(real_h)));
+    let w0 = u32(max(0.0, floor(real_w)));
+    let h1 = min(h0 + 1u, params.H_in - 1u);
+    let w1 = min(w0 + 1u, params.W_in - 1u);
+
+    let dh = clamp(real_h - f32(h0), 0.0, 1.0);
+    let dw = clamp(real_w - f32(w0), 0.0, 1.0);
+
+    let v00 = input[base_in_offset + h0 * params.W_in + w0];
+    let v01 = input[base_in_offset + h0 * params.W_in + w1];
+    let v10 = input[base_in_offset + h1 * params.W_in + w0];
+    let v11 = input[base_in_offset + h1 * params.W_in + w1];
+
+    let top = v00 * (1.0 - dw) + v01 * dw;
+    let bottom = v10 * (1.0 - dw) + v11 * dw;
+    output[idx] = top * (1.0 - dh) + bottom * dh;
+  }
+}
+`;
+
+    /**
+     * 파일 생성일: 2026-09-03
+     * AMEVA-Forge Release 3.0: SCRUM-310 GroupNorm (32 groups) & Fused SiLU WGSL Compute Kernel
+     *
+     * WHAT: 디퓨전(Stable Diffusion UNet 및 VAE)의 핵심 정규화인 Group Normalization 및 SiLU 융합 WGSL 커널입니다.
+     * WHY: UNet 전체에 수십 번 적용되는 GroupNorm(32그룹)을 2-Pass 병렬 트리 축소(Tree Reduction)와 아핀(Affine) 변환으로 처리하기 위해 존재합니다.
+     * HOW: Pass 1에서 (배치, 그룹)별 평균과 분산을 워크그룹 공유 메모리로 고속 계산하고,
+     *      Pass 2에서 정규화(x_norm = (x - mean) / sqrt(var + eps)), gamma/beta 아핀 변환 및 선택적 Fused SiLU를 적용합니다.
+     *      16바이트 정렬 규격(12 x 4바이트 = 48바이트)을 100% 준수합니다.
+     */
+    const GROUP_NORM_STATS_WGSL = `
+struct Params {
+  N: u32,
+  C: u32,
+  H: u32,
+  W: u32,
+  num_groups: u32,
+  channels_per_group: u32,
+  fuse_silu: u32,
+  workgroups_x: u32,
+  eps: f32,
+  pad0: u32,
+  pad1: u32,
+  pad2: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> input: array<f32>;
+@group(0) @binding(2) var<storage, read_write> stats: array<vec2<f32>>; // (mean, var) per (n, g)
+
+var<workgroup> wg_sum: array<f32, 64>;
+var<workgroup> wg_sq_sum: array<f32, 64>;
+
+@compute @workgroup_size(64, 1, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let ng_idx = workgroup_id.x; // (n * num_groups + g)
+  let total_groups = params.N * params.num_groups;
+  if (ng_idx >= total_groups) {
+    return;
+  }
+
+  let g = ng_idx % params.num_groups;
+  let n = ng_idx / params.num_groups;
+
+  let group_size = params.channels_per_group * params.H * params.W;
+  let hw = params.H * params.W;
+  let base_c = g * params.channels_per_group;
+
+  var local_sum: f32 = 0.0;
+  var local_sq_sum: f32 = 0.0;
+
+  // Stride over all elements in this (n, g) group
+  var i = local_id.x;
+  while (i < group_size) {
+    let c_offset = i / hw;
+    let hw_offset = i % hw;
+    let actual_c = base_c + c_offset;
+    let in_idx = (n * params.C + actual_c) * hw + hw_offset;
+    let val = input[in_idx];
+    local_sum = local_sum + val;
+    local_sq_sum = local_sq_sum + val * val;
+    i = i + 64u;
+  }
+
+  wg_sum[local_id.x] = local_sum;
+  wg_sq_sum[local_id.x] = local_sq_sum;
+  workgroupBarrier();
+
+  // Parallel reduction in workgroup shared memory
+  var stride = 32u;
+  while (stride > 0u) {
+    if (local_id.x < stride) {
+      wg_sum[local_id.x] = wg_sum[local_id.x] + wg_sum[local_id.x + stride];
+      wg_sq_sum[local_id.x] = wg_sq_sum[local_id.x] + wg_sq_sum[local_id.x + stride];
+    }
+    workgroupBarrier();
+    stride = stride >> 1u;
+  }
+
+  if (local_id.x == 0u) {
+    let mean = wg_sum[0] / f32(group_size);
+    let variance = max(0.0, (wg_sq_sum[0] / f32(group_size)) - (mean * mean));
+    stats[ng_idx] = vec2<f32>(mean, variance);
+  }
+}
+`;
+    const GROUP_NORM_APPLY_WGSL = `
+struct Params {
+  N: u32,
+  C: u32,
+  H: u32,
+  W: u32,
+  num_groups: u32,
+  channels_per_group: u32,
+  fuse_silu: u32,
+  workgroups_x: u32,
+  eps: f32,
+  pad0: u32,
+  pad1: u32,
+  pad2: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> input: array<f32>;
+@group(0) @binding(2) var<storage, read> stats: array<vec2<f32>>;  // (mean, var)
+@group(0) @binding(3) var<storage, read> gamma: array<f32>;        // scale [C]
+@group(0) @binding(4) var<storage, read> beta: array<f32>;         // bias [C]
+@group(0) @binding(5) var<storage, read_write> output: array<f32>;
+
+fn stable_silu(x: f32) -> f32 {
+  let clamped_x = clamp(x, -88.0, 88.0);
+  let sig = 1.0 / (1.0 + exp(-clamped_x));
+  return x * sig;
+}
+
+@compute @workgroup_size(64, 1, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let idx = (workgroup_id.x + workgroup_id.y * params.workgroups_x) * 64u + local_id.x;
+  let total_elements = params.N * params.C * params.H * params.W;
+
+  if (idx >= total_elements) {
+    return;
+  }
+
+  let hw = params.H * params.W;
+  let c = (idx / hw) % params.C;
+  let n = idx / (params.C * hw);
+  let g = c / params.channels_per_group;
+
+  let ng_idx = n * params.num_groups + g;
+  let stat = stats[ng_idx];
+  let mean = stat.x;
+  let variance = stat.y;
+
+  let inv_std = inverseSqrt(variance + params.eps);
+  let x_norm = (input[idx] - mean) * inv_std;
+
+  var y = x_norm * gamma[c] + beta[c];
+
+  if (params.fuse_silu == 1u) {
+    y = stable_silu(y);
+  }
+
+  output[idx] = y;
+}
+`;
+
+    /**
      * Created: 2026-08-12 12:14:52 +0900
      * Modified:
      *   - 2026-08-12 12:14:52 +0900: Refactor: Rename AMEVA-Tensor to AMEVA-Forge and reorganize directories
@@ -8972,8 +9502,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     exports.AMEVAForgeUnsupportedOpError = AMEVAForgeUnsupportedOpError;
     exports.AMEVAForgeValidationError = AMEVAForgeValidationError;
     exports.AMEVAForgeWebGPUUnavailableError = AMEVAForgeWebGPUUnavailableError;
+    exports.GGUFStreamer = GGUFStreamer;
+    exports.GROUP_NORM_APPLY_WGSL = GROUP_NORM_APPLY_WGSL;
+    exports.GROUP_NORM_STATS_WGSL = GROUP_NORM_STATS_WGSL;
     exports.KERNEL_REGISTRY = KERNEL_REGISTRY;
     exports.QuotaManager = QuotaManager;
+    exports.SILU_BACKWARD_WGSL = SILU_BACKWARD_WGSL;
+    exports.SILU_WGSL = SILU_WGSL;
+    exports.UPSAMPLE2D_WGSL = UPSAMPLE2D_WGSL;
     exports.__testing = __testing;
     exports.adam_step = adam_step;
     exports.add = add;
