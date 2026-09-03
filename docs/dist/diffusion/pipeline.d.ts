@@ -17,6 +17,7 @@ export interface GenerationOptions {
     height?: number;
     seed?: number;
     guidanceScale?: number;
+    vaeWeights: import('./vaeDecoder').VAEDecoderWeights;
     onProgress?: (progress: GenerationProgress) => void;
 }
 export interface GenerationProgress {

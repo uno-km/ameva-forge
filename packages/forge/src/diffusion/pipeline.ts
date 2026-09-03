@@ -20,6 +20,7 @@ export interface GenerationOptions {
   height?: number;
   seed?: number;
   guidanceScale?: number;
+  vaeWeights: import('./vaeDecoder').VAEDecoderWeights;
   onProgress?: (progress: GenerationProgress) => void;
 }
 
@@ -101,8 +102,12 @@ export class WebGPUDiffusionPipeline {
       }
     }
 
+    if (!options.vaeWeights) {
+      throw new Error('[WebGPUDiffusionPipeline] vaeWeights are strictly required. Refusing to decode with synthetic weights.');
+    }
+
     // 4. VAE Decoder: Latent -> RGB Canvas ImageData 변환
-    const decoded = VAEDecoder.decodeLatentToRGB(latents, latentW, latentH, width, height);
+    const decoded = VAEDecoder.decodeLatentToRGB(latents, latentW, latentH, width, height, options.vaeWeights);
 
     return decoded;
   }

@@ -9542,24 +9542,39 @@ fn main(
 
     /**
      * 파일 생성일: 2026-09-03
-     * AMEVA-Forge Release 3.0: SCRUM-329 Real AutoencoderKL VAE Latent-to-RGB Decoder
+     * 수정일: 2026-09-03 (P0 긴급 시정: 침묵 폴백 전면 적출, 엄격한 가중치/형상 검증 및 NaN 은폐 방지 도입)
+     * AMEVA-Forge Release 3.0: SCRUM-329 VAE Latent-to-RGB Decoder Prototype
      *
-     * WHAT: 근사식이나 가짜 tanh 휴리스틱 없이, Stable Diffusion 표준 규격인 AutoencoderKL
-     *      다층 신경망 그래프(PostQuantConv, ConvIn, MidBlock, UpBlocks, NormOut, ConvOut)를
-     *      100% 진짜 순전파 연산으로 실행하는 VAE 디코더입니다.
-     * WHY: 사용자 및 개발자에게 수학적 수치 일치도(PyTorch Golden Reference 대비 MAE < 1e-4)를
-     *      증명하고, 온디바이스 브라우저 환경에서 실제 고품질 RGB 픽셀을 정밀하게 복원하기 위해 존재합니다.
-     * HOW: z / 0.18215 역스케일링 -> 1x1 PostQuantConv -> 3x3 ConvIn -> Mid ResNet/Attention -> 3단계 Upsample2D+Conv -> GroupNorm+SiLU -> Conv3x3
-     *      파이프라인을 온전히 순전파합니다.
+     * WHAT: VAE 잠재 공간 텐서를 RGB 픽셀로 변환하는 간이 3단계 업샘플링 디코더 프로토타입입니다.
+     *      (주의: AutoencoderKL의 MidBlock, Spatial Attention, ResNet UpBlock 계층 및 동적 채널 확장은 아직 미구현 상태입니다.)
+     * WHY: 침묵 폴백(Silent Fallback)이나 가짜 가중치 자동 생성을 원천 차단하고,
+     *      가중치 누락이나 결함 발생 시 즉각 실패(Fail-Fast)하도록 엄격한 검증을 적용하기 위해 존재합니다.
+     * HOW: PostQuantConv (1x1) -> ConvIn (3x3) -> 3단계 Upsample2D+Conv2d -> GroupNorm+SiLU -> ConvOut (3x3) 순으로 실행하며,
+     *      모든 텐서 크기 및 Finite 조건을 엄격히 검증합니다.
      */
+    function assertLength(name, actual, expected) {
+        if (actual !== expected) {
+            throw new Error(`[VAEDecoder] ${name} length mismatch: expected ${expected}, received ${actual}`);
+        }
+    }
+    function assertAllFinite(name, values) {
+        for (let i = 0; i < values.length; i++) {
+            if (!Number.isFinite(values[i])) {
+                throw new Error(`[VAEDecoder] ${name} contains non-finite value at index ${i}: ${values[i]}`);
+            }
+        }
+    }
     class VAEDecoder {
-        static VAE_SCALE_FACTOR = 0.18215;
+        static DEFAULT_SCALE_FACTOR = 0.18215;
         /**
-         * 잠재 공간 텐서를 VAE 디코딩 표준에 맞게 역스케일링합니다: z = z / 0.18215
+         * 잠재 공간 텐서를 역스케일링합니다: z / scalingFactor
          */
-        static unscaleLatents(latents) {
+        static unscaleLatents(latents, scaleFactor = VAEDecoder.DEFAULT_SCALE_FACTOR) {
+            if (scaleFactor === 0) {
+                throw new Error('[VAEDecoder] scaleFactor cannot be zero');
+            }
             const unscaled = new Float32Array(latents.length);
-            const factor = 1.0 / this.VAE_SCALE_FACTOR;
+            const factor = 1.0 / scaleFactor;
             for (let i = 0; i < latents.length; i++) {
                 unscaled[i] = latents[i] * factor;
             }
@@ -9569,13 +9584,14 @@ fn main(
          * [-1.0, 1.0] 범위의 NCHW [1, 3, H, W] 부동소수점 이미지 텐서를 HTML5 Canvas 호환 RGBA 포맷으로 변환합니다.
          */
         static tensorToRGBA(rgbTensor, width, height) {
+            assertAllFinite('rgbTensor before RGBA conversion', rgbTensor);
             const totalPixels = width * height;
+            assertLength('rgbTensor for RGBA conversion', rgbTensor.length, totalPixels * 3);
             const rgba = new Uint8ClampedArray(totalPixels * 4);
             const rOffset = 0;
             const gOffset = totalPixels;
             const bOffset = totalPixels * 2;
             for (let i = 0; i < totalPixels; i++) {
-                // [-1.0, 1.0] -> [0.0, 255.0]
                 const r = Math.min(255, Math.max(0, Math.round((rgbTensor[rOffset + i] + 1.0) * 127.5)));
                 const g = Math.min(255, Math.max(0, Math.round((rgbTensor[gOffset + i] + 1.0) * 127.5)));
                 const b = Math.min(255, Math.max(0, Math.round((rgbTensor[bOffset + i] + 1.0) * 127.5)));
@@ -9583,53 +9599,93 @@ fn main(
                 rgba[rgbaIndex] = r;
                 rgba[rgbaIndex + 1] = g;
                 rgba[rgbaIndex + 2] = b;
-                rgba[rgbaIndex + 3] = 255; // Alpha
+                rgba[rgbaIndex + 3] = 255;
             }
             return rgba;
         }
         /**
-         * 100% 진짜 AutoencoderKL VAE 순전파 디코딩 엔진:
-         * PostQuantConv (1x1) -> ConvIn (3x3) -> Multi-stage Upsampling (Upsample2D + Conv2d) -> GroupNorm (32) -> SiLU -> ConvOut (3x3)
+         * 3단계 업샘플링 디코더 순전파:
+         * 가중치가 누락되었을 때 어떠한 가짜 가중치도 자동 생성하지 않고 즉각 예외를 분출합니다.
          */
-        static decode(latents, latentWidth, latentHeight, weights) {
-            // 1. 역스케일링: z / 0.18215
-            const unscaled = this.unscaleLatents(latents);
-            // 가중치가 제공되지 않은 경우, 단위 테스트 및 자가 검증용 표준 초기화 가중치 구축
-            const w = weights ?? this.createDefaultWeights(4, 32);
-            // 2. Post-Quant Conv (1x1 Conv, 4 -> 4)
-            const postQuant = this.conv2d(unscaled, 4, 4, latentHeight, latentWidth, w.postQuantConvWeight, w.postQuantConvBias, 1, 0);
-            // 3. Conv In (3x3 Conv, 4 -> 32)
+        static decode(latents, latentWidth, latentHeight, weights, scaleFactor = VAEDecoder.DEFAULT_SCALE_FACTOR) {
+            // 1. 가중치 필수 검증 (침묵 폴백 원천 박멸)
+            if (!weights) {
+                throw new Error('[VAEDecoder] VAE decoder weights are required. Refusing to decode with synthetic weights.');
+            }
+            // 2. 입력 텐서 형상 및 유한성 검증
+            assertLength('latents', latents.length, 4 * latentHeight * latentWidth);
+            assertAllFinite('latents input', latents);
+            const unscaled = this.unscaleLatents(latents, scaleFactor);
+            assertAllFinite('unscaled latents', unscaled);
             const cMid = 32;
-            const featIn = this.conv2d(postQuant, 4, cMid, latentHeight, latentWidth, w.convInWeight, w.convInBias, 3, 1);
-            // 4. 3단계 업샘플링 계층: 64x64 -> 128x128 -> 256x256 -> 512x512
+            // 3. 고정 계층 가중치 형상 사전 검증
+            assertLength('postQuantConvWeight', weights.postQuantConvWeight.length, 4 * 4 * 1 * 1);
+            if (weights.postQuantConvBias) {
+                assertLength('postQuantConvBias', weights.postQuantConvBias.length, 4);
+            }
+            assertLength('convInWeight', weights.convInWeight.length, cMid * 4 * 3 * 3);
+            if (weights.convInBias) {
+                assertLength('convInBias', weights.convInBias.length, cMid);
+            }
+            assertLength('normOutGamma', weights.normOutGamma.length, cMid);
+            assertLength('normOutBeta', weights.normOutBeta.length, cMid);
+            assertLength('convOutWeight', weights.convOutWeight.length, 3 * cMid * 3 * 3);
+            if (weights.convOutBias) {
+                assertLength('convOutBias', weights.convOutBias.length, 3);
+            }
+            if (!weights.upBlocks || weights.upBlocks.length < 3) {
+                throw new Error(`[VAEDecoder] VAE decoder requires exactly 3 upsample stages in upBlocks, received: ${weights.upBlocks?.length ?? 0}`);
+            }
+            // 4. Post-Quant Conv (1x1 Conv, 4 -> 4)
+            const postQuant = this.conv2d(unscaled, 4, 4, latentHeight, latentWidth, weights.postQuantConvWeight, weights.postQuantConvBias, 1, 0);
+            assertAllFinite('postQuant output', postQuant);
+            // 5. Conv In (3x3 Conv, 4 -> 32)
+            const featIn = this.conv2d(postQuant, 4, cMid, latentHeight, latentWidth, weights.convInWeight, weights.convInBias, 3, 1);
+            assertAllFinite('featIn output', featIn);
             let currentFeat = featIn;
             let currentH = latentHeight;
             let currentW = latentWidth;
             let currentC = cMid;
-            // 3단계의 Upsample2D (2x) + Conv2d (3x3) 파이프라인
+            // 6. 3단계 업샘플링 계층: 64x64 -> 128x128 -> 256x256 -> 512x512
             for (let stage = 0; stage < 3; stage++) {
+                const stageBlock = weights.upBlocks[stage];
+                if (!stageBlock || !stageBlock.upsampleConvWeight) {
+                    throw new Error(`[VAEDecoder] Missing VAE upsample convolution weight at stage ${stage}`);
+                }
+                if (!stageBlock.normGamma || !stageBlock.normBeta) {
+                    throw new Error(`[VAEDecoder] Missing VAE upsample norm parameters at stage ${stage}`);
+                }
+                assertLength(`upBlocks[${stage}].upsampleConvWeight`, stageBlock.upsampleConvWeight.length, currentC * currentC * 3 * 3);
+                if (stageBlock.upsampleConvBias) {
+                    assertLength(`upBlocks[${stage}].upsampleConvBias`, stageBlock.upsampleConvBias.length, currentC);
+                }
+                assertLength(`upBlocks[${stage}].normGamma`, stageBlock.normGamma.length, currentC);
+                assertLength(`upBlocks[${stage}].normBeta`, stageBlock.normBeta.length, currentC);
                 const nextH = currentH * 2;
                 const nextW = currentW * 2;
                 // Upsample2D (Bilinear 2x)
                 const upsampled = this.upsample2d(currentFeat, currentC, currentH, currentW, nextH, nextW);
+                assertAllFinite(`upsampled stage ${stage}`, upsampled);
                 // Conv2d (3x3)
-                const stageWeight = w.upBlocks?.[stage]?.upsampleConvWeight ?? this.createKaimingWeight(currentC, currentC, 3);
-                const stageBias = w.upBlocks?.[stage]?.upsampleConvBias;
-                currentFeat = this.conv2d(upsampled, currentC, currentC, nextH, nextW, stageWeight, stageBias, 3, 1);
-                // GroupNorm + SiLU
-                const normGamma = new Float32Array(currentC).fill(1.0);
-                const normBeta = new Float32Array(currentC).fill(0.0);
-                const normed = this.groupNorm(currentFeat, currentC, nextH, nextW, Math.min(32, currentC), normGamma, normBeta);
+                const convOutStage = this.conv2d(upsampled, currentC, currentC, nextH, nextW, stageBlock.upsampleConvWeight, stageBlock.upsampleConvBias, 3, 1);
+                assertAllFinite(`convOutStage stage ${stage}`, convOutStage);
+                // GroupNorm (32 groups) + SiLU
+                const normed = this.groupNorm(convOutStage, currentC, nextH, nextW, Math.min(32, currentC), stageBlock.normGamma, stageBlock.normBeta);
+                assertAllFinite(`normed stage ${stage}`, normed);
                 currentFeat = this.silu(normed);
+                assertAllFinite(`silu stage ${stage}`, currentFeat);
                 currentH = nextH;
                 currentW = nextW;
             }
-            // 5. Final Output Norm (GroupNorm 32 + SiLU)
-            const finalNormed = this.groupNorm(currentFeat, currentC, currentH, currentW, Math.min(32, currentC), w.normOutGamma, w.normOutBeta);
+            // 7. Final Output Norm (GroupNorm 32 + SiLU)
+            const finalNormed = this.groupNorm(currentFeat, currentC, currentH, currentW, Math.min(32, currentC), weights.normOutGamma, weights.normOutBeta);
+            assertAllFinite('finalNormed', finalNormed);
             const finalAct = this.silu(finalNormed);
-            // 6. Conv Out (3x3 Conv, currentC -> 3 채널 RGB)
-            const rgbTensor = this.conv2d(finalAct, currentC, 3, currentH, currentW, w.convOutWeight, w.convOutBias, 3, 1);
-            // 7. RGBA Canvas 변환
+            assertAllFinite('finalAct', finalAct);
+            // 8. Conv Out (3x3 Conv, currentC -> 3 채널 RGB)
+            const rgbTensor = this.conv2d(finalAct, currentC, 3, currentH, currentW, weights.convOutWeight, weights.convOutBias, 3, 1);
+            assertAllFinite('rgbTensor', rgbTensor);
+            // 9. RGBA Canvas 변환
             const rgba = this.tensorToRGBA(rgbTensor, currentW, currentH);
             return {
                 width: currentW,
@@ -9638,11 +9694,27 @@ fn main(
                 floatData: rgbTensor,
             };
         }
-        static decodeLatentToRGB(latents, latentWidth, latentHeight, outWidth = 512, outHeight = 512, weights) {
-            return this.decode(latents, latentWidth, latentHeight, weights);
+        /**
+         * decode()의 별칭이며, 요청된 outWidth, outHeight가 실제 출력 크기와 불일치할 경우 즉각 예외를 발생시킵니다.
+         */
+        static decodeLatentToRGB(latents, latentWidth, latentHeight, outWidth, outHeight, weights, scaleFactor) {
+            const expectedW = latentWidth * 8;
+            const expectedH = latentHeight * 8;
+            if (outWidth !== expectedW || outHeight !== expectedH) {
+                throw new Error(`[VAEDecoder] decodeLatentToRGB scale mismatch: requested ${outWidth}x${outHeight}, but latent ${latentWidth}x${latentHeight} scales to ${expectedW}x${expectedH}`);
+            }
+            return this.decode(latents, latentWidth, latentHeight, weights, scaleFactor);
         }
-        // --- 수치적으로 100% 엄밀한 신경망 기초 연산자 (PyTorch Golden Reference 1:1 일치) ---
+        // --- 수치 신경망 기본 연산자 (엄격한 경계 조건 및 결함 검증 탑재) ---
         static conv2d(x, inC, outC, H, W, weight, bias, kernelSize = 3, padding = 1) {
+            if (inC <= 0 || outC <= 0 || H <= 0 || W <= 0 || kernelSize <= 0) {
+                throw new Error(`[VAEDecoder] conv2d invalid dimensions: inC=${inC}, outC=${outC}, H=${H}, W=${W}, kernelSize=${kernelSize}`);
+            }
+            assertLength('x in conv2d', x.length, inC * H * W);
+            assertLength('weight in conv2d', weight.length, outC * inC * kernelSize * kernelSize);
+            if (bias) {
+                assertLength('bias in conv2d', bias.length, outC);
+            }
             const outH = H;
             const outW = W;
             const hw = outH * outW;
@@ -9678,8 +9750,18 @@ fn main(
             return out;
         }
         static groupNorm(x, C, H, W, G, gamma, beta, eps = 1e-5) {
+            if (!Number.isInteger(G) || G <= 0) {
+                throw new Error(`[VAEDecoder] GroupNorm group count must be positive integer: ${G}`);
+            }
+            if (C % G !== 0) {
+                throw new Error(`[VAEDecoder] GroupNorm requires C divisible by G: C=${C}, G=${G}`);
+            }
+            if (gamma.length !== C || beta.length !== C) {
+                throw new Error(`[VAEDecoder] GroupNorm affine parameter mismatch: C=${C}, gamma=${gamma.length}, beta=${beta.length}`);
+            }
+            assertLength('x in groupNorm', x.length, C * H * W);
             const hw = H * W;
-            const channelsPerGroup = Math.floor(C / G);
+            const channelsPerGroup = C / G;
             const groupSize = channelsPerGroup * hw;
             const out = new Float32Array(x.length);
             for (let g = 0; g < G; g++) {
@@ -9721,6 +9803,10 @@ fn main(
             return out;
         }
         static upsample2d(input, C, H_in, W_in, H_out, W_out) {
+            if (C <= 0 || H_in <= 0 || W_in <= 0 || H_out <= 0 || W_out <= 0) {
+                throw new Error(`[VAEDecoder] upsample2d invalid dimensions: C=${C}, H_in=${H_in}, W_in=${W_in}, H_out=${H_out}, W_out=${W_out}`);
+            }
+            assertLength('input in upsample2d', input.length, C * H_in * W_in);
             const out = new Float32Array(C * H_out * W_out);
             const scale_h = H_out / H_in;
             const scale_w = W_out / W_in;
@@ -9749,26 +9835,50 @@ fn main(
             }
             return out;
         }
-        static createKaimingWeight(inC, outC, k) {
-            const len = outC * inC * k * k;
-            const w = new Float32Array(len);
-            const std = Math.sqrt(2.0 / (inC * k * k));
-            for (let i = 0; i < len; i++) {
-                // Small deterministic pseudo-random init
-                w[i] = ((i % 100) / 100.0 - 0.5) * std;
-            }
-            return w;
-        }
-        static createDefaultWeights(inC, midC) {
+    }
+    /**
+     * 테스트 스위트 전용 가중치 생성 유틸리티 (운영 코드에서는 호출 불가하도록 분리 격리)
+     */
+    class VAEDecoderTestFixtures {
+        static createSyntheticWeights(inC = 4, midC = 32) {
+            const createWeights = (ic, oc, k) => {
+                const len = oc * ic * k * k;
+                const w = new Float32Array(len);
+                const std = Math.sqrt(2.0 / (ic * k * k));
+                for (let i = 0; i < len; i++) {
+                    w[i] = ((i % 100) / 100.0 - 0.5) * std;
+                }
+                return w;
+            };
             return {
-                postQuantConvWeight: this.createKaimingWeight(inC, inC, 1),
+                postQuantConvWeight: createWeights(inC, inC, 1),
                 postQuantConvBias: new Float32Array(inC).fill(0.0),
-                convInWeight: this.createKaimingWeight(inC, midC, 3),
+                convInWeight: createWeights(inC, midC, 3),
                 convInBias: new Float32Array(midC).fill(0.0),
                 normOutGamma: new Float32Array(midC).fill(1.0),
                 normOutBeta: new Float32Array(midC).fill(0.0),
-                convOutWeight: this.createKaimingWeight(midC, 3, 3),
+                convOutWeight: createWeights(midC, 3, 3),
                 convOutBias: new Float32Array(3).fill(0.0),
+                upBlocks: [
+                    {
+                        upsampleConvWeight: createWeights(midC, midC, 3),
+                        upsampleConvBias: new Float32Array(midC).fill(0.0),
+                        normGamma: new Float32Array(midC).fill(1.0),
+                        normBeta: new Float32Array(midC).fill(0.0),
+                    },
+                    {
+                        upsampleConvWeight: createWeights(midC, midC, 3),
+                        upsampleConvBias: new Float32Array(midC).fill(0.0),
+                        normGamma: new Float32Array(midC).fill(1.0),
+                        normBeta: new Float32Array(midC).fill(0.0),
+                    },
+                    {
+                        upsampleConvWeight: createWeights(midC, midC, 3),
+                        upsampleConvBias: new Float32Array(midC).fill(0.0),
+                        normGamma: new Float32Array(midC).fill(1.0),
+                        normBeta: new Float32Array(midC).fill(0.0),
+                    },
+                ],
             };
         }
     }
@@ -9998,8 +10108,11 @@ fn main(
                     });
                 }
             }
+            if (!options.vaeWeights) {
+                throw new Error('[WebGPUDiffusionPipeline] vaeWeights are strictly required. Refusing to decode with synthetic weights.');
+            }
             // 4. VAE Decoder: Latent -> RGB Canvas ImageData 변환
-            const decoded = VAEDecoder.decodeLatentToRGB(latents, latentW, latentH, width, height);
+            const decoded = VAEDecoder.decodeLatentToRGB(latents, latentW, latentH, width, height, options.vaeWeights);
             return decoded;
         }
     }
@@ -10081,6 +10194,7 @@ fn main(
     exports.SILU_WGSL = SILU_WGSL;
     exports.UPSAMPLE2D_WGSL = UPSAMPLE2D_WGSL;
     exports.VAEDecoder = VAEDecoder;
+    exports.VAEDecoderTestFixtures = VAEDecoderTestFixtures;
     exports.WebGPUDiffusionPipeline = WebGPUDiffusionPipeline;
     exports.__testing = __testing;
     exports.adam_step = adam_step;

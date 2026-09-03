@@ -6,6 +6,7 @@
 import {
   EulerDiscreteScheduler,
   VAEDecoder,
+  VAEDecoderTestFixtures,
   ResNetBlock,
   ResNetBlockConfig,
   ResNetBlockWeights,
@@ -114,20 +115,29 @@ describe('In-Browser Diffusion Pipeline (SCRUM-327 ~ SCRUM-330)', () => {
       expect(rgba[3]).toBe(255); // Alpha channel is 255
     });
 
-    it('decodes latent spatial tensor to full RGBA canvas image data', () => {
+    it('decodes latent spatial tensor to full RGBA canvas image data using explicit test fixture', () => {
       const latent = new Float32Array(4 * 8 * 8).fill(0.1);
-      const decoded = VAEDecoder.decodeLatentToRGB(latent, 8, 8, 32, 32);
+      const weights = VAEDecoderTestFixtures.createSyntheticWeights();
+      const decoded = VAEDecoder.decodeLatentToRGB(latent, 8, 8, 64, 64, weights);
 
-      expect(decoded.width).toBe(32);
-      expect(decoded.height).toBe(32);
-      expect(decoded.rgbaData.length).toBe(32 * 32 * 4);
-      expect(decoded.floatData.length).toBe(3 * 32 * 32);
+      expect(decoded.width).toBe(64);
+      expect(decoded.height).toBe(64);
+      expect(decoded.rgbaData.length).toBe(64 * 64 * 4);
+      expect(decoded.floatData.length).toBe(3 * 64 * 64);
+    });
+
+    it('strictly refuses to decode when weights are omitted (Zero Silent Fallback)', () => {
+      const latent = new Float32Array(4 * 8 * 8).fill(0.1);
+      expect(() => {
+        VAEDecoder.decodeLatentToRGB(latent, 8, 8, 64, 64, undefined as any);
+      }).toThrow('[VAEDecoder] VAE decoder weights are required');
     });
   });
 
   describe('4. WebGPUDiffusionPipeline End-to-End (SCRUM-330)', () => {
-    it('orchestrates complete diffusion pipeline (Noise -> Denoise -> VAE -> Canvas) with progress reporting', async () => {
+    it('orchestrates complete diffusion pipeline with explicit vaeWeights', async () => {
       const pipeline = new WebGPUDiffusionPipeline();
+      const weights = VAEDecoderTestFixtures.createSyntheticWeights();
 
       const progressSteps: number[] = [];
       const image = await pipeline.generate({
@@ -136,6 +146,7 @@ describe('In-Browser Diffusion Pipeline (SCRUM-327 ~ SCRUM-330)', () => {
         width: 64,
         height: 64,
         seed: 777,
+        vaeWeights: weights,
         onProgress: (p) => {
           progressSteps.push(p.step);
         },
@@ -146,6 +157,15 @@ describe('In-Browser Diffusion Pipeline (SCRUM-327 ~ SCRUM-330)', () => {
       expect(image.height).toBe(64);
       expect(image.rgbaData.length).toBe(64 * 64 * 4);
       expect(progressSteps).toEqual([1, 2]);
+    });
+
+    it('strictly throws error when vaeWeights are missing in pipeline.generate()', async () => {
+      const pipeline = new WebGPUDiffusionPipeline();
+      await expect(pipeline.generate({
+        prompt: 'test without weights',
+        width: 64,
+        height: 64,
+      } as any)).rejects.toThrow('vaeWeights are strictly required');
     });
   });
 });
