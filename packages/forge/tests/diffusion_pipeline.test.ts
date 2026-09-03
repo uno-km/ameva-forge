@@ -6,12 +6,12 @@
 import {
   EulerDiscreteScheduler,
   VAEDecoder,
-  VAEDecoderTestFixtures,
   ResNetBlock,
   ResNetBlockConfig,
   ResNetBlockWeights,
   WebGPUDiffusionPipeline,
 } from '../src/index';
+import { VAEDecoderTestFixtures } from './fixtures/vaeDecoderFixtures';
 
 describe('In-Browser Diffusion Pipeline (SCRUM-327 ~ SCRUM-330)', () => {
   describe('1. EulerDiscreteScheduler (SCRUM-328)', () => {
@@ -130,7 +130,7 @@ describe('In-Browser Diffusion Pipeline (SCRUM-327 ~ SCRUM-330)', () => {
       const latent = new Float32Array(4 * 8 * 8).fill(0.1);
       expect(() => {
         VAEDecoder.decodeLatentToRGB(latent, 8, 8, 64, 64, undefined as any);
-      }).toThrow('[VAEDecoder] VAE decoder weights are required');
+      }).toThrow('VAE decoder weights are required');
     });
   });
 
