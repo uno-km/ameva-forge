@@ -10119,70 +10119,58 @@ fn main(
 
     /**
      * 파일 생성일: 2026-09-03
-     * AMEVA-Forge Release 3.0: SCRUM-330 End-to-End In-Browser WebGPU Diffusion Pipeline
+     * 수정일: 2026-09-03 (가짜 decay 수식 완전 적출, UNET_FORWARD_NOT_IMPLEMENTED 즉시 분출)
+     * AMEVA-Forge Release 3.0: SCRUM-330 In-Browser WebGPU Diffusion Pipeline Orchestrator
      *
-     * WHAT: GGUF 가중치 스트리밍 적재부터 디노이징 루프, VAE 디코딩, Canvas 렌더링까지 전체 과정을 지휘하는 통합 파이프라인입니다.
-     * WHY: 연구원과 개발자가 단 3줄의 TypeScript/JS 코드로 브라우저에서 서버 없이 온디바이스 이미지 생성을 실행할 수 있도록 단일 진입점을 제공하기 위해 존재합니다.
-     * HOW: GGUFStreamer -> EulerDiscreteScheduler -> ResNetBlock -> VAEDecoder 파이프라인을 비동기로 조율합니다.
+     * WHAT: 디퓨전 파이프라인의 전체 컴포넌트(스케줄러, UNet, VAE, 텍스트 인코더)의 생명주기를 관리하는 오케스트레이터입니다.
+     * WHY: 가짜 감쇠 수식(decay = 1/(1+step*0.5))으로 UNet 순전파를 속이는 기만 행위를 원천 박멸하고,
+     *      UNet 그래프가 연결되지 않은 상태에서 호출될 경우 즉각 예외를 분출(Fail-Fast)하기 위해 존재합니다.
+     * HOW: 스케줄러(EulerDiscreteScheduler)와 VAE(VAEDecoder)는 연동 준비되었으나,
+     *      UNet 순전파 그래프가 탑재되기 전까지는 generate() 시 UNET_FORWARD_NOT_IMPLEMENTED 에러를 즉각 던집니다.
      */
+    exports.DiffusionPipelineErrorCode = void 0;
+    (function (DiffusionPipelineErrorCode) {
+        DiffusionPipelineErrorCode["UNET_FORWARD_NOT_IMPLEMENTED"] = "UNET_FORWARD_NOT_IMPLEMENTED";
+        DiffusionPipelineErrorCode["CLIP_ENCODER_NOT_IMPLEMENTED"] = "CLIP_ENCODER_NOT_IMPLEMENTED";
+        DiffusionPipelineErrorCode["VAE_WEIGHTS_REQUIRED"] = "VAE_WEIGHTS_REQUIRED";
+        DiffusionPipelineErrorCode["MODEL_NOT_LOADED"] = "MODEL_NOT_LOADED";
+    })(exports.DiffusionPipelineErrorCode || (exports.DiffusionPipelineErrorCode = {}));
+    class DiffusionPipelineError extends Error {
+        code;
+        constructor(code, message, options) {
+            super(`[WebGPUDiffusionPipeline:${code}] ${message}`, options);
+            this.name = 'DiffusionPipelineError';
+            this.code = code;
+            Object.setPrototypeOf(this, new.target.prototype);
+        }
+    }
     class WebGPUDiffusionPipeline {
         modelHeader;
         scheduler;
-        isLoaded = false;
+        isModelLoaded = false;
         constructor() {
             this.scheduler = new EulerDiscreteScheduler(1);
         }
         /**
-         * GGUF 모델 헤더를 로드하고 가중치 오프셋 테이블을 구축합니다 (Zero WASM Heap).
+         * GGUF 모델 헤더를 로드하고 가중치 오프셋 테이블을 구축합니다.
          */
         async loadModel(headerBuffer) {
             this.modelHeader = GGUFStreamer.parseHeader(headerBuffer);
-            this.isLoaded = true;
+            this.isModelLoaded = true;
             return this.modelHeader;
         }
         /**
-         * 텍스트 프롬프트로부터 고해상도 이미지를 생성하는 완전한 E2E 파이프라인 실행 함수.
+         * 텍스트 프롬프트로부터 이미지를 생성합니다.
+         * UNet 디노이징 신경망 그래프가 아직 완전히 연결되지 않았으므로, 가짜 decay 수식 대신
+         * 즉시 UNET_FORWARD_NOT_IMPLEMENTED 에러를 던져 침묵 기만을 원천 차단합니다.
          */
         async generate(options) {
-            const startTime = performance.now();
-            const { prompt, numSteps = 1, width = 512, height = 512, seed = 42, onProgress, } = options;
-            const latentH = Math.floor(height / 8); // 64
-            const latentW = Math.floor(width / 8); // 64
-            const latentChannels = 4;
-            // 1. Denoising Scheduler 타임스텝 설정
-            this.scheduler.setTimesteps(numSteps);
-            // 2. 초기 가우시안 잠재 노이즈 생성 (z ~ N(0, I))
-            let latents = this.scheduler.generateInitialNoise(latentChannels, latentH, latentW, seed);
-            // 3. Multi-Step Denoising Loop (Yielding to prevent browser TDR)
-            for (let step = 0; step < numSteps; step++) {
-                this.scheduler.timesteps[step];
-                // Model forward simulation (UNet residual prediction)
-                const modelPred = new Float32Array(latents.length);
-                const decay = 1.0 / (1.0 + step * 0.5);
-                for (let i = 0; i < latents.length; i++) {
-                    modelPred[i] = latents[i] * decay;
-                }
-                // Scheduler Euler Step
-                const { prevSample } = this.scheduler.step(modelPred, step, latents);
-                latents = prevSample;
-                // 브라우저 렌더 이벤트 루프에 제어권 양보 (TDR 크래시 원천 차단)
-                await this.scheduler.yieldToMainThread();
-                if (onProgress) {
-                    const elapsedMs = performance.now() - startTime;
-                    onProgress({
-                        step: step + 1,
-                        totalSteps: numSteps,
-                        percentage: Math.round(((step + 1) / numSteps) * 100),
-                        elapsedMs,
-                    });
-                }
-            }
             if (!options.vaeWeights) {
-                throw new Error('[WebGPUDiffusionPipeline] vaeWeights are strictly required. Refusing to decode with synthetic weights.');
+                throw new DiffusionPipelineError(exports.DiffusionPipelineErrorCode.VAE_WEIGHTS_REQUIRED, 'vaeWeights are strictly required to decode latent to RGB.');
             }
-            // 4. VAE Decoder: Latent -> RGB Canvas ImageData 변환
-            const decoded = VAEDecoder.decodeLatentToRGB(latents, latentW, latentH, width, height, options.vaeWeights);
-            return decoded;
+            // 가짜 decay 수식 완전 폐기: UNet 순전파 미구현 상태를 즉각 에러로 분출
+            throw new DiffusionPipelineError(exports.DiffusionPipelineErrorCode.UNET_FORWARD_NOT_IMPLEMENTED, 'UNet multi-block denoising neural network graph (Down/Mid/Up Cross-Attention blocks) is in development. ' +
+                'Refusing to simulate denoising with heuristic decay formulas. Real UNet execution graph required.');
         }
     }
 
@@ -10252,6 +10240,7 @@ fn main(
     exports.AMEVAForgeUnsupportedOpError = AMEVAForgeUnsupportedOpError;
     exports.AMEVAForgeValidationError = AMEVAForgeValidationError;
     exports.AMEVAForgeWebGPUUnavailableError = AMEVAForgeWebGPUUnavailableError;
+    exports.DiffusionPipelineError = DiffusionPipelineError;
     exports.EulerDiscreteScheduler = EulerDiscreteScheduler;
     exports.GGUFStreamer = GGUFStreamer;
     exports.GROUP_NORM_APPLY_WGSL = GROUP_NORM_APPLY_WGSL;

@@ -1,14 +1,29 @@
 /**
  * 파일 생성일: 2026-09-03
- * AMEVA-Forge Release 3.0: SCRUM-330 End-to-End In-Browser WebGPU Diffusion Pipeline
+ * 수정일: 2026-09-03 (가짜 decay 수식 완전 적출, UNET_FORWARD_NOT_IMPLEMENTED 즉시 분출)
+ * AMEVA-Forge Release 3.0: SCRUM-330 In-Browser WebGPU Diffusion Pipeline Orchestrator
  *
- * WHAT: GGUF 가중치 스트리밍 적재부터 디노이징 루프, VAE 디코딩, Canvas 렌더링까지 전체 과정을 지휘하는 통합 파이프라인입니다.
- * WHY: 연구원과 개발자가 단 3줄의 TypeScript/JS 코드로 브라우저에서 서버 없이 온디바이스 이미지 생성을 실행할 수 있도록 단일 진입점을 제공하기 위해 존재합니다.
- * HOW: GGUFStreamer -> EulerDiscreteScheduler -> ResNetBlock -> VAEDecoder 파이프라인을 비동기로 조율합니다.
+ * WHAT: 디퓨전 파이프라인의 전체 컴포넌트(스케줄러, UNet, VAE, 텍스트 인코더)의 생명주기를 관리하는 오케스트레이터입니다.
+ * WHY: 가짜 감쇠 수식(decay = 1/(1+step*0.5))으로 UNet 순전파를 속이는 기만 행위를 원천 박멸하고,
+ *      UNet 그래프가 연결되지 않은 상태에서 호출될 경우 즉각 예외를 분출(Fail-Fast)하기 위해 존재합니다.
+ * HOW: 스케줄러(EulerDiscreteScheduler)와 VAE(VAEDecoder)는 연동 준비되었으나,
+ *      UNet 순전파 그래프가 탑재되기 전까지는 generate() 시 UNET_FORWARD_NOT_IMPLEMENTED 에러를 즉각 던집니다.
  */
 import { GGUFHeader } from '../loader/ggufStreamer';
 import { EulerDiscreteScheduler } from './scheduler';
-import { DecodedImage } from './vaeDecoder';
+import { DecodedImage, VAEDecoderWeights } from './vaeDecoder';
+export declare enum DiffusionPipelineErrorCode {
+    UNET_FORWARD_NOT_IMPLEMENTED = "UNET_FORWARD_NOT_IMPLEMENTED",
+    CLIP_ENCODER_NOT_IMPLEMENTED = "CLIP_ENCODER_NOT_IMPLEMENTED",
+    VAE_WEIGHTS_REQUIRED = "VAE_WEIGHTS_REQUIRED",
+    MODEL_NOT_LOADED = "MODEL_NOT_LOADED"
+}
+export declare class DiffusionPipelineError extends Error {
+    readonly code: DiffusionPipelineErrorCode;
+    constructor(code: DiffusionPipelineErrorCode, message: string, options?: {
+        cause?: unknown;
+    });
+}
 export interface GenerationOptions {
     prompt: string;
     negativePrompt?: string;
@@ -17,7 +32,7 @@ export interface GenerationOptions {
     height?: number;
     seed?: number;
     guidanceScale?: number;
-    vaeWeights: import('./vaeDecoder').VAEDecoderWeights;
+    vaeWeights?: VAEDecoderWeights;
     onProgress?: (progress: GenerationProgress) => void;
 }
 export interface GenerationProgress {
@@ -29,14 +44,16 @@ export interface GenerationProgress {
 export declare class WebGPUDiffusionPipeline {
     modelHeader?: GGUFHeader;
     scheduler: EulerDiscreteScheduler;
-    private isLoaded;
+    isModelLoaded: boolean;
     constructor();
     /**
-     * GGUF 모델 헤더를 로드하고 가중치 오프셋 테이블을 구축합니다 (Zero WASM Heap).
+     * GGUF 모델 헤더를 로드하고 가중치 오프셋 테이블을 구축합니다.
      */
     loadModel(headerBuffer: ArrayBuffer): Promise<GGUFHeader>;
     /**
-     * 텍스트 프롬프트로부터 고해상도 이미지를 생성하는 완전한 E2E 파이프라인 실행 함수.
+     * 텍스트 프롬프트로부터 이미지를 생성합니다.
+     * UNet 디노이징 신경망 그래프가 아직 완전히 연결되지 않았으므로, 가짜 decay 수식 대신
+     * 즉시 UNET_FORWARD_NOT_IMPLEMENTED 에러를 던져 침묵 기만을 원천 차단합니다.
      */
     generate(options: GenerationOptions): Promise<DecodedImage>;
 }

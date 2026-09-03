@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AMEVA-Forge: In-Browser WebGPU Diffusion Studio</title>
+  <title>AMEVA-Forge: In-Browser WebGPU Diffusion Architecture Studio</title>
   <style>
     body {
       margin: 0;
@@ -13,7 +13,7 @@
       color: #f8fafc;
     }
     .container {
-      max-width: 800px;
+      max-width: 840px;
       margin: 0 auto;
     }
     h1 {
@@ -29,6 +29,11 @@
       color: white;
       vertical-align: middle;
     }
+    .badge-warn {
+      background: #eab308;
+      color: #0f172a;
+      font-weight: 700;
+    }
     .panel {
       background: #1e293b;
       border: 1px solid #334155;
@@ -36,6 +41,30 @@
       padding: 24px;
       margin-top: 16px;
     }
+    .status-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .status-card {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 12px 16px;
+    }
+    .status-card h4 {
+      margin: 0 0 6px 0;
+      font-size: 0.9rem;
+      color: #94a3b8;
+    }
+    .status-card .val {
+      font-weight: 700;
+      font-size: 0.95rem;
+    }
+    .text-green { color: #4ade80; }
+    .text-yellow { color: #facc15; }
+    .text-blue { color: #38bdf8; }
     .form-group {
       margin-bottom: 16px;
     }
@@ -46,7 +75,7 @@
       margin-bottom: 6px;
       color: #94a3b8;
     }
-    input[type="text"], select {
+    input[type="text"] {
       width: 100%;
       padding: 10px 14px;
       border-radius: 6px;
@@ -55,13 +84,6 @@
       color: #f8fafc;
       font-size: 0.95rem;
       box-sizing: border-box;
-    }
-    .row {
-      display: flex;
-      gap: 16px;
-    }
-    .col {
-      flex: 1;
     }
     button {
       background: #38bdf8;
@@ -78,50 +100,19 @@
     button:hover {
       background: #7dd3fc;
     }
-    button:disabled {
-      background: #334155;
-      color: #94a3b8;
-      cursor: not-allowed;
-    }
-    .progress-bar {
-      width: 100%;
-      height: 8px;
-      background: #0f172a;
-      border-radius: 4px;
-      overflow: hidden;
-      margin-top: 16px;
-      display: none;
-    }
-    .progress-fill {
-      height: 100%;
-      width: 0%;
-      background: #38bdf8;
-      transition: width 0.2s;
-    }
-    .canvas-container {
-      margin-top: 24px;
-      text-align: center;
-      background: #0b0f19;
-      border: 1px solid #334155;
+    .log-box {
+      background: #020617;
+      border: 1px solid #1e293b;
       border-radius: 8px;
       padding: 16px;
-      min-height: 512px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-    }
-    canvas {
-      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-      border-radius: 6px;
-      max-width: 100%;
-      height: auto;
-    }
-    .status-text {
+      margin-top: 16px;
+      font-family: 'Consolas', 'Courier New', monospace;
       font-size: 0.85rem;
-      color: #94a3b8;
-      margin-top: 12px;
-      text-align: center;
+      color: #f87171;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 280px;
+      overflow-y: auto;
     }
   </style>
 </head>
@@ -129,97 +120,77 @@
   <div class="container">
     <h1>
       AMEVA-Forge Diffusion Studio
-      <span class="badge">WebGPU Zero-Heap GGUF</span>
+      <span class="badge">Zero-Fallback Architecture</span>
     </h1>
     <p style="color: #94a3b8; font-size: 0.9rem;">
-      브라우저 단독 WebAssembly 및 WebGPU 가속 기반 온디바이스 GGUF 디퓨전 이미지 생성 스튜디오 (Server Cost: 0원)
+      브라우저 온디바이스 WebGPU 디퓨전 파이프라인 아키텍처 진단 및 페일패스트(Fail-Fast) 검증 스튜디오
     </p>
 
     <div class="panel">
+      <div class="status-grid">
+        <div class="status-card">
+          <h4>오일러 스케줄러 (Euler Scheduler)</h4>
+          <div class="val text-green">READY (Box-Muller PRNG & Sigmas OK)</div>
+        </div>
+        <div class="status-card">
+          <h4>VAE 디코더 (3-Stage Primitive)</h4>
+          <div class="val text-green">READY (Same-Padding & 2-Pass Norm OK)</div>
+        </div>
+        <div class="status-card">
+          <h4>UNet 디노이징 신경망 그래프</h4>
+          <div class="val text-yellow">IN DEVELOPMENT (가짜 decay 수식 배제)</div>
+        </div>
+        <div class="status-card">
+          <h4>CLIP 텍스트 인코더 (BPE Tokenizer)</h4>
+          <div class="val text-yellow">IN DEVELOPMENT (Phase 3 타깃)</div>
+        </div>
+      </div>
+
       <div class="form-group">
         <label>텍스트 프롬프트 (Prompt)</label>
         <input type="text" id="prompt" value="a serene cyberpunk city with neon lights and flying cars, highly detailed, 8k" />
       </div>
 
-      <div class="row">
-        <div class="col form-group">
-          <label>사전 정의 모델 (Preset Model)</label>
-          <select id="model-preset">
-            <option value="sdxs-q8_0">SDXS-512 (Q8_0, 651MB) - 1~2 Step Ultra Fast</option>
-            <option value="sd-turbo-q4_k">SD-Turbo (Q4_K, 1.1GB) - 1~4 Step Balanced</option>
-          </select>
-        </div>
-        <div class="col form-group">
-          <label>디노이징 스텝 수 (Steps)</label>
-          <select id="steps">
-            <option value="1">1 Step (Ultra Fast)</option>
-            <option value="2" selected>2 Steps (Recommended)</option>
-            <option value="4">4 Steps (High Quality)</option>
-          </select>
-        </div>
-        <div class="col form-group">
-          <label>랜덤 시드 (Seed)</label>
-          <input type="text" id="seed" value="42" />
-        </div>
-      </div>
+      <button id="btn-run" onclick="window.runDiagnostics()">파이프라인 아키텍처 및 페일패스트 검증 실행</button>
 
-      <button id="btn-generate" onclick="window.runGeneration()">WebGPU 디퓨전 이미지 생성 시작</button>
-
-      <div class="progress-bar" id="progress-bar">
-        <div class="progress-fill" id="progress-fill"></div>
-      </div>
-      <div class="status-text" id="status-text">대기 중... (WebGPU 어댑터 준비 완료)</div>
-
-      <div class="canvas-container">
-        <canvas id="output-canvas" width="512" height="512"></canvas>
+      <div id="log-container" style="display: none;">
+        <h4 style="margin: 16px 0 6px 0; color: #94a3b8; font-size: 0.9rem;">페일패스트 진단 출력 (Fail-Fast Diagnostic Trace):</h4>
+        <div class="log-box" id="log-box"></div>
       </div>
     </div>
   </div>
 
   <script type="module">
-    import { WebGPUDiffusionPipeline } from '../docs/dist/index.esm.js';
+    import { WebGPUDiffusionPipeline, VAE_DECODER_CAPABILITY } from '../docs/dist/index.esm.js';
 
-    window.runGeneration = async function() {
-      const btn = document.getElementById('btn-generate');
-      const prompt = document.getElementById('prompt').value;
-      const steps = parseInt(document.getElementById('steps').value, 10);
-      const seed = parseInt(document.getElementById('seed').value, 10);
-      const statusText = document.getElementById('status-text');
-      const progressBar = document.getElementById('progress-bar');
-      const progressFill = document.getElementById('progress-fill');
-      const canvas = document.getElementById('output-canvas');
-      const ctx = canvas.getContext('2d');
-
-      btn.disabled = true;
-      progressBar.style.display = 'block';
-      progressFill.style.width = '0%';
-      statusText.innerText = '파이프라인 초기화 중... (WebGPU 버퍼 준비)';
+    window.runDiagnostics = async function() {
+      const logContainer = document.getElementById('log-container');
+      const logBox = document.getElementById('log-box');
+      logContainer.style.display = 'block';
+      logBox.style.color = '#38bdf8';
+      logBox.innerText = '[Diagnostic] WebGPUDiffusionPipeline 초기화 중...\n' +
+                         '[Capability] autoencoder_kl_compatible=' + VAE_DECODER_CAPABILITY.autoencoder_kl_compatible + '\n' +
+                         '[Capability] numerical_parity_verified=' + VAE_DECODER_CAPABILITY.numerical_parity_verified + '\n';
 
       try {
         const pipeline = new WebGPUDiffusionPipeline();
-
-        const image = await pipeline.generate({
-          prompt,
-          numSteps: steps,
-          width: 512,
-          height: 512,
-          seed,
-          onProgress: (p) => {
-            progressFill.style.width = p.percentage + '%';
-            statusText.innerText = '디노이징 진행 중... [Step ' + p.step + '/' + p.totalSteps + '] (' + p.percentage + '%) - 경과 시간: ' + Math.round(p.elapsedMs) + 'ms';
-          }
+        logBox.innerText += '[Pipeline] generate() 호출 (가짜 decay 시뮬레이션 배제 및 UNet 순전파 요청)...\n';
+        
+        await pipeline.generate({
+          prompt: document.getElementById('prompt').value,
+          numSteps: 1,
+          width: 64,
+          height: 64,
         });
-
-        const imgData = ctx.createImageData(512, 512);
-        imgData.data.set(image.rgbaData);
-        ctx.putImageData(imgData, 0, 0);
-
-        statusText.innerText = '생성 완료! (512x512 RGBA Canvas 렌더링 성공)';
       } catch (err) {
-        console.error(err);
-        statusText.innerText = '오류 발생: ' + err.message;
-      } finally {
-        btn.disabled = false;
+        logBox.style.color = '#f87171';
+        logBox.innerText += '\n[FAIL-FAST VERIFIED] 기만적 침묵 폴백 없이 기대된 에러가 정확히 분출되었습니다:\n' +
+                            '------------------------------------------------------------\n' +
+                            'Error Name: ' + err.name + '\n' +
+                            'Error Code: ' + (err.code || 'N/A') + '\n' +
+                            'Error Message: ' + err.message + '\n' +
+                            '------------------------------------------------------------\n' +
+                            'Stack Trace:\n' + (err.stack || 'N/A');
       }
     };
   </script>

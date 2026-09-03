@@ -134,38 +134,28 @@ describe('In-Browser Diffusion Pipeline (SCRUM-327 ~ SCRUM-330)', () => {
     });
   });
 
-  describe('4. WebGPUDiffusionPipeline End-to-End (SCRUM-330)', () => {
-    it('orchestrates complete diffusion pipeline with explicit vaeWeights', async () => {
+  describe('4. WebGPUDiffusionPipeline Fail-Fast Boundaries (SCRUM-330)', () => {
+    it('strictly throws UNET_FORWARD_NOT_IMPLEMENTED instead of silently faking UNet with decay formulas', async () => {
       const pipeline = new WebGPUDiffusionPipeline();
       const weights = VAEDecoderTestFixtures.createSyntheticWeights();
 
-      const progressSteps: number[] = [];
-      const image = await pipeline.generate({
+      await expect(pipeline.generate({
         prompt: 'a cinematic portrait of a cybernetic cat in neon city',
         numSteps: 2,
         width: 64,
         height: 64,
         seed: 777,
         vaeWeights: weights,
-        onProgress: (p) => {
-          progressSteps.push(p.step);
-        },
-      });
-
-      expect(image).toBeDefined();
-      expect(image.width).toBe(64);
-      expect(image.height).toBe(64);
-      expect(image.rgbaData.length).toBe(64 * 64 * 4);
-      expect(progressSteps).toEqual([1, 2]);
+      })).rejects.toThrow('UNET_FORWARD_NOT_IMPLEMENTED');
     });
 
-    it('strictly throws error when vaeWeights are missing in pipeline.generate()', async () => {
+    it('strictly throws VAE_WEIGHTS_REQUIRED when vaeWeights are missing in pipeline.generate()', async () => {
       const pipeline = new WebGPUDiffusionPipeline();
       await expect(pipeline.generate({
         prompt: 'test without weights',
         width: 64,
         height: 64,
-      } as any)).rejects.toThrow('vaeWeights are strictly required');
+      } as any)).rejects.toThrow('VAE_WEIGHTS_REQUIRED');
     });
   });
 });
