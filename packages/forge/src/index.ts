@@ -36,6 +36,7 @@ export * from "./bridge/safeCopy";
 export * from "./bridge/pyodideBridge";
 export * from "./devtools/inspector";
 export * from "./loader/ggufStreamer";
+export * from "./loader/ggufTensorMapper";
 export * from "./tensor/kernels/silu.wgsl";
 export * from "./tensor/kernels/upsample2d.wgsl";
 export * from "./tensor/kernels/group_norm.wgsl";
