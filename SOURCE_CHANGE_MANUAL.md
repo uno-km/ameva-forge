@@ -8,7 +8,7 @@
 
 1. **하드코딩 금지 및 i18n 6개 국어 동시 동기화**:
    - 문서나 데모 UI의 모든 텍스트는 HTML에 직접 하드코딩하지 않고 `data-i18n` 또는 `data-i18n-html`을 사용합니다.
-   - 번역 키가 추가/변경될 경우 [`docs/i18n-translations.js`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/docs/i18n-translations.js)의 **6개 국어 (`en`, `ko`, `zh`, `ja`, `hi`, `es`) 전체에 1:1 패리티로 동시 반영**해야 합니다.
+   - 번역 키가 추가/변경될 경우 [`docs/i18n-translations.js`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/docs/i18n-translations.js)의 **6개 국어 (`en`, `ko`, `zh`, `ja`, `hi`, `es`) 전체에 1:1 패리티로 동시 반영**해야 합니다.
    - 변경 후 반드시 `node tools/validate_i18n.js`를 실행하여 무결성을 검증합니다.
 
 2. **Jira 티켓 기반 엄격 추적 (Strict Tracking)**:

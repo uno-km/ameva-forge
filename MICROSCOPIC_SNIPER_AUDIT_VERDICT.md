@@ -26,11 +26,11 @@
 # 1. Hidden Technical Debt (숨겨진 기술적 부채)
 
 ### ① Autograd 역전파 그래프와 Lazy GPU 실행의 단절
-* **코드 위치**: [`packages/forge-py/src/forge/functional.py:515-528`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge-py/src/forge/functional.py#L515-L528)
+* **코드 위치**: [`packages/forge-py/src/forge/functional.py:515-528`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge-py/src/forge/functional.py#L515-L528)
 * **부채 내용**: `scaled_dot_product_attention`은 `requires_grad=True`인 텐서를 반환하지만, `Function` 서브클래스(`_op_cls`, `_ctx`)가 연결되어 있지 않습니다. 이로 인해 `loss.backward()` 호출 시 **어떠한 에러도 발생시키지 않고 조용히 Softmax/Attention 역전파를 통째로 건너뜁니다 (Silent Autograd Hijack)**.
 
 ### ② 다축 융합 리덕션 도입으로 인한 모든 브로드캐스팅 역전파 오염
-* **코드 위치**: [`packages/forge-py/src/forge/ops.py:825-829`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge-py/src/forge/ops.py#L825-L829)
+* **코드 위치**: [`packages/forge-py/src/forge/ops.py:825-829`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge-py/src/forge/ops.py#L825-L829)
 * **부채 내용**: `add`, `sub`, `mul`, `div` 등 모든 이항 연산의 역전파에서 호출되는 `_unbroadcast()`가 신규 커널 `reduce_axes`를 호출하도록 변경되었습니다. `reduce_axes`의 WGSL 16바이트 정렬 붕괴로 인해 **브로드캐스팅이 들어간 모든 텐서 연산의 GPU 역전파가 오염**되었습니다.
 
 ---
@@ -46,7 +46,7 @@ graph TD
 ```
 
 ### ① KV-Cache 시퀀스 길이 `N_kv = N_q` 조용한 다운스케일 하드코딩
-* **코드 위치**: [`packages/forge/src/tensor/graphExecutor.ts:1221, 1241-1242`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge/src/tensor/graphExecutor.ts#L1221)
+* **코드 위치**: [`packages/forge/src/tensor/graphExecutor.ts:1221, 1241-1242`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge/src/tensor/graphExecutor.ts#L1221)
 * **증거 코드**:
   ```typescript
   const [B, H, N, d] = inst.shape; // 출력 텐서의 shape [B, H, N_q, d]
@@ -57,14 +57,14 @@ graph TD
 * **영향**: NanoGPT, LLaMA-3 등에서 Auto-regressive Generation 시 디코딩 단계(`N_q = 1`, `N_kv = 512`)에서 `N_kv`가 강제로 `1`로 들어가 **과거 모든 KV 캐시 히스토리를 무시하고 0번 프롬프트 토큰만 참조하는 치명적 텍스트 생성 결함** 발생.
 
 ### ② OP_SCHEMA 파라미터 개수 검증 불일치 하드코딩
-* **코드 위치**: [`packages/forge/src/tensor/graphExecutor.ts:407-408`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge/src/tensor/graphExecutor.ts#L407-L408) vs [`packages/forge-py/src/forge/ops.py:2213, 2306`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge-py/src/forge/ops.py#L2213)
+* **코드 위치**: [`packages/forge/src/tensor/graphExecutor.ts:407-408`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge/src/tensor/graphExecutor.ts#L407-L408) vs [`packages/forge-py/src/forge/ops.py:2213, 2306`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge-py/src/forge/ops.py#L2213)
 * **증거 코드**:
   - `graphExecutor.ts`: `'maxpool2d': { minIn: 1, exactIn: true, minParams: 10, exactParams: true }`
   - `ops.py`: `op_params = [B, C, in_h, in_w, out_h, out_w, ctx.kH, ctx.kW, ctx.sH, ctx.sW, ctx.pH, ctx.pW]` (12개)
 * **영향**: Python에서 GPU `maxpool2d` 또는 `avgpool2d` 실행 시 JS 브리지에서 `AMEVAForgeSecurityError: Instruction op="maxpool2d": expected exact 10 params, got 12`를 던지며 **무조건 크래시**.
 
 ### ③ `sparse_cross_entropy` 매직넘버 폴백 잔류
-* **코드 위치**: [`packages/forge/src/tensor/graphExecutor.ts:1441`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge/src/tensor/graphExecutor.ts#L1441)
+* **코드 위치**: [`packages/forge/src/tensor/graphExecutor.ts:1441`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge/src/tensor/graphExecutor.ts#L1441)
 * **증거 코드**: `const numClasses = inst.params?.[0] ?? 1000;`
 * **영향**: 보고서에서는 매직넘버 폴백을 전면 제거했다고 주장했으나, `sparse_cross_entropy`에서 여전히 1000 매직넘버 폴백 사용.
 
@@ -97,7 +97,7 @@ classDiagram
 ```
 
 ### ① `reduce_axes.wgsl` Uniform 구조체 메모리 정렬 파괴
-* **적발 파일**: [`packages/forge/src/tensor/kernels/reduce_axes.wgsl.ts:6-15`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge/src/tensor/kernels/reduce_axes.wgsl.ts#L6-L15)
+* **적발 파일**: [`packages/forge/src/tensor/kernels/reduce_axes.wgsl.ts:6-15`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge/src/tensor/kernels/reduce_axes.wgsl.ts#L6-L15)
 * **WGSL 셰이더 코드**:
   ```wgsl
   struct Params {
@@ -111,7 +111,7 @@ classDiagram
     axes_mask: array<u32, 8>,     // WGSL Uniform Array: 원소당 16바이트 stride!
   };
   ```
-* **JS 버퍼 패킹 ([graphExecutor.ts:1376-1386](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge/src/tensor/graphExecutor.ts#L1376-L1386))**:
+* **JS 버퍼 패킹 ([graphExecutor.ts:1376-1386](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge/src/tensor/graphExecutor.ts#L1376-L1386))**:
   `const p = new Uint32Array(36);` $\to$ 총 144바이트를 4바이트 연속 패킹으로 기록.
 * **W3C WebGPU 표준 규격**: Uniform 주소 공간의 `array<u32, 8>`은 각 원소가 16바이트 경계에 정렬되어야 하므로 총 128바이트를 차지합니다.
 * **실제 하드웨어 구동 시 참사**:
@@ -120,7 +120,7 @@ classDiagram
   - `params.axes_mask` 읽기 $\to$ 400~528바이트 오프셋 접근 $\to$ **완전한 Out-of-Bounds 읽기**.
 
 ### ② `slice.wgsl` 및 `slice_backward.wgsl` 정렬 파괴
-* **적발 파일**: [`packages/forge/src/tensor/kernels/slice.wgsl.ts:6-15`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge/src/tensor/kernels/slice.wgsl.ts#L6-L15)
+* **적발 파일**: [`packages/forge/src/tensor/kernels/slice.wgsl.ts:6-15`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge/src/tensor/kernels/slice.wgsl.ts#L6-L15)
 * **동일 결함**: `starts`, `steps`, `in_strides`, `out_strides`가 모두 `array<u32, 8>`로 선언되어 있어 실제 WebGPU 장치에서 슬라이싱 좌표 역산이 완전히 망가짐.
 
 ---
@@ -128,7 +128,7 @@ classDiagram
 # 4. Test Illusion Findings (테스트 착시 및 위장 통과 증거)
 
 ### ① GPU 텐서 테스트의 100% Mock / AST 검증 위장
-* **코드 위치**: [`packages/forge-py/tests/test_v3_features.py:421-424, 468-472`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge-py/tests/test_v3_features.py#L421-L424)
+* **코드 위치**: [`packages/forge-py/tests/test_v3_features.py:421-424, 468-472`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge-py/tests/test_v3_features.py#L421-L424)
 * **증거 코드**:
   ```python
   # test_unbroadcast_multi_axis_fused_kernel 내부
@@ -148,15 +148,15 @@ classDiagram
 
 | 파일 및 라인 | 결함 유형 | 상세 내용 |
 | :--- | :---: | :--- |
-| [`functional.py:431-450`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge-py/src/forge/functional.py#L431-L450) | **StorageImpl 규격 위반** | `old_rm = Tensor(..., handle=running_mean._handle)` 생성 시 `handle_cell`을 전달하지 않아 동일 핸들에 대해 독립된 `_HandleCell`이 이중 생성됨. |
-| [`functional.py:372-374`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge-py/src/forge/functional.py#L372-L374) | **VRAM 자원 누수** | `_move_tensor_state(dst, src)`에서 `dst`가 기존에 보유하고 있던 GPU 핸들을 해제하지 않고 `dst._handle_cell.handle = src._handle`로 덮어써서 이전 GPU 버퍼가 영구 누수됨. |
-| [`ops.py:1571`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge-py/src/forge/ops.py#L1571) | **기능 미구현/장애** | GPU `cat.backward()` 호출 시 즉시 `AMEVAForgeDeviceError` 발생 (Release 1 미지원 방치). |
+| [`functional.py:431-450`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge-py/src/forge/functional.py#L431-L450) | **StorageImpl 규격 위반** | `old_rm = Tensor(..., handle=running_mean._handle)` 생성 시 `handle_cell`을 전달하지 않아 동일 핸들에 대해 독립된 `_HandleCell`이 이중 생성됨. |
+| [`functional.py:372-374`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge-py/src/forge/functional.py#L372-L374) | **VRAM 자원 누수** | `_move_tensor_state(dst, src)`에서 `dst`가 기존에 보유하고 있던 GPU 핸들을 해제하지 않고 `dst._handle_cell.handle = src._handle`로 덮어써서 이전 GPU 버퍼가 영구 누수됨. |
+| [`ops.py:1571`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge-py/src/forge/ops.py#L1571) | **기능 미구현/장애** | GPU `cat.backward()` 호출 시 즉시 `AMEVAForgeDeviceError` 발생 (Release 1 미지원 방치). |
 
 ---
 
 # 6. Fallback / Downgrade Findings (예외 은폐 및 사일런트 폴백)
 
-* **코드 위치**: [`packages/forge-py/src/forge/optim.py:273-276, 482-485`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge-py/src/forge/optim.py#L273-L276)
+* **코드 위치**: [`packages/forge-py/src/forge/optim.py:273-276, 482-485`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge-py/src/forge/optim.py#L273-L276)
   ```python
   if p.grad is not None and getattr(p.grad, 'device', None) == 'gpu':
       try:
@@ -165,7 +165,7 @@ classDiagram
           pass  # 예외를 은폐하고 무시
   p.grad = None
   ```
-* **코드 위치**: [`packages/forge-py/src/forge/tensor.py:607-611`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge-py/src/forge/tensor.py#L607-L611)
+* **코드 위치**: [`packages/forge-py/src/forge/tensor.py:607-611`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge-py/src/forge/tensor.py#L607-L611)
   ```python
   if self.device == "gpu" and self._handle is not None and self._handle != moved._handle:
       try:

@@ -11,7 +11,7 @@ description: >-
 
 1. **i18n 6개 국어 동시 동기화 의무**:
    - 문서(`docs/*.html`)에 텍스트를 추가/수정할 경우 하드코딩을 절대 금지하며 `data-i18n` 또는 `data-i18n-html` 속성을 부여한다.
-   - [`docs/i18n-translations.js`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/docs/i18n-translations.js) 내 6개 언어(`en`, `ko`, `zh`, `ja`, `hi`, `es`) 전체에 1:1 키 패리티를 유지하여 번역 딕셔너리를 작성한다.
+   - [`docs/i18n-translations.js`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/docs/i18n-translations.js) 내 6개 언어(`en`, `ko`, `zh`, `ja`, `hi`, `es`) 전체에 1:1 키 패리티를 유지하여 번역 딕셔너리를 작성한다.
    - 변경 후 반드시 `node tools/validate_i18n.js`를 실행하여 100% 무결성을 증명한다.
 
 2. **빌드 아티팩트 및 가상 파일시스템 동기화**:
@@ -37,4 +37,4 @@ node tools/test_i18n_runtime.js
 python -m unittest discover packages/forge-py/tests/
 ```
 
-상세 내용은 워크스페이스 루트의 [`SOURCE_CHANGE_MANUAL.md`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/SOURCE_CHANGE_MANUAL.md)를 상시 참조한다.
+상세 내용은 워크스페이스 루트의 [`SOURCE_CHANGE_MANUAL.md`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/SOURCE_CHANGE_MANUAL.md)를 상시 참조한다.

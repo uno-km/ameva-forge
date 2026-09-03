@@ -23,7 +23,7 @@
 # 1. Big Tech Architectural Hardening Findings (빅테크 표준 아키텍처 조치 결과)
 
 1. **`Tensor.detach()`의 Use-After-Free / Double Free 뇌관 적발 및 참조 카운팅 집도 (완료)**
-   - **적발 위치**: [`packages/forge-py/src/forge/tensor.py:178-215, 525-545`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge-py/src/forge/tensor.py#L178-L215)
+   - **적발 위치**: [`packages/forge-py/src/forge/tensor.py:178-215, 525-545`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge-py/src/forge/tensor.py#L178-L215)
    - **적발 내용**: `x.detach()` 호출 시 동일 핸들에 대해 새로운 `_HandleCell` 인스턴스가 생성되고 별도 finalizer가 등록되어, 원본 텐서가 먼저 GC될 때 GPU 버퍼가 소각되어 분리된 텐서가 파괴된 메모리를 접근하는 Use-After-Free(UAF) 및 이중 해제(Double Free) 위험 발생.
    - **집도 완료 (PyTorch StorageImpl 패턴)**:
      - `_HandleCell`에 `ref_count`, `inc_ref()`, `dec_ref()`를 도입하여 원자적 참조 수명주기 관리.
@@ -32,11 +32,11 @@
      - **단위 테스트 증명**: `test_detach_handle_cell_shared_ref_counting_and_uaf_prevention`을 통해 원본 소멸 후에도 뷰 텐서가 안전하게 GPU 버퍼를 유지함을 100% 입증. **[조치 완료]**
 
 2. **Autograd DAG 순환 참조 즉시 소각 (Cycle Breaking Engine)**
-   - **코드 위치**: [`packages/forge-py/src/forge/tensor.py:715-725`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge-py/src/forge/tensor.py#L715-L725)
+   - **코드 위치**: [`packages/forge-py/src/forge/tensor.py:715-725`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge-py/src/forge/tensor.py#L715-L725)
    - **집도 완료**: `backward()` 실행 완료 즉시 그래프 내 모든 노드의 `_grad_parents = ()`와 `_ctx = None`을 소각하여 신경망 클로저/상호 참조로 인한 파이썬 순환 참조 누수를 원천 차단. **[조치 완료]**
 
 3. **1-Pass 다축 융합 축소 커널 (`reduce_axes.wgsl`) 신설**
-   - **코드 위치**: [`packages/forge/src/tensor/kernels/reduce_axes.wgsl.ts`](file:///c:/Users/GAME/Desktop/uno-km/dev/AMEVA-Tensor/packages/forge/src/tensor/kernels/reduce_axes.wgsl.ts)
+   - **코드 위치**: [`packages/forge/src/tensor/kernels/reduce_axes.wgsl.ts`](file:///c:/Users/GAME/Desktop/uno-km/dev/ameva-forge/packages/forge/src/tensor/kernels/reduce_axes.wgsl.ts)
    - **집도 완료**: 브로드캐스팅 역전파 시 $K$번의 AST 노드 연쇄 생성 및 중간 VRAM 버퍼 할당을 제거하고 단 1회의 GPU 디스패치로 $K$개 축을 동시 축소. **[조치 완료]**
 
 ---
