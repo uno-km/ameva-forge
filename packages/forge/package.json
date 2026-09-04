@@ -1,7 +1,7 @@
 {
   "name": "@ameva/forge",
   "version": "1.0.1",
-  "description": "High-Performance Browser-Native Tensor Computation Engine & Reverse-Mode Autograd Framework Powered by WebGPU",
+  "description": "Universal Browser-Native WebGPU Deep Learning Runtime & Plug-and-Play On-Device Model Hub",
   "repository": {
     "type": "git",
     "url": "https://github.com/uno-km/ameva-forge.git"

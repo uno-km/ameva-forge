@@ -2,8 +2,8 @@
 
 [![PyPI Version](https://img.shields.io/badge/pypi-v1.0.1-blue.svg)](https://pypi.org/project/ameva-forge/)
 [![Python Version](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://pypi.org/project/ameva-forge/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/uno-km/ameva-forge/blob/main/LICENSE)
-[![Test Suite](https://img.shields.io/badge/tests-292%2F292%20passed%20(100%25)-brightgreen.svg)](https://github.com/uno-km/ameva-forge)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/uno-km/ameva-forge/blob/main/LICENSE)
+[![Test Suite](https://img.shields.io/badge/tests-279%2F279%20passed%20(100%25)-brightgreen.svg)](https://github.com/uno-km/ameva-forge)
 [![WebGPU Acceleration](https://img.shields.io/badge/acceleration-WebGPU%20WGSL%20%2B%20CPU-orange.svg)](https://uno-km.github.io/ameva-forge/)
 
 **High-Performance Client-Side Tensor Computation Engine & Reverse-Mode Autograd Framework Powered by WebGPU.**
