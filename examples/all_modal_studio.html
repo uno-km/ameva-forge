@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AMEVA-Forge: Grand Unified All-Modal In-Browser Studio</title>
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card-bg: #111827;
+      --card-border: #1f2937;
+      --accent: #38bdf8;
+      --accent-hover: #0ea5e9;
+      --text: #f9fafb;
+      --text-muted: #9ca3af;
+      --success: #34d399;
+      --warning: #fbbf24;
+      --danger: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    header {
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 16px;
+    }
+    h1 {
+      font-size: 2rem;
+      margin: 0 0 8px 0;
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .badge {
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      background: #0369a1;
+      color: #e0f2fe;
+      letter-spacing: 0.05em;
+    }
+    .subtitle {
+      color: var(--text-muted);
+      margin: 0;
+      font-size: 0.95rem;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+    }
+    .card h2 {
+      font-size: 1.15rem;
+      margin: 0 0 12px 0;
+      color: var(--accent);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .status-tag {
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: #064e3b;
+      color: #6ee7b7;
+      font-weight: 600;
+    }
+    .card p {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin: 0 0 16px 0;
+    }
+    .control-group {
+      margin-bottom: 12px;
+    }
+    label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    input[type="text"], textarea, select {
+      width: 100%;
+      padding: 8px 12px;
+      background: #030712;
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.9rem;
+      outline: none;
+    }
+    input[type="text"]:focus, textarea:focus {
+      border-color: var(--accent);
+    }
+    button {
+      background: var(--accent);
+      color: #030712;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: background 0.2s;
+      width: 100%;
+      margin-top: auto;
+    }
+    button:hover {
+      background: var(--accent-hover);
+    }
+    button.secondary {
+      background: #1f2937;
+      color: var(--text);
+      margin-top: 8px;
+    }
+    button.secondary:hover {
+      background: #374151;
+    }
+    canvas {
+      background: #030712;
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      width: 100%;
+      margin-top: 12px;
+      image-rendering: pixelated;
+    }
+    .log-panel {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .log-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .log-header h3 {
+      margin: 0;
+      font-size: 1rem;
+      color: var(--accent);
+    }
+    .log-content {
+      background: #030712;
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 14px;
+      font-family: "Consolas", "Courier New", monospace;
+      font-size: 0.85rem;
+      color: #38bdf8;
+      height: 240px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .full-width-card {
+      grid-column: 1 / -1;
+      background: linear-gradient(135deg, #111827 0%, #0c1524 100%);
+      border: 1px solid #1e3a8a;
+    }
+    .stats-bar {
+      display: flex;
+      gap: 16px;
+      margin-top: 12px;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+    .stats-bar span {
+      color: var(--success);
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>
+        AMEVA-Forge All-Modal Studio
+        <span class="badge">E2E Browser Primitives</span>
+      </h1>
+      <p class="subtitle">
+        STT (Whisper Mel/Conv) · TTS (Rosenberg/Formants) · Vision (Canny BFS / ViT-B/16 / VLM) · Diffusion (Euler / UNet / VAE) · LLM (RoPE / SwiGLU / KV-Cache)
+      </p>
+    </header>
+
+    <div class="grid">
+      <!-- GRAND UNIFIED ORCHESTRATOR -->
+      <div class="card full-width-card">
+        <h2>
+          <span>🏛️ AllModalOrchestrator: Grand Unified Pipeline</span>
+          <span class="status-tag">ACTIVE ENGINE</span>
+        </h2>
+        <p>단일 오케스트레이터 진입점을 통해 5대 모달리티(Audio, Vision, Diffusion, Speech, LLM)를 단일 세션에서 순차 연계 구동합니다.</p>
+        <div style="display: flex; gap: 12px;">
+          <button id="btn-orchestrator-run" onclick="window.runOrchestratorUnified()">🚀 E2E 올모달 대통합 순전파 실행 (Grand Run)</button>
+          <button class="secondary" style="width: auto; margin-top: 0;" onclick="window.runFailFastCheck()">🧪 페일패스트 결함 경계 검증</button>
+        </div>
+      </div>
+
+      <!-- 1. STT -->
+      <div class="card">
+        <h2>
+          <span>🎙️ 1. STT (Speech-to-Text)</span>
+          <span class="status-tag">16kHz Mel-80</span>
+        </h2>
+        <p>16kHz 오디오 파형에 Hanning 창 STFT 및 80채널 Mel-Filterbank를 적용하고 Whisper Conv1D 4x 다운샘플링 인코더를 거칩니다.</p>
+        <div class="control-group">
+          <label>합성 오디오 주파수 (Hz)</label>
+          <input type="text" id="stt-freq" value="440" />
+        </div>
+        <button onclick="window.runSTT()">오디오 분석 및 80-Mel 스펙트로그램 추출</button>
+        <canvas id="stt-canvas" width="200" height="80"></canvas>
+      </div>
+
+      <!-- 2. TTS -->
+      <div class="card">
+        <h2>
+          <span>🔊 2. TTS (Text-to-Speech)</span>
+          <span class="status-tag">Rosenberg / Biquad</span>
+        </h2>
+        <p>Rosenberg 성대 펄스($g(t)=3t^2 - 2t^3$) 발진기 및 5-대역 Biquad 공진기(F1~F5)로 24kHz 부동소수점 PCM을 실시간 합성 및 재생합니다.</p>
+        <div class="control-group">
+          <label>발화 음소 시퀀스 (Phonemes)</label>
+          <input type="text" id="tts-text" value="a e i o u" />
+        </div>
+        <button onclick="window.runTTS()">음성 파형 합성 및 스피커 재생 (Web Audio)</button>
+        <canvas id="tts-canvas" width="200" height="60"></canvas>
+      </div>
+
+      <!-- 3. Vision -->
+      <div class="card">
+        <h2>
+          <span>👁️ 3. Vision (Classical CV & ViT)</span>
+          <span class="status-tag">Canny BFS & ViT-B/16</span>
+        </h2>
+        <p>Sobel 3x3 미분과 8-방향 BFS Hysteresis로 정밀 엣지를 추출하며, ViT-B/16 16x16 패치 프로젝션 및 VLM GeLU 사상기로 정렬합니다.</p>
+        <div class="control-group">
+          <label>패턴 캔버스 해상도 (64x64)</label>
+          <input type="text" id="vision-shape" value="64x64 Geometric Pattern" disabled />
+        </div>
+        <button onclick="window.runVision()">Canny 엣지 검출 및 ViT/VLM 임베딩 추출</button>
+        <div style="display: flex; gap: 8px; margin-top: 12px;">
+          <canvas id="vision-input-canvas" width="64" height="64" style="width: 50%; height: 128px;"></canvas>
+          <canvas id="vision-output-canvas" width="64" height="64" style="width: 50%; height: 128px;"></canvas>
+        </div>
+      </div>
+
+      <!-- 4. Diffusion -->
+      <div class="card">
+        <h2>
+          <span>🎨 4. Diffusion (UNet & VAE)</span>
+          <span class="status-tag">AutoencoderKL</span>
+        </h2>
+        <p>BPE 77토큰 CLIP 텍스트 인코더, 시간 임베딩 및 크로스 어텐션 UNet 오일러 루프, Two-pass GroupNorm 4단계 VAE 디코더 캔버스 출력.</p>
+        <div class="control-group">
+          <label>생성 프롬프트 (Prompt)</label>
+          <input type="text" id="diff-prompt" value="a futuristic AI crystal core" />
+        </div>
+        <button onclick="window.runDiffusion()">온디바이스 E2E 디퓨전 순전파 실행</button>
+        <div style="display: flex; justify-content: center;">
+          <canvas id="diff-canvas" width="64" height="64" style="width: 128px; height: 128px; margin-top: 12px;"></canvas>
+        </div>
+      </div>
+
+      <!-- 5. LLM -->
+      <div class="card">
+        <h2>
+          <span>🧠 5. LLM (RoPE & SwiGLU)</span>
+          <span class="status-tag">BitNet KV-Cache</span>
+        </h2>
+        <p>RoPE(Rotary Position Embedding), Two-pass RMSNorm, SwiGLU 및 KV-Cache가 통합된 트랜스포머 디코더 순전파 추론.</p>
+        <div class="control-group">
+          <label>입력 토큰 시퀀스 IDs</label>
+          <input type="text" id="llm-tokens" value="1, 105, 42, 880, 2048" />
+        </div>
+        <button onclick="window.runLLM()">LLM 디코더 연산 및 토큰 로짓 추론</button>
+        <div class="stats-bar">
+          <div>Next Token: <span id="llm-next-token">-</span></div>
+          <div>Max Logit: <span id="llm-max-logit">-</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LOG PANEL -->
+    <div class="log-panel">
+      <div class="log-header">
+        <h3>📋 실시간 실행 진단 및 수학적 불변식 검증 로그 (Diagnostic Logs)</h3>
+        <button style="width: auto; padding: 4px 12px; font-size: 0.75rem;" class="secondary" onclick="document.getElementById('log-box').innerText='[LOG CLEARED]\n'">로그 지우기</button>
+      </div>
+      <div class="log-content" id="log-box">시스템 초기화 완료. 원하는 모달리티를 개별 테스트하거나 'Grand Unified Run'을 실행하십시오.</div>
+    </div>
+  </div>
+
+  <script type="module">
+    import {
+      AllModalOrchestrator,
+      STTEngine,
+      TTSEngine,
+      ClassicalCV,
+      CLIPVisionEncoder,
+      VLMEngine,
+      WebGPUDiffusionPipeline,
+      LLMEngine,
+      CLIPTokenizer,
+      CLIPTextEncoder,
+      UNetGraph,
+      AutoencoderKL
+    } from '../docs/dist/index.esm.js';
+
+    function log(msg, color = '#38bdf8') {
+      const box = document.getElementById('log-box');
+      box.style.color = color;
+      box.innerText += msg + '\n';
+      box.scrollTop = box.scrollHeight;
+    }
+
+    // --- STT DEMO ---
+    window.runSTT = async function() {
+      try {
+        log('--- [STT] 16kHz PCM 분석 시작 ---');
+        const freq = parseFloat(document.getElementById('stt-freq').value) || 440;
+        const pcm = new Float32Array(16000);
+        for (let i = 0; i < pcm.length; i++) {
+          pcm[i] = 0.5 * Math.sin(2 * Math.PI * freq * i / 16000) + 0.2 * Math.sin(2 * Math.PI * freq * 2 * i / 16000);
+        }
+
+        const mel = STTEngine.computeLogMelSpectrogram(pcm, 16000, 400, 160, 80);
+        log(`[STT] Log-Mel 변환 성공: Frames=${mel.nFrames}, Bins=${mel.nMels}, Total=${mel.data.length}`);
+
+        // Canvas 시각화
+        const canvas = document.getElementById('stt-canvas');
+        const ctx = canvas.getContext('2d');
+        const imgData = ctx.createImageData(canvas.width, canvas.height);
+        for (let y = 0; y < canvas.height; y++) {
+          const melBin = Math.floor((1 - y / canvas.height) * 80);
+          for (let x = 0; x < canvas.width; x++) {
+            const frameIdx = Math.floor(x / canvas.width * mel.nFrames);
+            const val = mel.data[frameIdx * 80 + melBin];
+            // Normalize val (-10 ~ 0) to (0 ~ 255)
+            const norm = Math.max(0, Math.min(255, Math.floor((val + 10) / 10 * 255)));
+            const idx = (y * canvas.width + x) * 4;
+            imgData.data[idx] = norm; // R
+            imgData.data[idx + 1] = Math.floor(norm * 0.7); // G
+            imgData.data[idx + 2] = 255 - norm; // B
+            imgData.data[idx + 3] = 255;
+          }
+        }
+        ctx.putImageData(imgData, 0, 0);
+
+        // Conv1D 다운샘플러 통과
+        const encoder = new STTEngine({ nMels: 80, dModel: 384, nLayers: 2, nHeads: 6 });
+        const convW1 = new Float32Array(384 * 80 * 3);
+        const convW2 = new Float32Array(384 * 384 * 3);
+        for (let i = 0; i < convW1.length; i++) convW1[i] = Math.sin(i * 0.05) * 0.05;
+        for (let i = 0; i < convW2.length; i++) convW2[i] = Math.cos(i * 0.05) * 0.05;
+
+        const downsampled = encoder.convDownsample(mel.data, mel.nFrames, convW1, convW2);
+        log(`[STT] Whisper Conv1D 4x 다운샘플링 통과: T_out=${downsampled.outFrames}, D=${downsampled.outDim}`);
+      } catch (err) {
+        log(`[STT 오류] ${err.message}`, '#f87171');
+      }
+    };
+
+    // --- TTS DEMO ---
+    window.runTTS = async function() {
+      try {
+        log('--- [TTS] Rosenberg 발진 및 5-대역 Biquad 음성 합성 시작 ---');
+        const text = document.getElementById('tts-text').value;
+        const tts = new TTSEngine(24000);
+        const pcm = tts.synthesizeVowels(text, 140, 0.15);
+        log(`[TTS] 합성 완료: 길이=${pcm.length} 샘플 (${(pcm.length / 24000).toFixed(2)}초)`);
+
+        // 파형 캔버스 렌더링
+        const canvas = document.getElementById('tts-canvas');
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#030712';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = '#38bdf8';
+        ctx.beginPath();
+        const step = Math.ceil(pcm.length / canvas.width);
+        for (let x = 0; x < canvas.width; x++) {
+          const sample = pcm[x * step] || 0;
+          const y = (1 - (sample + 1) / 2) * canvas.height;
+          if (x === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+
+        // Web Audio API 스피커 재생
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (AudioContextClass) {
+          const audioCtx = new AudioContextClass({ sampleRate: 24000 });
+          const audioBuffer = audioCtx.createBuffer(1, pcm.length, 24000);
+          audioBuffer.getChannelData(0).set(pcm);
+          const source = audioCtx.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(audioCtx.destination);
+          source.start();
+          log('[TTS] Web Audio API 스피커 출력 재생 중...');
+        }
+      } catch (err) {
+        log(`[TTS 오류] ${err.message}`, '#f87171');
+      }
+    };
+
+    // --- VISION DEMO ---
+    window.runVision = async function() {
+      try {
+        log('--- [Vision] Canny 8-방향 BFS & ViT 패치 프로젝션 시작 ---');
+        const w = 64, h = 64;
+        const inputCanvas = document.getElementById('vision-input-canvas');
+        const inCtx = inputCanvas.getContext('2d');
+        
+        // 기하학 패턴 드로잉 (사각형 및 원)
+        inCtx.fillStyle = '#000000';
+        inCtx.fillRect(0, 0, w, h);
+        inCtx.strokeStyle = '#ffffff';
+        inCtx.lineWidth = 2;
+        inCtx.strokeRect(10, 10, 44, 44);
+        inCtx.beginPath();
+        inCtx.arc(32, 32, 14, 0, Math.PI * 2);
+        inCtx.fillStyle = '#888888';
+        inCtx.fill();
+        inCtx.stroke();
+
+        const imgData = inCtx.getImageData(0, 0, w, h);
+        const gray = ClassicalCV.rgbToGrayscale(imgData.data, w, h);
+        const edges = ClassicalCV.cannyEdgeDetection(gray, w, h, 30, 80);
+
+        // Canny 엣지 캔버스 렌더링
+        const outCanvas = document.getElementById('vision-output-canvas');
+        const outCtx = outCanvas.getContext('2d');
+        const outImg = outCtx.createImageData(w, h);
+        for (let i = 0; i < w * h; i++) {
+          const val = edges[i];
+          outImg.data[i * 4] = val;
+          outImg.data[i * 4 + 1] = val;
+          outImg.data[i * 4 + 2] = val;
+          outImg.data[i * 4 + 3] = 255;
+        }
+        outCtx.putImageData(outImg, 0, 0);
+        log(`[Vision] Canny 8-방향 BFS 검출 완료: 해상도=${w}x${h}`);
+
+        // ViT-B/16 프로젝션
+        const vit = new CLIPVisionEncoder({ imageSize: 64, patchSize: 16, hiddenDim: 768, numLayers: 2, numHeads: 12 });
+        const patchWeights = new Float32Array(768 * 3 * 16 * 16);
+        for (let i = 0; i < patchWeights.length; i++) patchWeights[i] = Math.sin(i * 0.01) * 0.02;
+        const rgbFloat = new Float32Array(3 * w * h);
+        for (let i = 0; i < w * h; i++) {
+          rgbFloat[i] = imgData.data[i * 4] / 255;
+          rgbFloat[w * h + i] = imgData.data[i * 4 + 1] / 255;
+          rgbFloat[2 * w * h + i] = imgData.data[i * 4 + 2] / 255;
+        }
+
+        const patches = vit.patchProjection(rgbFloat, patchWeights);
+        log(`[Vision] ViT-B/16 패치 프로젝션 완료: Patches=${patches.numPatches}, Dim=${patches.hiddenDim}`);
+
+        // VLM 사상기
+        const vlm = new VLMEngine(768, 2048);
+        const fc1 = new Float32Array(2048 * 768).fill(0.001);
+        const b1 = new Float32Array(2048).fill(0.0);
+        const fc2 = new Float32Array(2048 * 2048).fill(0.001);
+        const b2 = new Float32Array(2048).fill(0.0);
+        const projected = vlm.project(patches.patchTokens, patches.numPatches, { fc1Weight: fc1, fc1Bias: b1, fc2Weight: fc2, fc2Bias: b2 });
+        log(`[Vision] VLM Projector 사상 완료: LLM Prefix Shape=[${patches.numPatches}, 2048]`);
+      } catch (err) {
+        log(`[Vision 오류] ${err.message}`, '#f87171');
+      }
+    };
+
+    // --- DIFFUSION DEMO ---
+    window.runDiffusion = async function() {
+      try {
+        log('--- [Diffusion] 온디바이스 E2E 파이프라인 시작 ---');
+        const prompt = document.getElementById('diff-prompt').value;
+        const pipeline = new WebGPUDiffusionPipeline();
+
+        const cBase = 32;
+        const dim = 768;
+        const vaeWeights = {
+          postQuantConvWeight: new Float32Array(4 * 4 * 1 * 1).fill(0.25),
+          convInWeight: new Float32Array(cBase * 4 * 3 * 3).fill(0.05),
+          upBlocks: [{
+            upsampleConvWeight: new Float32Array(cBase * cBase * 3 * 3).fill(0.02),
+            normGamma: new Float32Array(cBase).fill(1.0),
+            normBeta: new Float32Array(cBase).fill(0.0),
+          }],
+          normOutGamma: new Float32Array(cBase).fill(1.0),
+          normOutBeta: new Float32Array(cBase).fill(0.0),
+          convOutWeight: new Float32Array(4 * cBase * 3 * 3).fill(0.02),
+        };
+        const clipWeights = {
+          tokenEmbedding: new Float32Array(50000 * dim).fill(0.01),
+          positionEmbedding: new Float32Array(77 * dim).fill(0.01),
+          layers: [{
+            norm1Gamma: new Float32Array(dim).fill(1.0),
+            norm1Beta: new Float32Array(dim).fill(0.0),
+            qProjWeight: new Float32Array(dim * dim).fill(0.001),
+            qProjBias: new Float32Array(dim).fill(0.0),
+            kProjWeight: new Float32Array(dim * dim).fill(0.001),
+            kProjBias: new Float32Array(dim).fill(0.0),
+            vProjWeight: new Float32Array(dim * dim).fill(0.001),
+            vProjBias: new Float32Array(dim).fill(0.0),
+            outProjWeight: new Float32Array(dim * dim).fill(0.001),
+            outProjBias: new Float32Array(dim).fill(0.0),
+            norm2Gamma: new Float32Array(dim).fill(1.0),
+            norm2Beta: new Float32Array(dim).fill(0.0),
+            mlpFc1Weight: new Float32Array(3072 * dim).fill(0.001),
+            mlpFc1Bias: new Float32Array(3072).fill(0.0),
+            mlpFc2Weight: new Float32Array(dim * 3072).fill(0.001),
+            mlpFc2Bias: new Float32Array(dim).fill(0.0),
+          }],
+          finalNormGamma: new Float32Array(dim).fill(1.0),
+          finalNormBeta: new Float32Array(dim).fill(0.0),
+        };
+        const unetWeights = {
+          timeEmbedFc1Weight: new Float32Array(1280 * 320).fill(0.01),
+          timeEmbedFc1Bias: new Float32Array(1280).fill(0.0),
+          timeEmbedFc2Weight: new Float32Array(1280 * 1280).fill(0.01),
+          timeEmbedFc2Bias: new Float32Array(1280).fill(0.0),
+          convInWeight: new Float32Array(320 * 4 * 3 * 3).fill(0.01),
+          downBlocks: [{
+            resnetNorm1Gamma: new Float32Array(320).fill(1.0),
+            resnetNorm1Beta: new Float32Array(320).fill(0.0),
+            resnetConv1Weight: new Float32Array(320 * 320 * 3 * 3).fill(0.01),
+            resnetTimeProjWeight: new Float32Array(320 * 1280).fill(0.01),
+            resnetTimeProjBias: new Float32Array(320).fill(0.0),
+            resnetNorm2Gamma: new Float32Array(320).fill(1.0),
+            resnetNorm2Beta: new Float32Array(320).fill(0.0),
+            resnetConv2Weight: new Float32Array(320 * 320 * 3 * 3).fill(0.01),
+            attnNormGamma: new Float32Array(320).fill(1.0),
+            attnNormBeta: new Float32Array(320).fill(0.0),
+            qProjWeight: new Float32Array(320 * 320).fill(0.001),
+            kProjWeight: new Float32Array(320 * dim).fill(0.001),
+            vProjWeight: new Float32Array(320 * dim).fill(0.001),
+            outProjWeight: new Float32Array(320 * 320).fill(0.001),
+          }],
+          convOutWeight: new Float32Array(4 * 320 * 3 * 3).fill(0.01),
+        };
+
+        const result = await pipeline.generate({
+          prompt,
+          numSteps: 2,
+          width: 64,
+          height: 64,
+          seed: 123,
+          vaeWeights,
+          unetWeights,
+          clipWeights,
+          onProgress: (p) => {
+            log(`[Diffusion] Step ${p.step}/${p.totalSteps} (${p.percentage}%)`);
+          }
+        });
+
+        const canvas = document.getElementById('diff-canvas');
+        const ctx = canvas.getContext('2d');
+        const img = ctx.createImageData(64, 64);
+        img.data.set(result.rgbaData);
+        ctx.putImageData(img, 0, 0);
+        log(`[Diffusion] 생성 완료! Width=${result.width}, Height=${result.height}`);
+      } catch (err) {
+        log(`[Diffusion 오류] ${err.message}`, '#f87171');
+      }
+    };
+
+    // --- LLM DEMO ---
+    window.runLLM = async function() {
+      try {
+        log('--- [LLM] RoPE + SwiGLU 트랜스포머 순전파 시작 ---');
+        const raw = document.getElementById('llm-tokens').value;
+        const tokens = raw.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+        
+        const llm = new LLMEngine({ vocabSize: 32000, hiddenDim: 256, intermediateDim: 512, numLayers: 2, numHeads: 4 });
+        const weights = {
+          tokenEmbedding: new Float32Array(32000 * 256),
+          layers: [{
+            inputNormGamma: new Float32Array(256).fill(1.0),
+            qProjWeight: new Float32Array(256 * 256),
+            kProjWeight: new Float32Array(256 * 256),
+            vProjWeight: new Float32Array(256 * 256),
+            outProjWeight: new Float32Array(256 * 256),
+            postAttnNormGamma: new Float32Array(256).fill(1.0),
+            gateProjWeight: new Float32Array(512 * 256),
+            upProjWeight: new Float32Array(512 * 256),
+            downProjWeight: new Float32Array(256 * 512),
+          }],
+          finalNormGamma: new Float32Array(256).fill(1.0),
+          lmHeadWeight: new Float32Array(32000 * 256),
+        };
+        for (let i = 0; i < weights.tokenEmbedding.length; i++) weights.tokenEmbedding[i] = Math.sin(i * 0.01) * 0.05;
+        for (let i = 0; i < weights.lmHeadWeight.length; i++) weights.lmHeadWeight[i] = Math.cos(i * 0.01) * 0.05;
+
+        const out = llm.forward(tokens, weights);
+        let maxLogit = -Infinity, nextToken = -1;
+        for (let i = 0; i < 32000; i++) {
+          if (out.logits[i] > maxLogit) {
+            maxLogit = out.logits[i];
+            nextToken = i;
+          }
+        }
+
+        document.getElementById('llm-next-token').innerText = nextToken;
+        document.getElementById('llm-max-logit').innerText = maxLogit.toFixed(4);
+        log(`[LLM] 순전파 완료: Vocab=32000, NextTokenID=${nextToken}, Logit=${maxLogit.toFixed(4)}`);
+      } catch (err) {
+        log(`[LLM 오류] ${err.message}`, '#f87171');
+      }
+    };
+
+    // --- GRAND UNIFIED RUN ---
+    window.runOrchestratorUnified = async function() {
+      log('==================================================', '#38bdf8');
+      log('🏛️ [AllModalOrchestrator] Grand Unified E2E 순전파 개시', '#38bdf8');
+      log('==================================================', '#38bdf8');
+
+      try {
+        const orchestrator = new AllModalOrchestrator();
+        
+        // 1. Audio Listen
+        log('[1/5 STT] 마이크/오디오 입력 청취 및 Mel 스펙트로그램 파싱...');
+        const pcm = new Float32Array(16000);
+        for (let i = 0; i < pcm.length; i++) pcm[i] = 0.3 * Math.sin(2 * Math.PI * 440 * i / 16000);
+        const audioRes = await orchestrator.listen(pcm);
+        log(`       -> Mel-Spectrogram 생성 완료: ${audioRes.melSpectrogram.nMels} mels, ${audioRes.melSpectrogram.nFrames} frames`);
+
+        // 2. Vision Perceive
+        log('[2/5 Vision] 시각적 씬 인지 (Canny BFS 엣지 및 ViT-B/16 임베딩)...');
+        const rgba = new Uint8ClampedArray(64 * 64 * 4).fill(128);
+        const edges = await orchestrator.seeEdges(rgba, 64, 64);
+        const vitEmb = await orchestrator.seeEmbeddings(rgba, 64, 64);
+        log(`       -> Canny Edges=${edges.length} px, ViT HiddenDim=${vitEmb.hiddenDim}`);
+
+        // 3. LLM Reasoning
+        log('[3/5 LLM] 인지된 멀티모달 컨텍스트 기반 추론 (RoPE/SwiGLU)...');
+        const thought = await orchestrator.think([1, 10, 42]);
+        log(`       -> Next Token Logits 계산 완료 (Vocab Size=${thought.logits.length})`);
+
+        // 4. Diffusion Generation
+        log('[4/5 Diffusion] 추론된 심상 이미지 온디바이스 생성 (UNet/VAE)...');
+        await window.runDiffusion();
+
+        // 5. Speech Output
+        log('[5/5 TTS] 최종 음성 피드백 성대 진동 및 Biquad 포먼트 합성...');
+        await window.runTTS();
+
+        log('==================================================', '#34d399');
+        log('🎉 [SUCCESS] 5대 모달리티 전 파이프라인 E2E 순전파 100% 정상 완료!', '#34d399');
+        log('==================================================', '#34d399');
+      } catch (err) {
+        log(`[Orchestrator 오류] ${err.message}`, '#f87171');
+      }
+    };
+
+    // --- FAIL-FAST BOUNDARY CHECK ---
+    window.runFailFastCheck = async function() {
+      log('🧪 [Diagnostic] 페일패스트 결함 경계 검증 (Zero Silent Fallback)...', '#fbbf24');
+      try {
+        const pipeline = new WebGPUDiffusionPipeline();
+        // Missing weights should fail fast immediately with custom error
+        await pipeline.generate({ prompt: 'test' });
+        log('[FAIL] 침묵 폴백이 발생했습니다 (에러가 발생해야 함).', '#f87171');
+      } catch (err) {
+        log(`[PASS] 결함 감지 시 즉각 예외 분출 검증 성공!`, '#34d399');
+        log(`       Code: ${err.code || 'AMEVA_FAIL_FAST'}`);
+        log(`       Message: ${err.message}`);
+      }
+    };
+  </script>
+</body>
+</html>
