@@ -10,6 +10,7 @@
  */
 import { getDevice, initWebGPU, isAvailable } from "./webgpu/device";
 import { QuotaManager, getQuotaSnapshot } from "./webgpu/quota";
+export declare const VERSION = "1.0.1";
 export * from "./errors";
 export * from "./types";
 export { initWebGPU, isAvailable };

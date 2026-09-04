@@ -1,6 +1,6 @@
 {
   "name": "@ameva/forge",
-  "version": "0.1.1",
+  "version": "1.0.1",
   "description": "High-Performance Browser-Native Tensor Computation Engine & Reverse-Mode Autograd Framework Powered by WebGPU",
   "repository": {
     "type": "git",

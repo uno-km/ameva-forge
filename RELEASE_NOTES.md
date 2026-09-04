@@ -1,7 +1,7 @@
-# 🚀 AMEVA-Forge Release 3.0 Official Release Notes
+# 🚀 AMEVA-Forge Release 1.0.1 Official Release Notes
 ## ── Universal Plug & Play On-Device WebGPU AI Runtime & Model Hub ──
 
-**Release Version**: `3.0.0` (Core Engine: `@uno-km/ameva-forge` / Python: `ameva-forge`)  
+**Release Version**: `1.0.1` (Core Engine: `@uno-km/ameva-forge` / Python: `ameva-forge`)  
 **Release Date**: 2026-09-04  
 **Audit & Quality Standard**: 100% Zero-Trust Microscopic Verified (49 Test Suites, 279 Tests PASS)  
 **License**: Apache-2.0  

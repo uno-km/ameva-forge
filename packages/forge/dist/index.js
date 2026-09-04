@@ -14120,6 +14120,7 @@ fn main(
      * WHY: 패키지 사용자가 내부 디렉토리 구조를 일일이 알 필요 없이 일관된 단일 경로에서 모듈을 쉽게 임포트할 수 있도록 편의성을 제공하기 위함입니다.
      * HOW: 내부의 여러 모듈들에 정의된 클래스, 타입, 함수 등을 export 및 re-export 키워드를 활용하여 다시 바깥으로 통합 추출합니다.
      */
+    const VERSION = "1.0.1";
     /**
      * WHAT: 테스트 환경(E2E / Jest)에서만 제어 가능한 결함 주입(Fault Injection) 훅입니다.
      * WHY: 프로덕션 환경에 raw GPUDevice를 노출하지 않으면서도 OOM, Validation, Device Lost 복구력을 엄격히 검증하기 위함입니다.
@@ -14218,6 +14219,7 @@ fn main(
     exports.VAEDecoderError = VAEDecoderError;
     exports.VAE_DECODER_ARCHITECTURE = VAE_DECODER_ARCHITECTURE;
     exports.VAE_DECODER_CAPABILITY = VAE_DECODER_CAPABILITY;
+    exports.VERSION = VERSION;
     exports.VLMEngine = VLMEngine;
     exports.VLMProjector = VLMProjector;
     exports.VisionError = VisionError;

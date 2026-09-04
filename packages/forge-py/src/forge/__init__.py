@@ -70,7 +70,7 @@ from .errors import (
 # WHAT: 패키지 버전을 정의하는 변수입니다.
 # WHY: 패키지 사용자나 다른 도구가 현재 설치된 패키지의 버전을 확인할 수 있게 합니다.
 # HOW: 문자열 형태로 버전을 저장하여 외부에서 접근 가능하게 합니다.
-__version__ = "0.1.0"
+__version__ = "1.0.1"
 
 # 기본 통계 및 수학 연산 함수들을 편의상 다른 이름으로 매핑하여 임포트
 from .ops import sum_op as sum, mean_op as mean, exp_op as exp, log_op as log

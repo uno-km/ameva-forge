@@ -16,7 +16,7 @@
 	"en": {
 		"common": {
 			"headerTitle": "AMEVA-Forge Documentation",
-			"releaseTag": "Release 1.0.0",
+			"releaseTag": "Release 1.0.1",
 			"liveStudioBtn": "[ Live WebGPU Studio ]",
 			"githubBtn": "[ GitHub Repository ]",
 			"footerText": "© 2026 AMEVA-Forge Team. Released under the Apache-2.0 License.",
@@ -49,7 +49,7 @@
 		"home": {
 			"pageTitle": "AMEVA-Forge Documentation",
 			"metaDesc": "AMEVA-Forge is a PyTorch-compatible WebGPU deep learning framework for educational autograd and in-browser training.",
-			"welcomeTitle": "Welcome to AMEVA-Forge (Release 1.0.0)",
+			"welcomeTitle": "Welcome to AMEVA-Forge (Release 1.0.1)",
 			"welcomeDesc": "<strong>AMEVA-Forge</strong> is a lightweight deep learning framework engineered for educational autograd, small model experimentation, and client-side privacy-preserving computation across both native Python environments and modern web browsers via WebGPU.",
 			"releaseScopeTitle": "Release 1.0 Scope: 2-Layer MLP & Causal Attention",
 			"releaseScopeDesc": "Our Release 1.0 focus is laser-targeted on one goal: <strong>Enable users to build, train, and understand neural networks (2-Layer MLP, Causal Attention, In-Place SGD) entirely in the browser using Python without server compute costs.</strong>",
@@ -142,7 +142,7 @@
 		},
 		"apiReference": {
 			"pageTitle": "AMEVA-Forge: API Reference",
-			"h2": "API Reference (Release 1.0.0)",
+			"h2": "API Reference (Release 1.0.1)",
 			"desc": "Complete documentation for all modules, classes, and methods supported in AMEVA-Forge Release 1.0.",
 			"sec1Title": "1. Core Tensor (forge.Tensor)",
 			"thMethod": "Method / Attribute",
@@ -388,7 +388,7 @@
 	"ko": {
 		"common": {
 			"headerTitle": "AMEVA-Forge 공식 문서",
-			"releaseTag": "릴리즈 1.0.0",
+			"releaseTag": "릴리즈 1.0.1",
 			"liveStudioBtn": "[ 실시간 WebGPU 스튜디오 ]",
 			"githubBtn": "[ GitHub 저장소 ]",
 			"footerText": "© 2026 AMEVA-Forge Team. Apache-2.0 라이선스에 따라 배포됩니다.",
@@ -421,7 +421,7 @@
 		"home": {
 			"pageTitle": "AMEVA-Forge 공식 문서",
 			"metaDesc": "AMEVA-Forge는 교육용 자동 미분 및 브라우저 내 인공지능 학습을 위한 PyTorch 호환 WebGPU 딥러닝 프레임워크입니다.",
-			"welcomeTitle": "AMEVA-Forge에 오신 것을 환영합니다 (릴리즈 1.0.0)",
+			"welcomeTitle": "AMEVA-Forge에 오신 것을 환영합니다 (릴리즈 1.0.1)",
 			"welcomeDesc": "<strong>AMEVA-Forge</strong>는 네이티브 Python 환경과 WebGPU 기반 최신 웹 브라우저 모두에서 교육용 자동 미분(Autograd), 소형 모델 실험 및 클라이언트 측 개인정보 보호 연산을 지원하도록 설계된 초경량 딥러닝 프레임워크입니다.",
 			"releaseScopeTitle": "릴리즈 1.0 목표 범위: 2계층 MLP 및 인과적 어텐션(Causal Attention)",
 			"releaseScopeDesc": "릴리즈 1.0의 목표는 명확합니다: <strong>서버 컴퓨팅 비용 없이 브라우저 내에서 Python을 사용하여 신경망(2계층 MLP, 인과적 어텐션, In-Place SGD)을 직접 구축하고 학습하며 원리를 이해할 수 있도록 지원하는 것</strong>입니다.",
@@ -514,7 +514,7 @@
 		},
 		"apiReference": {
 			"pageTitle": "AMEVA-Forge: API 레퍼런스",
-			"h2": "API 레퍼런스 (릴리즈 1.0.0)",
+			"h2": "API 레퍼런스 (릴리즈 1.0.1)",
 			"desc": "AMEVA-Forge 릴리즈 1.0에서 지원하는 모든 모듈, 클래스 및 메서드에 대한 공식 기술 명세서입니다.",
 			"sec1Title": "1. 코어 텐서 (forge.Tensor)",
 			"thMethod": "메서드 / 속성",
@@ -760,7 +760,7 @@
 	"zh": {
 		"common": {
 			"headerTitle": "AMEVA-Forge 官方文档",
-			"releaseTag": "Release 1.0.0",
+			"releaseTag": "Release 1.0.1",
 			"liveStudioBtn": "[ 实时 WebGPU 工作室 ]",
 			"githubBtn": "[ GitHub 仓库 ]",
 			"footerText": "© 2026 AMEVA-Forge 团队。基于 Apache-2.0 许可证发布。",
@@ -793,7 +793,7 @@
 		"home": {
 			"pageTitle": "AMEVA-Forge 官方文档",
 			"metaDesc": "AMEVA-Forge 是一个兼容 PyTorch 的 WebGPU 深度学习框架，专为教学自动求导和浏览器端模型训练而设计。",
-			"welcomeTitle": "欢迎使用 AMEVA-Forge (Release 1.0.0)",
+			"welcomeTitle": "欢迎使用 AMEVA-Forge (Release 1.0.1)",
 			"welcomeDesc": "<strong>AMEVA-Forge</strong> 是一个轻量级深度学习框架，专为教学自动微分、小型模型实验以及通过 WebGPU 在原生 Python 环境和现代浏览器中进行客户端隐私保护计算而构建。",
 			"releaseScopeTitle": "Release 1.0 目标：双层 MLP 与因果注意力机制 (Causal Attention)",
 			"releaseScopeDesc": "我们的 1.0 版本专注于一个核心目标：<strong>使用户能够完全在浏览器中使用 Python 构建、训练和理解神经网络（2层 MLP、因果注意力、In-Place SGD），无需任何服务器计算成本。</strong>",
@@ -886,7 +886,7 @@
 		},
 		"apiReference": {
 			"pageTitle": "AMEVA-Forge: API 参考手册",
-			"h2": "API 参考手册 (Release 1.0.0)",
+			"h2": "API 参考手册 (Release 1.0.1)",
 			"desc": "AMEVA-Forge 1.0 版本支持的所有模块、类和方法的完整技术文档。",
 			"sec1Title": "1. 核心张量 (forge.Tensor)",
 			"thMethod": "方法 / 属性",
@@ -1132,7 +1132,7 @@
 	"ja": {
 		"common": {
 			"headerTitle": "AMEVA-Forge 公式ドキュメント",
-			"releaseTag": "Release 1.0.0",
+			"releaseTag": "Release 1.0.1",
 			"liveStudioBtn": "[ リアルタイム WebGPU スタジオ ]",
 			"githubBtn": "[ GitHub リポジトリ ]",
 			"footerText": "© 2026 AMEVA-Forge Team. Apache-2.0 ライセンスの下で公開されています。",
@@ -1165,7 +1165,7 @@
 		"home": {
 			"pageTitle": "AMEVA-Forge 公式ドキュメント",
 			"metaDesc": "AMEVA-Forge は、教育用自動微分およびブラウザ内でのモデル学習のための PyTorch 互換 WebGPU ディープラーニングフレームワークです。",
-			"welcomeTitle": "AMEVA-Forge へようこそ (Release 1.0.0)",
+			"welcomeTitle": "AMEVA-Forge へようこそ (Release 1.0.1)",
 			"welcomeDesc": "<strong>AMEVA-Forge</strong> は、ネイティブ Python 環境および WebGPU を備えたモダンブラウザの両方で、教育用自動微分（Autograd）、小規模モデルの実験、クライアント側プライバシー保護計算を実現するために設計された軽量ディープラーニングフレームワークです。",
 			"releaseScopeTitle": "Release 1.0 の目標範囲: 2層 MLP と因果的アテンション (Causal Attention)",
 			"releaseScopeDesc": "Release 1.0 の焦点は1つの明確な目標にあります: <strong>サーバーの計算コストをかけずに、Python を使ってブラウザ内だけでニューラルネットワーク（2層 MLP、因果的アテンション、In-Place SGD）を構築・学習・理解できるようにすることです。</strong>",
@@ -1258,7 +1258,7 @@
 		},
 		"apiReference": {
 			"pageTitle": "AMEVA-Forge: API リファレンス",
-			"h2": "API リファレンス (Release 1.0.0)",
+			"h2": "API リファレンス (Release 1.0.1)",
 			"desc": "AMEVA-Forge 1.0 でサポートされているすべてのモジュール、クラス、メソッドの完全な技術仕様書です。",
 			"sec1Title": "1. コアテンソル (forge.Tensor)",
 			"thMethod": "メソッド / 属性",
@@ -1504,7 +1504,7 @@
 	"hi": {
 		"common": {
 			"headerTitle": "AMEVA-Forge आधिकारिक दस्तावेज़",
-			"releaseTag": "रिलीज़ 1.0.0",
+			"releaseTag": "रिलीज़ 1.0.1",
 			"liveStudioBtn": "[ लाइव WebGPU स्टूडियो ]",
 			"githubBtn": "[ GitHub रिपॉजिटरी ]",
 			"footerText": "© 2026 AMEVA-Forge Team. Apache-2.0 लाइसेंस के तहत जारी।",
@@ -1537,7 +1537,7 @@
 		"home": {
 			"pageTitle": "AMEVA-Forge आधिकारिक दस्तावेज़",
 			"metaDesc": "AMEVA-Forge शैक्षणिक ऑटोग्रैड और ब्राउज़र में AI प्रशिक्षण के लिए एक PyTorch-संगत WebGPU डीप लर्निंग फ्रेमवर्क है।",
-			"welcomeTitle": "AMEVA-Forge में आपका स्वागत है (रिलीज़ 1.0.0)",
+			"welcomeTitle": "AMEVA-Forge में आपका स्वागत है (रिलीज़ 1.0.1)",
 			"welcomeDesc": "<strong>AMEVA-Forge</strong> एक हल्का डीप लर्निंग फ्रेमवर्क है जिसे शैक्षणिक ऑटोग्रैड, छोटे मॉडल प्रयोगों और WebGPU के माध्यम से ब्राउज़र में गोपनीयता-संरक्षण गणना के लिए तैयार किया गया है।",
 			"releaseScopeTitle": "रिलीज़ 1.0 दायरा: 2-लेयर MLP और कॉज़ल अटेंशन",
 			"releaseScopeDesc": "हमारा 1.0 लक्ष्य स्पष्ट है: <strong>उपयोगकर्ताओं को बिना सर्वर लागत के केवल ब्राउज़र में Python का उपयोग करके न्यूरल नेटवर्क (2-Layer MLP, Causal Attention, In-Place SGD) बनाने, प्रशिक्षित करने और समझने में सक्षम बनाना।</strong>",
@@ -1630,7 +1630,7 @@
 		},
 		"apiReference": {
 			"pageTitle": "AMEVA-Forge: API संदर्भ",
-			"h2": "API संदर्भ (रिलीज़ 1.0.0)",
+			"h2": "API संदर्भ (रिलीज़ 1.0.1)",
 			"desc": "AMEVA-Forge रिलीज़ 1.0 में समर्थित सभी मॉड्यूल, क्लास और विधियों के लिए पूर्ण दस्तावेज़।",
 			"sec1Title": "1. कोर टेन्सर (forge.Tensor)",
 			"thMethod": "विधि / विशेषता",
@@ -1876,7 +1876,7 @@
 	"es": {
 		"common": {
 			"headerTitle": "Documentación de AMEVA-Forge",
-			"releaseTag": "Release 1.0.0",
+			"releaseTag": "Release 1.0.1",
 			"liveStudioBtn": "[ Estudio WebGPU en Vivo ]",
 			"githubBtn": "[ Repositorio GitHub ]",
 			"footerText": "© 2026 AMEVA-Forge Team. Publicado bajo la Licencia Apache-2.0.",
@@ -1909,7 +1909,7 @@
 		"home": {
 			"pageTitle": "Documentación de AMEVA-Forge",
 			"metaDesc": "AMEVA-Forge es un framework de deep learning WebGPU compatible con PyTorch para autograd educativo y entrenamiento en el navegador.",
-			"welcomeTitle": "Bienvenido a AMEVA-Forge (Release 1.0.0)",
+			"welcomeTitle": "Bienvenido a AMEVA-Forge (Release 1.0.1)",
 			"welcomeDesc": "<strong>AMEVA-Forge</strong> es un framework ligero de deep learning diseñado para autograd educativo, experimentación con modelos pequeños y computación cliente que preserva la privacidad tanto en entornos nativos de Python como en navegadores web modernos mediante WebGPU.",
 			"releaseScopeTitle": "Alcance de Release 1.0: MLP de 2 Capas y Atención Causal",
 			"releaseScopeDesc": "Nuestro enfoque en la versión 1.0 está enfocado en un objetivo claro: <strong>Permitir a los usuarios construir, entrenar y comprender redes neuronales (MLP de 2 capas, atención causal, SGD In-Place) completamente en el navegador usando Python sin costos de servidores.</strong>",
@@ -2002,7 +2002,7 @@
 		},
 		"apiReference": {
 			"pageTitle": "AMEVA-Forge: Referencia API",
-			"h2": "Referencia API (Release 1.0.0)",
+			"h2": "Referencia API (Release 1.0.1)",
 			"desc": "Documentación completa de todos los módulos, clases y métodos soportados en AMEVA-Forge Release 1.0.",
 			"sec1Title": "1. Tensor Principal (forge.Tensor)",
 			"thMethod": "Método / Atributo",

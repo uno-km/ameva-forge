@@ -18,7 +18,7 @@
     <header>
         <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
         <div class="header-badge-group">
-            <span class="apache-tag" data-i18n="common.releaseTag">Release 1.0.0</span>
+            <span class="apache-tag" data-i18n="common.releaseTag">Release 1.0.1</span>
             <a href="./demo.html"><strong data-i18n="common.liveStudioBtn">[ Live WebGPU Studio ]</strong></a>
             <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
         </div>
@@ -74,8 +74,8 @@ pip install ameva-forge
 pip install git+https://github.com/uno-km/ameva-forge.git#subdirectory=packages/forge-py
 
 # Option C: Download pre-built wheel artifact
-# Download: https://uno-km.github.io/ameva-forge/pkg/ameva_forge-0.1.0-py3-none-any.whl
-pip install ameva_forge-0.1.0-py3-none-any.whl
+# Download: https://uno-km.github.io/ameva-forge/pkg/ameva_forge-1.0.1-py3-none-any.whl
+pip install ameva_forge-1.0.1-py3-none-any.whl
 
 # Option D: Local editable development mode
 pip install -e packages/forge-py</code></pre>
@@ -99,7 +99,7 @@ pip install -e packages/forge-py</code></pre>
     const pyodide = await loadPyodide();
     await pyodide.loadPackage("micropip");
     const micropip = pyodide.pyimport("micropip");
-    await micropip.install("https://uno-km.github.io/ameva-forge/pkg/forge-0.1.0-py3-none-any.whl");
+    await micropip.install("https://uno-km.github.io/ameva-forge/pkg/forge-1.0.1-py3-none-any.whl");
     
     // 3. Ready to train models on GPU!
     await pyodide.runPythonAsync(`

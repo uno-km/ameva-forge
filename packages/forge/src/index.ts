@@ -15,6 +15,8 @@ import { AMEVAForgeValidationError } from "./errors";
 
 declare var process: any;
 
+export const VERSION = "1.0.1";
+
 export * from "./errors";
 export * from "./types";
 

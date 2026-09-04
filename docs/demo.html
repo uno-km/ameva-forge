@@ -21,7 +21,7 @@
     <header>
         <h1 data-i18n="common.headerTitle">AMEVA-Forge Documentation</h1>
         <div class="header-badge-group">
-            <span class="apache-tag" data-i18n="common.releaseTag">Release 1.0.0</span>
+            <span class="apache-tag" data-i18n="common.releaseTag">Release 1.0.1</span>
             <span id="gpuStatus" style="font-weight: bold; color: #003399;">Initializing WebGPU...</span>
             <a href="https://github.com/uno-km/ameva-forge" target="_blank" data-i18n="common.githubBtn">[ GitHub Repository ]</a>
         </div>
@@ -777,14 +777,14 @@ import gc; gc.collect()
                 } else {
                     await pyodideInstance.loadPackage("micropip");
                     const micropip = pyodideInstance.pyimport("micropip");
-                    await micropip.install("./pkg/forge-0.1.0-py3-none-any.whl");
+                    await micropip.install("./pkg/forge-1.0.1-py3-none-any.whl");
                     micropip.destroy();
                 }
 
                 // Verify import
                 await pyodideInstance.runPythonAsync(`
 import forge as torch
-print(f"[Ready] forge v0.1.0 ready on Pyodide. WebGPU bridge active.")
+print(f"[Ready] forge v1.0.1 ready on Pyodide. WebGPU bridge active.")
 `);
                 log('[Ready] Studio initialized. Click "Run Experiment" to start!');
                 btnRun.disabled = false;
