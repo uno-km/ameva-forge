@@ -897,6 +897,7 @@ let ALLOWED_KERNEL_NAMES = new Set([
     "reduce_axes",
     "tts_synth",
     "stt_mel",
+    "stt_stft",
 ]);
 /**
  * WHAT: 화이트리스트에 허용된 커널 이름들을 새롭게 등록(덮어쓰기)합니다.
@@ -9677,6 +9678,71 @@ fn main(
 
 /**
  * 파일 생성일: 2026-09-04
+ * AMEVA-Forge Release 3.0: High-Performance WebGPU STT Short-Time Fourier Transform (STFT) Kernel
+ *
+ * WHAT: 오디오 16kHz PCM 파형으로부터 각 프레임별 Hanning Window 및 복소수 DFT(이산 푸리에 변환)를
+ *      GPU의 수천 개 워크그룹 스레드에서 병렬 계산하여 매그니튜드(Magnitude) 버퍼를 VRAM 내에서 생성하는 WGSL 컴퓨트 커널입니다.
+ * WHY: 1분 오디오 기준 4.8억 번의 CPU 삼각함수 연산 병목을 제거하고, 순수 WebGPU 병렬 연산으로 수십 밀리초 내에 처리하기 위함입니다.
+ * HOW: Frame 및 Bin(k) 인덱스를 2D 그리드로 분할하여, 스레드당 400개 샘플의 Hanning 가중 삼각함수를 곱셈 누산(FMA)합니다.
+ */
+const STT_STFT_WGSL = `
+struct STFTParams {
+  num_frames: u32,
+  n_fft: u32,       // 400
+  hop_length: u32,  // 160
+  n_bins: u32,      // 201
+  workgroups_x: u32,
+  pcm_length: u32,
+  pad0: u32,
+  pad1: u32,
+};
+
+@group(0) @binding(0) var<uniform> params: STFTParams;
+@group(0) @binding(1) var<storage, read> pcm_samples: array<f32>;
+@group(0) @binding(2) var<storage, read_write> stft_magnitudes: array<f32>; // [num_frames, n_bins]
+
+@compute @workgroup_size(64, 1, 1)
+fn main(
+  @builtin(local_invocation_id) local_id: vec3<u32>,
+  @builtin(workgroup_id) workgroup_id: vec3<u32>
+) {
+  let total_entries = params.num_frames * params.n_bins;
+  let idx = (workgroup_id.x + workgroup_id.y * params.workgroups_x) * 64u + local_id.x;
+  if (idx >= total_entries) {
+    return;
+  }
+
+  let frame = idx / params.n_bins;
+  let k = idx % params.n_bins;
+  let start = frame * params.hop_length;
+
+  var real = 0.0;
+  var imag = 0.0;
+  let two_pi_over_nfft = 6.28318530717958647692 / f32(params.n_fft);
+  let k_f32 = f32(k);
+
+  for (var n = 0u; n < params.n_fft; n = n + 1u) {
+    let sample_idx = start + n;
+    var sample = 0.0;
+    if (sample_idx < params.pcm_length) {
+      sample = pcm_samples[sample_idx];
+    }
+    let n_f32 = f32(n);
+    // Hanning Window: w[n] = 0.5 * (1.0 - cos(2 * pi * n / n_fft))
+    let win = 0.5 * (1.0 - cos(two_pi_over_nfft * n_f32));
+    let sample_win = sample * win;
+
+    let angle = -two_pi_over_nfft * k_f32 * n_f32;
+    real = real + sample_win * cos(angle);
+    imag = imag + sample_win * sin(angle);
+  }
+
+  stft_magnitudes[idx] = sqrt(real * real + imag * imag);
+}
+`;
+
+/**
+ * 파일 생성일: 2026-09-04
  * AMEVA-Forge Release 3.0: SCRUM-335 WebGPU TTS Rosenberg Glottal Flow & Resonator Synthesis Kernel
  *
  * WHAT: Rosenberg 성문 펄스(Glottal Pulse)와 모음 포먼트 공진을 WebGPU 워크그룹에서 병렬 계산하는 WGSL 컴퓨트 셰이더입니다.
@@ -12290,58 +12356,77 @@ class STTEngine {
         const nMels = STTEngine.N_MELS;
         const numFrames = Math.floor((pcm.length - nFft) / hop) + 1;
         const nBins = Math.floor(nFft / 2) + 1; // 201
-        // 1. Calculate STFT Magnitudes
-        const window = new Float32Array(nFft);
-        for (let i = 0; i < nFft; i++) {
-            window[i] = 0.5 * (1.0 - Math.cos((2.0 * Math.PI * i) / nFft));
-        }
-        const stftMags = new Float32Array(numFrames * nBins);
-        for (let f = 0; f < numFrames; f++) {
-            const start = f * hop;
-            for (let k = 0; k < nBins; k++) {
-                let real = 0.0, imag = 0.0;
-                for (let n = 0; n < nFft; n++) {
-                    const sample = pcm[start + n] * window[n];
-                    const angle = (-2.0 * Math.PI * k * n) / nFft;
-                    real += sample * Math.cos(angle);
-                    imag += sample * Math.sin(angle);
-                }
-                stftMags[f * nBins + k] = Math.sqrt(real * real + imag * imag);
-            }
-        }
+        // 1. Allocate GPU Buffer for PCM samples (DMA directly into VRAM)
+        const { buffer: pcmBuf, token: pcmTok } = allocateBuffer(pcm.byteLength, 0x0080 | 0x0008, 'tensor', 'stt_pcm');
+        dev.queue.writeBuffer(pcmBuf, 0, pcm.buffer, pcm.byteOffset, pcm.byteLength);
+        // 2. Allocate GPU Buffer for STFT Magnitudes (VRAM resident, zero CPU roundtrip)
+        const totalStftEntries = numFrames * nBins;
+        const stftDispatch = computeDispatch2D(Math.ceil(totalStftEntries / 64));
+        const stftParams = new Uint32Array([
+            numFrames,
+            nFft,
+            hop,
+            nBins,
+            stftDispatch.dispatchX,
+            pcm.length,
+            0,
+            0
+        ]);
+        const { buffer: stftParamBuf, token: stftParamTok } = allocateBuffer(32, 0x0040 | 0x0008, 'uniform', 'stt_stft_p');
+        dev.queue.writeBuffer(stftParamBuf, 0, stftParams.buffer, stftParams.byteOffset, stftParams.byteLength);
+        const { buffer: magBuf, token: magTok } = allocateBuffer(totalStftEntries * 4, 0x0080, 'tensor', 'stt_mags');
+        const { pipeline: stftPipeline } = _globalPipelineCache.getPipeline('stt_stft', STT_STFT_WGSL);
+        const stftBindGroup = dev.createBindGroup({
+            layout: stftPipeline.getBindGroupLayout(0),
+            entries: [
+                { binding: 0, resource: { buffer: stftParamBuf } },
+                { binding: 1, resource: { buffer: pcmBuf } },
+                { binding: 2, resource: { buffer: magBuf } },
+            ],
+        });
+        // 3. Setup Pass 2: Mel-Filterbank Projection Kernel
         const melFilterbank = this.createMelFilterbank(nMels, nBins, sampleRate);
-        // 2. Dispatch STT_MEL_WGSL compute kernel on GPU
-        const totalEntries = numFrames * nMels;
-        const { dispatchX, dispatchY } = computeDispatch2D(Math.ceil(totalEntries / 64));
-        const paramsArray = new Uint32Array([numFrames, nMels, nBins, dispatchX]);
-        const { buffer: pBuf, token: pTok } = allocateBuffer(16, 0x0040 | 0x0008, 'uniform', 'stt_p');
-        dev.queue.writeBuffer(pBuf, 0, paramsArray.buffer, paramsArray.byteOffset, paramsArray.byteLength);
-        const { buffer: magBuf, token: magTok } = allocateBuffer(stftMags.byteLength, 0x0080 | 0x0008, 'tensor', 'stt_mags');
-        dev.queue.writeBuffer(magBuf, 0, stftMags.buffer, stftMags.byteOffset, stftMags.byteLength);
+        const totalMelEntries = numFrames * nMels;
+        const melDispatch = computeDispatch2D(Math.ceil(totalMelEntries / 64));
+        const melParams = new Uint32Array([numFrames, nMels, nBins, melDispatch.dispatchX]);
+        const { buffer: melParamBuf, token: melParamTok } = allocateBuffer(16, 0x0040 | 0x0008, 'uniform', 'stt_mel_p');
+        dev.queue.writeBuffer(melParamBuf, 0, melParams.buffer, melParams.byteOffset, melParams.byteLength);
         const { buffer: fbBuf, token: fbTok } = allocateBuffer(melFilterbank.byteLength, 0x0080 | 0x0008, 'tensor', 'stt_fb');
         dev.queue.writeBuffer(fbBuf, 0, melFilterbank.buffer, melFilterbank.byteOffset, melFilterbank.byteLength);
-        const { buffer: outBuf, token: outTok } = allocateBuffer(totalEntries * 4, 0x0080 | 0x0004, 'tensor', 'stt_out');
-        const { pipeline } = _globalPipelineCache.getPipeline('stt_mel', STT_MEL_WGSL);
-        const bindGroup = dev.createBindGroup({
-            layout: pipeline.getBindGroupLayout(0),
+        const { buffer: outBuf, token: outTok } = allocateBuffer(totalMelEntries * 4, 0x0080 | 0x0004, 'tensor', 'stt_out');
+        const { pipeline: melPipeline } = _globalPipelineCache.getPipeline('stt_mel', STT_MEL_WGSL);
+        const melBindGroup = dev.createBindGroup({
+            layout: melPipeline.getBindGroupLayout(0),
             entries: [
-                { binding: 0, resource: { buffer: pBuf } },
+                { binding: 0, resource: { buffer: melParamBuf } },
                 { binding: 1, resource: { buffer: magBuf } },
                 { binding: 2, resource: { buffer: fbBuf } },
                 { binding: 3, resource: { buffer: outBuf } },
             ],
         });
+        // 4. Record and dispatch both compute passes in a single GPU Command Buffer
         const enc = dev.createCommandEncoder();
-        const pass = enc.beginComputePass();
-        pass.setPipeline(pipeline);
-        pass.setBindGroup(0, bindGroup);
-        pass.dispatchWorkgroups(dispatchX, dispatchY);
-        pass.end();
+        // Pass 1: Hardware-Accelerated STFT with Hanning Window
+        const pass1 = enc.beginComputePass();
+        pass1.setPipeline(stftPipeline);
+        pass1.setBindGroup(0, stftBindGroup);
+        pass1.dispatchWorkgroups(stftDispatch.dispatchX, stftDispatch.dispatchY);
+        pass1.end();
+        // Pass 2: 80-Channel Mel-Filterbank Projection & Log Compression
+        const pass2 = enc.beginComputePass();
+        pass2.setPipeline(melPipeline);
+        pass2.setBindGroup(0, melBindGroup);
+        pass2.dispatchWorkgroups(melDispatch.dispatchX, melDispatch.dispatchY);
+        pass2.end();
         dev.queue.submit([enc.finish()]);
-        const rawMels = await readBufferToFloat32Array(outBuf, totalEntries * 4);
+        // 5. Read back only the final 80-channel Mel Spectrogram
+        const rawMels = await readBufferToFloat32Array(outBuf, totalMelEntries * 4);
         const mels = new Float32Array(rawMels);
-        freeBuffer(pBuf, pTok);
+        // 6. Free all allocated VRAM staging and intermediate buffers
+        freeBuffer(pcmBuf, pcmTok);
+        freeBuffer(stftParamBuf, stftParamTok);
         freeBuffer(magBuf, magTok);
+        freeBuffer(melParamBuf, melParamTok);
         freeBuffer(fbBuf, fbTok);
         freeBuffer(outBuf, outTok);
         return { mels, numFrames };
@@ -13155,5 +13240,5 @@ const __testing = ((typeof process !== 'undefined' && process.env && process.env
     getDeviceInternal: getDevice,
 }) : undefined;
 
-export { ALL_MODAL_CAPABILITIES, AMEVAForgeDTypeError, AMEVAForgeDeviceError, AMEVAForgeDeviceLostError, AMEVAForgeDisposedError, AMEVAForgeError, AMEVAForgeInternalGPUError, AMEVAForgeOutOfMemoryError, AMEVAForgeQuotaExceededError, AMEVAForgeSecurityError, AMEVAForgeShapeError, AMEVAForgeStaleHandleError, AMEVAForgeUnsupportedOpError, AMEVAForgeValidationError, AMEVAForgeWebGPUUnavailableError, AUTOENCODER_KL_CAPABILITY, AllModalOrchestrator, AutoencoderKLDecoder, CLIPTextEncoder, CLIPTokenizer, CLIPVisionEncoder, ClassicalCV, DiffusionPipelineError, DiffusionPipelineErrorCode, EulerDiscreteScheduler, GGMLType, GGUFStreamer, GGUFTensorMapper, GROUP_NORM_APPLY_WGSL, GROUP_NORM_STATS_WGSL, KERNEL_REGISTRY, LLMEngine, LLMError, LLMErrorCode, QuotaManager, ResNetBlock, SILU_BACKWARD_WGSL, SILU_WGSL, STTEngine, STTError, STTErrorCode, STT_MEL_WGSL, TTSEngine, TTSError, TTSErrorCode, TTS_SYNTH_WGSL, UNetGraph, UPSAMPLE2D_WGSL, VAEDecoder, VAEDecoderError, VAEDecoderErrorCode, VAE_DECODER_ARCHITECTURE, VAE_DECODER_CAPABILITY, VLMEngine, VLMProjector, VisionError, VisionErrorCode, WebGPUDiffusionPipeline, __testing, adam_step, add, assertAllowedKernelName, assertAllowedShaderConstant, assertSafeShaderIdentifier, assertStaticShaderSourceOnly, assertWasmRange, clearStagingPool, clearStepLossHistory, cloneToFloat32Array, computeBroadcastParams, computeBroadcastParams3, computeDispatch2D, configureRuntime, dispose, embedding, embedding_backward, ensureFloat32Array, executeGraph, flashAttention, flushGC, getAllowedKernelNames, getQuotaSnapshot, getRuntimeConfig, getTensorInfo, gpuCore, init, initWebGPU, isAvailable, mapBufferAsync, matmul, matmulTiled, mountInspector, mul, random, read, readMappedInto, recordStepLoss, registerKernelNames, registerPyodideBridge, relu, relu_backward, resetRuntimeMemory, rmsNorm, rope, sgd_momentum_step, sparseCrossEntropy, sparseCrossEntropyBackward, swiglu, transpose, unmountInspector, unpackQuant, uploadFloat32Array, validateDType, validateShape, warmupKernels };
+export { ALL_MODAL_CAPABILITIES, AMEVAForgeDTypeError, AMEVAForgeDeviceError, AMEVAForgeDeviceLostError, AMEVAForgeDisposedError, AMEVAForgeError, AMEVAForgeInternalGPUError, AMEVAForgeOutOfMemoryError, AMEVAForgeQuotaExceededError, AMEVAForgeSecurityError, AMEVAForgeShapeError, AMEVAForgeStaleHandleError, AMEVAForgeUnsupportedOpError, AMEVAForgeValidationError, AMEVAForgeWebGPUUnavailableError, AUTOENCODER_KL_CAPABILITY, AllModalOrchestrator, AutoencoderKLDecoder, CLIPTextEncoder, CLIPTokenizer, CLIPVisionEncoder, ClassicalCV, DiffusionPipelineError, DiffusionPipelineErrorCode, EulerDiscreteScheduler, GGMLType, GGUFStreamer, GGUFTensorMapper, GROUP_NORM_APPLY_WGSL, GROUP_NORM_STATS_WGSL, KERNEL_REGISTRY, LLMEngine, LLMError, LLMErrorCode, QuotaManager, ResNetBlock, SILU_BACKWARD_WGSL, SILU_WGSL, STTEngine, STTError, STTErrorCode, STT_MEL_WGSL, STT_STFT_WGSL, TTSEngine, TTSError, TTSErrorCode, TTS_SYNTH_WGSL, UNetGraph, UPSAMPLE2D_WGSL, VAEDecoder, VAEDecoderError, VAEDecoderErrorCode, VAE_DECODER_ARCHITECTURE, VAE_DECODER_CAPABILITY, VLMEngine, VLMProjector, VisionError, VisionErrorCode, WebGPUDiffusionPipeline, __testing, adam_step, add, assertAllowedKernelName, assertAllowedShaderConstant, assertSafeShaderIdentifier, assertStaticShaderSourceOnly, assertWasmRange, clearStagingPool, clearStepLossHistory, cloneToFloat32Array, computeBroadcastParams, computeBroadcastParams3, computeDispatch2D, configureRuntime, dispose, embedding, embedding_backward, ensureFloat32Array, executeGraph, flashAttention, flushGC, getAllowedKernelNames, getQuotaSnapshot, getRuntimeConfig, getTensorInfo, gpuCore, init, initWebGPU, isAvailable, mapBufferAsync, matmul, matmulTiled, mountInspector, mul, random, read, readMappedInto, recordStepLoss, registerKernelNames, registerPyodideBridge, relu, relu_backward, resetRuntimeMemory, rmsNorm, rope, sgd_momentum_step, sparseCrossEntropy, sparseCrossEntropyBackward, swiglu, transpose, unmountInspector, unpackQuant, uploadFloat32Array, validateDType, validateShape, warmupKernels };
 //# sourceMappingURL=index.esm.js.map

@@ -9,6 +9,7 @@
  */
 
 import { STT_MEL_WGSL } from '../tensor/kernels/stt_mel.wgsl';
+import { STT_STFT_WGSL } from '../tensor/kernels/stt_stft.wgsl';
 import { getDevice } from '../webgpu/device';
 import { allocateBuffer, freeBuffer, readBufferToFloat32Array } from '../webgpu/buffers';
 import { computeDispatch2D } from '../tensor/dispatchShape';
@@ -146,68 +147,91 @@ export class STTEngine {
     const numFrames = Math.floor((pcm.length - nFft) / hop) + 1;
     const nBins = Math.floor(nFft / 2) + 1; // 201
 
-    // 1. Calculate STFT Magnitudes
-    const window = new Float32Array(nFft);
-    for (let i = 0; i < nFft; i++) {
-      window[i] = 0.5 * (1.0 - Math.cos((2.0 * Math.PI * i) / nFft));
-    }
-    const stftMags = new Float32Array(numFrames * nBins);
-    for (let f = 0; f < numFrames; f++) {
-      const start = f * hop;
-      for (let k = 0; k < nBins; k++) {
-        let real = 0.0, imag = 0.0;
-        for (let n = 0; n < nFft; n++) {
-          const sample = pcm[start + n] * window[n];
-          const angle = (-2.0 * Math.PI * k * n) / nFft;
-          real += sample * Math.cos(angle);
-          imag += sample * Math.sin(angle);
-        }
-        stftMags[f * nBins + k] = Math.sqrt(real * real + imag * imag);
-      }
-    }
+    // 1. Allocate GPU Buffer for PCM samples (DMA directly into VRAM)
+    const { buffer: pcmBuf, token: pcmTok } = allocateBuffer(pcm.byteLength, 0x0080 | 0x0008, 'tensor', 'stt_pcm');
+    dev.queue.writeBuffer(pcmBuf, 0, pcm.buffer, pcm.byteOffset, pcm.byteLength);
 
+    // 2. Allocate GPU Buffer for STFT Magnitudes (VRAM resident, zero CPU roundtrip)
+    const totalStftEntries = numFrames * nBins;
+    const stftDispatch = computeDispatch2D(Math.ceil(totalStftEntries / 64));
+    const stftParams = new Uint32Array([
+      numFrames,
+      nFft,
+      hop,
+      nBins,
+      stftDispatch.dispatchX,
+      pcm.length,
+      0,
+      0
+    ]);
+    const { buffer: stftParamBuf, token: stftParamTok } = allocateBuffer(32, 0x0040 | 0x0008, 'uniform', 'stt_stft_p');
+    dev.queue.writeBuffer(stftParamBuf, 0, stftParams.buffer, stftParams.byteOffset, stftParams.byteLength);
+
+    const { buffer: magBuf, token: magTok } = allocateBuffer(totalStftEntries * 4, 0x0080, 'tensor', 'stt_mags');
+
+    const { pipeline: stftPipeline } = _globalPipelineCache.getPipeline('stt_stft', STT_STFT_WGSL);
+    const stftBindGroup = dev.createBindGroup({
+      layout: stftPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: stftParamBuf } },
+        { binding: 1, resource: { buffer: pcmBuf } },
+        { binding: 2, resource: { buffer: magBuf } },
+      ],
+    });
+
+    // 3. Setup Pass 2: Mel-Filterbank Projection Kernel
     const melFilterbank = this.createMelFilterbank(nMels, nBins, sampleRate);
+    const totalMelEntries = numFrames * nMels;
+    const melDispatch = computeDispatch2D(Math.ceil(totalMelEntries / 64));
 
-    // 2. Dispatch STT_MEL_WGSL compute kernel on GPU
-    const totalEntries = numFrames * nMels;
-    const { dispatchX, dispatchY } = computeDispatch2D(Math.ceil(totalEntries / 64));
-
-    const paramsArray = new Uint32Array([numFrames, nMels, nBins, dispatchX]);
-    const { buffer: pBuf, token: pTok } = allocateBuffer(16, 0x0040 | 0x0008, 'uniform', 'stt_p');
-    dev.queue.writeBuffer(pBuf, 0, paramsArray.buffer, paramsArray.byteOffset, paramsArray.byteLength);
-
-    const { buffer: magBuf, token: magTok } = allocateBuffer(stftMags.byteLength, 0x0080 | 0x0008, 'tensor', 'stt_mags');
-    dev.queue.writeBuffer(magBuf, 0, stftMags.buffer, stftMags.byteOffset, stftMags.byteLength);
+    const melParams = new Uint32Array([numFrames, nMels, nBins, melDispatch.dispatchX]);
+    const { buffer: melParamBuf, token: melParamTok } = allocateBuffer(16, 0x0040 | 0x0008, 'uniform', 'stt_mel_p');
+    dev.queue.writeBuffer(melParamBuf, 0, melParams.buffer, melParams.byteOffset, melParams.byteLength);
 
     const { buffer: fbBuf, token: fbTok } = allocateBuffer(melFilterbank.byteLength, 0x0080 | 0x0008, 'tensor', 'stt_fb');
     dev.queue.writeBuffer(fbBuf, 0, melFilterbank.buffer, melFilterbank.byteOffset, melFilterbank.byteLength);
 
-    const { buffer: outBuf, token: outTok } = allocateBuffer(totalEntries * 4, 0x0080 | 0x0004, 'tensor', 'stt_out');
+    const { buffer: outBuf, token: outTok } = allocateBuffer(totalMelEntries * 4, 0x0080 | 0x0004, 'tensor', 'stt_out');
 
-    const { pipeline } = _globalPipelineCache.getPipeline('stt_mel', STT_MEL_WGSL);
-    const bindGroup = dev.createBindGroup({
-      layout: pipeline.getBindGroupLayout(0),
+    const { pipeline: melPipeline } = _globalPipelineCache.getPipeline('stt_mel', STT_MEL_WGSL);
+    const melBindGroup = dev.createBindGroup({
+      layout: melPipeline.getBindGroupLayout(0),
       entries: [
-        { binding: 0, resource: { buffer: pBuf } },
+        { binding: 0, resource: { buffer: melParamBuf } },
         { binding: 1, resource: { buffer: magBuf } },
         { binding: 2, resource: { buffer: fbBuf } },
         { binding: 3, resource: { buffer: outBuf } },
       ],
     });
 
+    // 4. Record and dispatch both compute passes in a single GPU Command Buffer
     const enc = dev.createCommandEncoder();
-    const pass = enc.beginComputePass();
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, bindGroup);
-    pass.dispatchWorkgroups(dispatchX, dispatchY);
-    pass.end();
+
+    // Pass 1: Hardware-Accelerated STFT with Hanning Window
+    const pass1 = enc.beginComputePass();
+    pass1.setPipeline(stftPipeline);
+    pass1.setBindGroup(0, stftBindGroup);
+    pass1.dispatchWorkgroups(stftDispatch.dispatchX, stftDispatch.dispatchY);
+    pass1.end();
+
+    // Pass 2: 80-Channel Mel-Filterbank Projection & Log Compression
+    const pass2 = enc.beginComputePass();
+    pass2.setPipeline(melPipeline);
+    pass2.setBindGroup(0, melBindGroup);
+    pass2.dispatchWorkgroups(melDispatch.dispatchX, melDispatch.dispatchY);
+    pass2.end();
+
     dev.queue.submit([enc.finish()]);
 
-    const rawMels = await readBufferToFloat32Array(outBuf, totalEntries * 4);
+    // 5. Read back only the final 80-channel Mel Spectrogram
+    const rawMels = await readBufferToFloat32Array(outBuf, totalMelEntries * 4);
     const mels = new Float32Array(rawMels);
 
-    freeBuffer(pBuf, pTok);
+    // 6. Free all allocated VRAM staging and intermediate buffers
+    freeBuffer(pcmBuf, pcmTok);
+    freeBuffer(stftParamBuf, stftParamTok);
     freeBuffer(magBuf, magTok);
+    freeBuffer(melParamBuf, melParamTok);
     freeBuffer(fbBuf, fbTok);
     freeBuffer(outBuf, outTok);
 

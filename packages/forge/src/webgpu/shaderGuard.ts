@@ -108,6 +108,7 @@ let ALLOWED_KERNEL_NAMES = new Set([
   "reduce_axes",
   "tts_synth",
   "stt_mel",
+  "stt_stft",
 ]);
 
 /**

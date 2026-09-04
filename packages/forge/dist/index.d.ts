@@ -32,6 +32,7 @@ export * from "./tensor/kernels/silu.wgsl";
 export * from "./tensor/kernels/upsample2d.wgsl";
 export * from "./tensor/kernels/group_norm.wgsl";
 export * from "./tensor/kernels/stt_mel.wgsl";
+export * from "./tensor/kernels/stt_stft.wgsl";
 export * from "./tensor/kernels/tts_synth.wgsl";
 export * from "./diffusion/scheduler";
 export * from "./diffusion/vaeDecoder";
