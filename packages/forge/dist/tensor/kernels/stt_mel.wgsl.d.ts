@@ -1,0 +1,8 @@
+/**
+ * 파일 생성일: 2026-09-04
+ * AMEVA-Forge Release 3.0: SCRUM-335 WebGPU STT Log Mel-Filterbank Compute Kernel
+ *
+ * WHAT: 오디오 STFT 프레임 에너지를 80개 삼각 멜-필터뱅크(Mel-Filterbank)에 투영하는 WGSL 컴퓨트 셰이더입니다.
+ * WHY: 오디오 음향 특징 추출(Mel-Spectrogram)을 WebGPU 하드웨어에서 초고속 병렬 디스패치하기 위함입니다.
+ */
+export declare const STT_MEL_WGSL = "\nstruct Params {\n  num_frames: u32,\n  num_mels: u32,\n  n_fft_bins: u32,\n  workgroups_x: u32,\n};\n\n@group(0) @binding(0) var<uniform> params: Params;\n@group(0) @binding(1) var<storage, read> stft_magnitudes: array<f32>; // [num_frames, n_fft_bins]\n@group(0) @binding(2) var<storage, read> mel_filterbank: array<f32>;   // [num_mels, n_fft_bins]\n@group(0) @binding(3) var<storage, read_write> output_mels: array<f32>; // [num_frames, num_mels]\n\n@compute @workgroup_size(64, 1, 1)\nfn main(\n  @builtin(local_invocation_id) local_id: vec3<u32>,\n  @builtin(workgroup_id) workgroup_id: vec3<u32>\n) {\n  let total_entries = params.num_frames * params.num_mels;\n  let idx = (workgroup_id.x + workgroup_id.y * params.workgroups_x) * 64u + local_id.x;\n  if (idx >= total_entries) {\n    return;\n  }\n\n  let frame = idx / params.num_mels;\n  let mel = idx % params.num_mels;\n\n  var energy = 0.0;\n  let frame_offset = frame * params.n_fft_bins;\n  let mel_offset = mel * params.n_fft_bins;\n\n  for (var k = 0u; k < params.n_fft_bins; k = k + 1u) {\n    let mag = stft_magnitudes[frame_offset + k];\n    let weight = mel_filterbank[mel_offset + k];\n    energy = energy + mag * weight;\n  }\n\n  // Log compression: log10(max(energy, 1e-5))\n  let log_val = log(max(energy, 0.00001)) * 0.4342944819; // 1 / ln(10)\n  output_mels[idx] = log_val;\n}\n";

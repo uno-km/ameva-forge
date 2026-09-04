@@ -1,11 +1,11 @@
 /**
  * 파일 생성일: 2026-09-03
- * AMEVA-Forge Release 3.0: SCRUM-330 Real In-Browser WebGPU Diffusion Pipeline Orchestrator
+ * AMEVA-Forge Release 3.0: SCRUM-330 & SCRUM-335 Real In-Browser WebGPU Diffusion Pipeline Orchestrator
  *
  * WHAT: CLIP 텍스트 인코더, UNet 신경망 실행 그래프, 오일러 스케줄러, VAE 디코더를 비동기로 조율하는 완제품 오케스트레이터입니다.
  * WHY: 가짜 decay 수식이나 가짜 가중치 침묵 생성을 원천 박멸하고,
- *      실제 신경망 순전파와 페일패스트(Fail-Fast) 오류 검증을 100% 집행하기 위해 존재합니다.
- * HOW: Tokenizer -> CLIPTextEncoder -> Multi-step UNetGraph -> EulerDiscreteScheduler -> VAEDecoder.
+ *      WebGPU WGSL 하드웨어 가속 파이프라인 직결과 페일패스트(Fail-Fast) 오류 검증을 100% 집행하기 위해 존재합니다.
+ * HOW: Tokenizer -> CLIPTextEncoder -> Multi-step UNetGraph(WebGPU/CPU) -> EulerDiscreteScheduler -> VAEDecoder.
  */
 
 import { GGUFStreamer, GGUFHeader } from '../loader/ggufStreamer';
@@ -14,12 +14,14 @@ import { VAEDecoder, DecodedImage, VAEDecoderWeights } from './vaeDecoder';
 import { CLIPTokenizer } from './clipTokenizer';
 import { CLIPTextEncoder, CLIPTextEncoderWeights } from './clipTextEncoder';
 import { UNetGraph, UNetWeights } from './unetGraph';
+import { getDevice, isAvailable } from '../webgpu/device';
 
 export enum DiffusionPipelineErrorCode {
   UNET_FORWARD_NOT_IMPLEMENTED = 'UNET_FORWARD_NOT_IMPLEMENTED',
   CLIP_ENCODER_NOT_IMPLEMENTED = 'CLIP_ENCODER_NOT_IMPLEMENTED',
   VAE_WEIGHTS_REQUIRED = 'VAE_WEIGHTS_REQUIRED',
   MODEL_NOT_LOADED = 'MODEL_NOT_LOADED',
+  WEBGPU_NOT_AVAILABLE = 'WEBGPU_NOT_AVAILABLE',
 }
 
 export class DiffusionPipelineError extends Error {
@@ -41,6 +43,7 @@ export interface GenerationOptions {
   height?: number;
   seed?: number;
   guidanceScale?: number;
+  backend?: 'webgpu' | 'cpu';
   vaeWeights?: VAEDecoderWeights;
   unetWeights?: UNetWeights;
   clipWeights?: CLIPTextEncoderWeights;
@@ -52,6 +55,14 @@ export interface GenerationProgress {
   totalSteps: number;
   percentage: number;
   elapsedMs: number;
+}
+
+function hasWebGPUDevice(): boolean {
+  try {
+    return !!getDevice();
+  } catch {
+    return false;
+  }
 }
 
 export class WebGPUDiffusionPipeline {
@@ -109,32 +120,55 @@ export class WebGPUDiffusionPipeline {
       );
     }
 
+    // 2. 백엔드 결정 및 WebGPU 가용성 검증 (Zero CPU Fallback)
+    const requestedBackend = options.backend ?? 'webgpu';
+    const isDeviceReady = hasWebGPUDevice();
+
+    if (requestedBackend === 'webgpu' && !isDeviceReady) {
+      throw new DiffusionPipelineError(
+        DiffusionPipelineErrorCode.WEBGPU_NOT_AVAILABLE,
+        'WebGPU hardware acceleration is strictly required. No WebGPU device detected. Refusing silent fallback to CPU. Pass backend="cpu" explicitly only for headless unit test mocking.'
+      );
+    }
+
+    const useGPU = requestedBackend === 'webgpu';
+
     const latentH = Math.floor(height / 8);
     const latentW = Math.floor(width / 8);
     const latentChannels = 4;
 
-    // 2. CLIP BPE 토큰화 및 텍스트 인코딩
+    // 3. CLIP BPE 토큰화 및 텍스트 인코딩
     const { tokenIds } = this.tokenizer.encode(prompt);
     const textContext = CLIPTextEncoder.forward(tokenIds, options.clipWeights);
 
-    // 3. 디노이징 스케줄러 타임스텝 설정 및 초기 가우시안 잠재 노이즈 생성
+    // 4. 디노이징 스케줄러 타임스텝 설정 및 초기 가우시안 잠재 노이즈 생성
     this.scheduler.setTimesteps(numSteps);
     let latents = this.scheduler.generateInitialNoise(latentChannels, latentH, latentW, seed);
 
-    // 4. Multi-Step Denoising Loop (Yielding to prevent browser TDR)
+    // 5. Multi-Step Denoising Loop (Yielding to prevent browser TDR)
     for (let step = 0; step < numSteps; step++) {
       const t = this.scheduler.timesteps[step];
 
-      // Real UNet Multi-block execution graph
-      const predNoise = UNetGraph.forward(
-        latents,
-        t,
-        textContext,
-        options.unetWeights,
-        latentH,
-        latentW,
-        32
-      );
+      // UNet forward: WebGPU Hardware Shader or CPU Reference
+      const predNoise = useGPU
+        ? await UNetGraph.forwardGPU(
+            latents,
+            t,
+            textContext,
+            options.unetWeights,
+            latentH,
+            latentW,
+            32
+          )
+        : UNetGraph.forward(
+            latents,
+            t,
+            textContext,
+            options.unetWeights,
+            latentH,
+            latentW,
+            32
+          );
 
       // Scheduler Euler Step update
       const { prevSample } = this.scheduler.step(predNoise, step, latents);
@@ -154,7 +188,7 @@ export class WebGPUDiffusionPipeline {
       }
     }
 
-    // 5. VAE Decoder: Latent -> RGB Canvas ImageData 변환
+    // 6. VAE Decoder: Latent -> RGB Canvas ImageData 변환
     const decoded = VAEDecoder.decodeLatentToRGB(latents, latentW, latentH, width, height, options.vaeWeights);
 
     return decoded;

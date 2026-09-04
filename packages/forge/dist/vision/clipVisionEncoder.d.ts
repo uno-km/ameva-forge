@@ -39,6 +39,13 @@ export declare class CLIPVisionEncoder {
         imageEmbedding: Float32Array;
         patchEmbeddings: Float32Array;
     };
+    /**
+     * CLIP Vision Transformer WebGPU 하드웨어 가속 순전파
+     */
+    static forwardGPU(rgb: Float32Array, width: number, height: number, weights: CLIPVisionWeights): Promise<{
+        imageEmbedding: Float32Array;
+        patchEmbeddings: Float32Array;
+    }>;
     private static layerNorm;
     private static quickGELU;
     private static linear;

@@ -16,6 +16,8 @@ import { getDevice, getQueue } from "./device";
 import { _globalQuotaManager, AllocationKind, AllocationToken } from "./quota";
 import { AMEVAForgeValidationError } from "../errors";
 
+const GPU_MAP_MODE_READ = typeof GPUMapMode !== 'undefined' ? GPUMapMode.READ : 0x0001;
+
 /**
  * WHAT: 지정된 크기와 용도에 맞게 GPU 버퍼를 할당합니다.
  * WHY: WebGPU의 버퍼 생성을 추상화하고 전역 할당량(Quota) 관리 시스템과 통합하여 메모리 부족(OOM)을 방지하기 위해 존재합니다.
@@ -160,7 +162,7 @@ export async function readBufferToFloat32Array(
     const commandEncoder = device.createCommandEncoder();
     commandEncoder.copyBufferToBuffer(buffer, 0, stagingBuffer, 0, byteLength);
     device.queue.submit([commandEncoder.finish()]);
-    await stagingBuffer.mapAsync(GPUMapMode.READ);
+    await stagingBuffer.mapAsync(GPU_MAP_MODE_READ);
 
     try {
       const arrayBuffer = stagingBuffer.getMappedRange(0, byteLength);
@@ -193,7 +195,7 @@ export async function mapBufferAsync(
     commandEncoder.copyBufferToBuffer(buffer, 0, stagingBuffer, 0, byteLength);
     device.queue.submit([commandEncoder.finish()]);
 
-    await stagingBuffer.mapAsync(GPUMapMode.READ);
+    await stagingBuffer.mapAsync(GPU_MAP_MODE_READ);
     return { stagingBuffer, token, byteLength };
   } catch (e) {
     releaseStagingBuffer(stagingBuffer, token, bucketSize, true);

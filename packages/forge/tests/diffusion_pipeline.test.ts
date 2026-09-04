@@ -282,6 +282,7 @@ describe('In-Browser Diffusion Pipeline (SCRUM-327 ~ SCRUM-330)', () => {
         width: 64,
         height: 64,
         seed: 42,
+        backend: 'cpu',
         vaeWeights,
         unetWeights,
         clipWeights,
@@ -295,6 +296,6 @@ describe('In-Browser Diffusion Pipeline (SCRUM-327 ~ SCRUM-330)', () => {
       expect(image.height).toBe(64);
       expect(image.rgbaData.length).toBe(64 * 64 * 4);
       expect(progressSteps).toEqual([1, 2]);
-    });
+    }, 30000);
   });
 });

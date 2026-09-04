@@ -106,6 +106,8 @@ let ALLOWED_KERNEL_NAMES = new Set([
   "slice",
   "slice_backward",
   "reduce_axes",
+  "tts_synth",
+  "stt_mel",
 ]);
 
 /**
