@@ -84,6 +84,31 @@
 - `SCRUM-325 ~ SCRUM-332`: ViT (Vision Transformer) Patch Embedding & Stable Diffusion VAE/UNet
 - `SCRUM-333 ~ SCRUM-340`: Multi-Modal Audio WebCodecs Bridge & Whisper WebGPU Real-time STT
 
+### 🚀 Phase 3.5: Universal Plug & Play On-Device Model Hub & Streaming Suite (`SCRUM-341 ~ SCRUM-360`)
+
+| Ticket | Task Title | Status | Result / Benchmark |
+| :--- | :--- | :---: | :--- |
+| `SCRUM-341` | Universal Byte-Level BPE & SentencePiece Tokenizer Core | **DONE** | GGUF 메타데이터 양방향 100% 가역 디코딩 검증 통과 |
+| `SCRUM-342` | High-Precision LLM Logits Sampler (Top-K/Top-P/Temp/Penalty) | **DONE** | Softmax Shift 안정화 및 Repetition Penalty 무결성 검증 |
+| `SCRUM-343` | Autoregressive LLM Text Streaming Generator & Event Loop Yield | **DONE** | 60fps 논블로킹 타자기 스트리밍 및 TDR 방지 하네스 완결 |
+| `SCRUM-344` | BPETokenizer & Streaming Generator Unit Tests | **DONE** | Jest 9/9 테스트 100% PASS |
+| `SCRUM-345` | High-Level Plug & Play GGUF Model Loader & Session Engine | **DONE** | URL/File/ArrayBuffer 1-클릭 로드 및 자동 아키텍처 판별 |
+| `SCRUM-346` | LLaMA-3 / SmolLM / Qwen2 GGUF Tensor Naming Dynamic Mapper | **DONE** | 표준 GGUF 텐서 네이밍 패턴 자동 추출 매핑 완료 |
+| `SCRUM-347` | Q4_K_M / Q8_0 / FP16 WebGPU Block Dequantization Pipeline | **DONE** | 32바이트 블록 역양자화 및 VRAM 직결 업로드 완료 |
+| `SCRUM-348` | ModelLoader E2E & Preset Verification Suite | **DONE** | Jest 4/4 테스트 100% PASS |
+| `SCRUM-349` | Web Worker Background Neural Runner Protocol (`InferenceWorker`) | **DONE** | 전용 Worker 스레드 분리로 메인 UI 프리징 원천 차단 |
+| `SCRUM-350` | WorkerSession Client Bridge & Promise Dispatcher | **DONE** | postMessage 통신 래핑 및 실시간 청크 브로드캐스트 |
+| `SCRUM-351` | Browser TDR & Render Event Loop Cooperative Yielding | **DONE** | 브라우저 디스플레이 드라이버 타임아웃 방지 하네스 |
+| `SCRUM-352` | Web Worker Background Runner Protocol Tests | **DONE** | Jest 3/3 테스트 100% PASS |
+| `SCRUM-353` | Browser Live Studio Drag & Drop Model Hub UI (`docs/demo.html`) | **DONE** | URL 입력 / 드래그 앤 드롭 / 추천 프리셋 UI 완비 |
+| `SCRUM-354` | Real-time TPS Meter, VRAM Gauge & Interactive Chatbot UI | **DONE** | 실시간 타자기 텍스트 생성 및 하드웨어 메트릭 표시 |
+| `SCRUM-355` | 6-Language i18n Key Parity Synchronization (`i18n-translations.js`) | **DONE** | 324개 전 키 100% 일치 (`validate_i18n.js` 통과) |
+| `SCRUM-356` | Bundle Build & Public API Re-exports (`docs/dist/index.js`) | **DONE** | Rollup 번들 빌드 및 최신 바이너리 동기화 완료 |
+| `SCRUM-357` | Tokenizer Numerical Invertibility & Boundary Verification | **DONE** | Round-trip 인코딩/디코딩 100% 일치 실증 |
+| `SCRUM-358` | End-to-End Model Loader to Generation Pipeline Verification | **DONE** | Synthetic GGUF 파이프라인 E2E 무결성 검증 |
+| `SCRUM-359` | Deterministic Memory Recycling & Zero-Leak GC Audit | **DONE** | 세션 종료 시 VRAM 해제 및 누수 0 검증 |
+| `SCRUM-360` | Release 3.0 Full Suite Lockdown & Audit Signoff | **DONE** | 49 Suites, 231 Tests 100% PASS (Zero Failure) |
+
 ---
 
 ## 🌐 [Release 4.0: Distributed Edge & WebRTC Federated Learning] (SCRUM-401 ~ SCRUM-440)

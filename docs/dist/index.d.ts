@@ -32,6 +32,7 @@ export * from "./tensor/kernels/silu.wgsl";
 export * from "./tensor/kernels/upsample2d.wgsl";
 export * from "./tensor/kernels/group_norm.wgsl";
 export * from "./tensor/kernels/stt_mel.wgsl";
+export * from "./tensor/kernels/stt_stft.wgsl";
 export * from "./tensor/kernels/tts_synth.wgsl";
 export * from "./diffusion/scheduler";
 export * from "./diffusion/vaeDecoder";
@@ -47,6 +48,12 @@ export * from "./vision/vlmEngine";
 export * from "./audio/sttEngine";
 export * from "./audio/ttsEngine";
 export * from "./llm/llmEngine";
+export * from "./llm/sampler";
+export * from "./llm/llmTextGenerator";
+export * from "./tokenizer/bpeTokenizer";
+export * from "./loader/modelLoader";
+export * from "./worker/inferenceWorker";
+export * from "./worker/workerClient";
 export * from "./orchestrator/allModalOrchestrator";
 /**
  * WHAT: 테스트 환경(E2E / Jest)에서만 제어 가능한 결함 주입(Fault Injection) 훅입니다.

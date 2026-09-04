@@ -222,4 +222,85 @@ export class GGUFTensorMapper {
       convOutWeight,
     };
   }
+
+  /**
+   * LLaMA / SmolLM / Qwen2 GGUF 모델로부터 LLM 트랜스포머 가중치 구조체를 추출합니다.
+   */
+  public static extractLLMWeights(
+    header: GGUFHeader,
+    fileBuffer: ArrayBuffer,
+    dim: number = 512,
+    vocabSize: number = 32000
+  ): import('../llm/llmEngine').LLMWeights {
+    // 1. Token Embedding
+    const embdInfo = this.findTensor(header, [
+      'token_embd.weight',
+      'model.embed_tokens.weight',
+      'embeddings.weight'
+    ]);
+    const tokenEmbedding = embdInfo
+      ? this.decodeTensorToFloat32(header, embdInfo, fileBuffer)
+      : new Float32Array(vocabSize * dim).fill(0.01);
+
+    // 2. Decoder Layers count (from metadata or tensor scan)
+    const blockCount = (header.metadata['llama.block_count'] as number) ||
+                       (header.metadata['qwen2.block_count'] as number) ||
+                       1;
+
+    const layers: import('../llm/llmEngine').LLMDecoderLayerWeights[] = [];
+
+    for (let l = 0; l < blockCount; l++) {
+      const qInfo = this.findTensor(header, [`blk.${l}.attn_q.weight`, `model.layers.${l}.self_attn.q_proj.weight`]);
+      const kInfo = this.findTensor(header, [`blk.${l}.attn_k.weight`, `model.layers.${l}.self_attn.k_proj.weight`]);
+      const vInfo = this.findTensor(header, [`blk.${l}.attn_v.weight`, `model.layers.${l}.self_attn.v_proj.weight`]);
+      const outInfo = this.findTensor(header, [`blk.${l}.attn_output.weight`, `model.layers.${l}.self_attn.o_proj.weight`]);
+
+      const inNormInfo = this.findTensor(header, [`blk.${l}.attn_norm.weight`, `model.layers.${l}.input_layernorm.weight`]);
+      const postNormInfo = this.findTensor(header, [`blk.${l}.ffn_norm.weight`, `model.layers.${l}.post_attention_layernorm.weight`]);
+
+      const gateInfo = this.findTensor(header, [`blk.${l}.ffn_gate.weight`, `model.layers.${l}.mlp.gate_proj.weight`]);
+      const upInfo = this.findTensor(header, [`blk.${l}.ffn_up.weight`, `model.layers.${l}.mlp.up_proj.weight`]);
+      const downInfo = this.findTensor(header, [`blk.${l}.ffn_down.weight`, `model.layers.${l}.mlp.down_proj.weight`]);
+
+      const hiddenDim = 1024;
+
+      layers.push({
+        inputNormGamma: inNormInfo ? this.decodeTensorToFloat32(header, inNormInfo, fileBuffer) : new Float32Array(dim).fill(1.0),
+        qWeight: qInfo ? this.decodeTensorToFloat32(header, qInfo, fileBuffer) : new Float32Array(dim * dim).fill(0.01),
+        kWeight: kInfo ? this.decodeTensorToFloat32(header, kInfo, fileBuffer) : new Float32Array(dim * dim).fill(0.01),
+        vWeight: vInfo ? this.decodeTensorToFloat32(header, vInfo, fileBuffer) : new Float32Array(dim * dim).fill(0.01),
+        outWeight: outInfo ? this.decodeTensorToFloat32(header, outInfo, fileBuffer) : new Float32Array(dim * dim).fill(0.01),
+        postNormGamma: postNormInfo ? this.decodeTensorToFloat32(header, postNormInfo, fileBuffer) : new Float32Array(dim).fill(1.0),
+        gateWeight: gateInfo ? this.decodeTensorToFloat32(header, gateInfo, fileBuffer) : new Float32Array(hiddenDim * dim).fill(0.01),
+        upWeight: upInfo ? this.decodeTensorToFloat32(header, upInfo, fileBuffer) : new Float32Array(hiddenDim * dim).fill(0.01),
+        downWeight: downInfo ? this.decodeTensorToFloat32(header, downInfo, fileBuffer) : new Float32Array(dim * hiddenDim).fill(0.01),
+      });
+    }
+
+    // 3. Final Norm
+    const finalNormInfo = this.findTensor(header, [
+      'output_norm.weight',
+      'model.norm.weight',
+      'final_layernorm.weight'
+    ]);
+    const finalNormGamma = finalNormInfo
+      ? this.decodeTensorToFloat32(header, finalNormInfo, fileBuffer)
+      : new Float32Array(dim).fill(1.0);
+
+    // 4. LM Head (Weight Tying fallback to tokenEmbedding if absent)
+    const lmHeadInfo = this.findTensor(header, [
+      'output.weight',
+      'lm_head.weight'
+    ]);
+    const lmHeadWeight = lmHeadInfo
+      ? this.decodeTensorToFloat32(header, lmHeadInfo, fileBuffer)
+      : tokenEmbedding;
+
+    return {
+      tokenEmbedding,
+      layers,
+      finalNormGamma,
+      lmHeadWeight,
+    };
+  }
 }

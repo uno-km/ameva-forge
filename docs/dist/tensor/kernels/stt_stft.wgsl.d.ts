@@ -1,0 +1,10 @@
+/**
+ * 파일 생성일: 2026-09-04
+ * AMEVA-Forge Release 3.0: High-Performance WebGPU STT Short-Time Fourier Transform (STFT) Kernel
+ *
+ * WHAT: 오디오 16kHz PCM 파형으로부터 각 프레임별 Hanning Window 및 복소수 DFT(이산 푸리에 변환)를
+ *      GPU의 수천 개 워크그룹 스레드에서 병렬 계산하여 매그니튜드(Magnitude) 버퍼를 VRAM 내에서 생성하는 WGSL 컴퓨트 커널입니다.
+ * WHY: 1분 오디오 기준 4.8억 번의 CPU 삼각함수 연산 병목을 제거하고, 순수 WebGPU 병렬 연산으로 수십 밀리초 내에 처리하기 위함입니다.
+ * HOW: Frame 및 Bin(k) 인덱스를 2D 그리드로 분할하여, 스레드당 400개 샘플의 Hanning 가중 삼각함수를 곱셈 누산(FMA)합니다.
+ */
+export declare const STT_STFT_WGSL = "\nstruct STFTParams {\n  num_frames: u32,\n  n_fft: u32,       // 400\n  hop_length: u32,  // 160\n  n_bins: u32,      // 201\n  workgroups_x: u32,\n  pcm_length: u32,\n  pad0: u32,\n  pad1: u32,\n};\n\n@group(0) @binding(0) var<uniform> params: STFTParams;\n@group(0) @binding(1) var<storage, read> pcm_samples: array<f32>;\n@group(0) @binding(2) var<storage, read_write> stft_magnitudes: array<f32>; // [num_frames, n_bins]\n\n@compute @workgroup_size(64, 1, 1)\nfn main(\n  @builtin(local_invocation_id) local_id: vec3<u32>,\n  @builtin(workgroup_id) workgroup_id: vec3<u32>\n) {\n  let total_entries = params.num_frames * params.n_bins;\n  let idx = (workgroup_id.x + workgroup_id.y * params.workgroups_x) * 64u + local_id.x;\n  if (idx >= total_entries) {\n    return;\n  }\n\n  let frame = idx / params.n_bins;\n  let k = idx % params.n_bins;\n  let start = frame * params.hop_length;\n\n  var real = 0.0;\n  var imag = 0.0;\n  let two_pi_over_nfft = 6.28318530717958647692 / f32(params.n_fft);\n  let k_f32 = f32(k);\n\n  for (var n = 0u; n < params.n_fft; n = n + 1u) {\n    let sample_idx = start + n;\n    var sample = 0.0;\n    if (sample_idx < params.pcm_length) {\n      sample = pcm_samples[sample_idx];\n    }\n    let n_f32 = f32(n);\n    // Hanning Window: w[n] = 0.5 * (1.0 - cos(2 * pi * n / n_fft))\n    let win = 0.5 * (1.0 - cos(two_pi_over_nfft * n_f32));\n    let sample_win = sample * win;\n\n    let angle = -two_pi_over_nfft * k_f32 * n_f32;\n    real = real + sample_win * cos(angle);\n    imag = imag + sample_win * sin(angle);\n  }\n\n  stft_magnitudes[idx] = sqrt(real * real + imag * imag);\n}\n";

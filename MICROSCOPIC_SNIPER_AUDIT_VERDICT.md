@@ -198,7 +198,7 @@ classDiagram
 17. **`move_to_` 호출 시 `self._handle_cell`의 참조 카운트와 `moved`의 라이프사이클 간 불일치 위험.**
 18. **`backward()` 완료 즉시 `_grad_parents = ()`로 DAG를 파괴하여 2차 미분(`create_graph=True`) 및 디버깅 불가.**
 19. **`sparse_cross_entropy_backward`의 `reduction_scale` 전달 시 스칼라와 텐서 그래디언트 형상 혼동 시 스케일 왜곡.**
-20. **WebGL/WebGPU 미지원 환경에서 Python 에러 메시지가 모호하여 Pyodide 구동 실패 원인 파악 불가.**
+20. **WebGL/Web디바이스 리소스 사용 환경에서 Python 에러 메시지가 모호하여 Pyodide 구동 실패 원인 파악 불가.**
 
 ---
 

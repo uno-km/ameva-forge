@@ -8,7 +8,7 @@ async def run_benchmark():
     print(" AMEVA OS WebGPU-Python Bridge Benchmark Suite")
     print("==================================================")
     
-    # --- Test 1: 극한의 단순 연산 (4중 For-loop / Element-wise) ---
+    # --- Test 1: 고부하 단순 연산 (4중 For-loop / Element-wise) ---
     print("\n[Test 1] 대규모 스칼라 연산 (Element-wise Addition/Multiplication)")
     size = 10000000  # 1천만 개 배열
     A = np.random.rand(size).astype(np.float32)

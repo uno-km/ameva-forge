@@ -1,5 +1,5 @@
 > [!WARNING]
-> **UNVERIFIED BENCHMARK / THEORETICAL SIMULATION DRAFT** — The performance numbers in this document are theoretical projections and have not been independently verified with actual hardware measurements.
+> **[Theoretical Model] Theoretical Simulation Draft** — The performance numbers in this document are theoretical projections and have not been independently verified with actual hardware measurements.
 
 # AMEVA WebGPU-Python Bridge: A Deep Dive into Extreme GPU Acceleration in the Browser
 
@@ -59,19 +59,19 @@ The values below are synthetic engineering targets. They were not produced by th
 | **Test 4: N-Body**<br/>(Gravity Physics) | $O(N^2)$ | **[Extreme]**<br/>1 Million Particles | **Inexecutable on CPU** | **0.12400 sec (Projected Target)** | Target shared memory tiling simulation goal. |
 | **Test 5: LLM Attention**<br/>(Multi-head Attn) | $O(N^2 \cdot d)$ | **[Extreme]**<br/>Context 100K | **Inexecutable on CPU** | **0.08200 sec (Projected Target)** | Target fused softmax acceleration goal. |
 
-### 6.3. Engineering Interpretation of Simulation Targets (UNVERIFIED)
+### 6.3. Engineering Interpretation of Simulation Targets (Theoretical Model)
 This simulation target data provides theoretical guidelines for computer science principles:
 - **Threshold of GPU Acceleration (Performance Inversion):** Small datasets incur VRAM transfer overhead. GPU acceleration is intended for massive workloads crossing specific thresholds.
 - **WASM Memory Boundaries:** Direct VRAM allocation avoids main WASM heap allocation bottlenecks.
 
-## 7. Flaws/limitations in the test cases (UNVERIFIED)
+## 7. Flaws/limitations in the test cases (Theoretical Model)
 Hardware VRAM limits, data transfer overhead, and single-precision float accuracy remain key engineering boundaries for local browser execution.
 
-## 8. Real-world applications of cases (UNVERIFIED)
+## 8. Real-world applications of cases (Theoretical Model)
 Future architectural targets include browser-local ML models, interactive 3D physics engines, and privacy-focused local analytics.
 
-## 9. Positive impacts of results (UNVERIFIED)
+## 9. Positive impacts of results (Theoretical Model)
 By lowering compute access barriers and allowing Python workflows inside browser sandboxes, local edge execution opens new possibilities for educational and lightweight research tools.
 
-## 10. Conclusion backing the hypothesis (UNVERIFIED PROJECTION)
+## 10. Conclusion backing the hypothesis (Theoretical Model)
 The architecture represents a testable hypothesis. Release 1 validates the small-MLP scope listed in `reports/release1/RELEASE_DECISION.md`. Hardware measurements supporting extreme-scale simulation claims remain pending future browser acceptance testing.

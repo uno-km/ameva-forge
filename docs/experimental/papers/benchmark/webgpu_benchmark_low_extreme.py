@@ -11,7 +11,7 @@ raise RuntimeError("Synthetic benchmark execution is blocked in Release 1. Run v
 async def run_low_extreme_benchmark():
     print("===============================================================")
     print(" AMEVA OS WebGPU-Python Bridge: LOW-EXTREME Benchmark Suite")
-    print(" (OOM/크래시 직전의 극한 스트레스 테스트 - 100% 실측치 도출용)")
+    print(" (OOM/크래시 직전의 고부하 스트레스 테스트 - 100% 실측치 도출용)")
     print("===============================================================")
     
     # --- Test 1: 대규모 스칼라 연산 (1억 단위 배열) ---

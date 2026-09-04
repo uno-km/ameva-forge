@@ -27,4 +27,8 @@ export declare class GGUFTensorMapper {
      * GGUF 파일로부터 VAE 디코더 가중치를 추출하여 반환합니다.
      */
     static extractVAEWeights(header: GGUFHeader, fileBuffer: ArrayBuffer): VAEDecoderWeights | undefined;
+    /**
+     * LLaMA / SmolLM / Qwen2 GGUF 모델로부터 LLM 트랜스포머 가중치 구조체를 추출합니다.
+     */
+    static extractLLMWeights(header: GGUFHeader, fileBuffer: ArrayBuffer, dim?: number, vocabSize?: number): import('../llm/llmEngine').LLMWeights;
 }

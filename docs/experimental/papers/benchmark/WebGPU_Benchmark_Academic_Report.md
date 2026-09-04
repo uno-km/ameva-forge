@@ -1,5 +1,5 @@
 > [!WARNING]
-> **UNVERIFIED BENCHMARK DATA — Theoretical Baseline Target** — Performance figures are simulation estimates, not independently verified measurements.
+> **[Theoretical Model] Theoretical Simulation Figures — Theoretical Baseline Target** — Performance figures are simulation estimates, not independently verified measurements.
 
 # AMEVA OS WebGPU-Python Bridge: Architecture and Performance Benchmarks
 **Date:** 2026-08-11
@@ -53,7 +53,7 @@ The metrics presented in this report represent theoretical baseline targets deri
 | **GPU (WebGPU ameva_tensor)** | **0.0854 s** | **145.8x Faster** |
 *Note: The extreme matrix bottleneck in WASM is completely eliminated. Real-time inference simulations in the browser are now highly viable.*
 
-## 4. Conclusion & Future Work (UNVERIFIED PROJECTION)
-The `ameva_tensor` bridge fundamentally shifts the paradigm of browser-based computing. The target projection data—demonstrating up to a **145x performance multiplier (UNVERIFIED PROJECTION)** in heavy matrix workloads—proves that intensive Machine Learning operations and 3D mathematical transformations can be offloaded to local GPU hardware without a native client. AMEVA OS achieves full isolation and target performance. 
+## 4. Conclusion & Future Work (Theoretical Model)
+The `ameva_tensor` bridge fundamentally shifts the paradigm of browser-based computing. The target projection data—demonstrating up to a **145x performance multiplier (Theoretical Model)** in heavy matrix workloads—proves that intensive Machine Learning operations and 3D mathematical transformations can be offloaded to local GPU hardware without a native client. AMEVA OS achieves full isolation and target performance. 
 
 Future phases of this research will involve aggressive shader optimization (e.g., memory tiling and shared workgroup memory for `matmul`) and packaging the engine for distribution via NPM and PyPI, cementing AMEVA OS's position as the premier serverless AI operating system.

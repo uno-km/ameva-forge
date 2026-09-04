@@ -57,6 +57,12 @@ export * from "./vision/vlmEngine";
 export * from "./audio/sttEngine";
 export * from "./audio/ttsEngine";
 export * from "./llm/llmEngine";
+export * from "./llm/sampler";
+export * from "./llm/llmTextGenerator";
+export * from "./tokenizer/bpeTokenizer";
+export * from "./loader/modelLoader";
+export * from "./worker/inferenceWorker";
+export * from "./worker/workerClient";
 export * from "./orchestrator/allModalOrchestrator";
 
 /**

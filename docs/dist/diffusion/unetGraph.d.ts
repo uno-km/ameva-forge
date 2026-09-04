@@ -1,10 +1,10 @@
 /**
  * 파일 생성일: 2026-09-03
- * AMEVA-Forge Release 3.0: SCRUM-332 UNet Denoising Neural Network Execution Graph
+ * AMEVA-Forge Release 3.0: SCRUM-332 & SCRUM-335 UNet Denoising Neural Network Execution Graph
  *
  * WHAT: 시간 임베딩, 다운블록, 미드블록, 업블록 및 텍스트 교차 어텐션(Cross-Attention)을
  *      하나의 유기적인 순전파 신경망 그래프로 실행하는 UNet 엔진입니다.
- * WHY: 가짜 감쇠 수식을 영구 박멸하고, 실제 잠재 노이즈와 텍스트 임베딩으로부터 노이즈 잔차(Residual)를 예측하기 위해 존재합니다.
+ * WHY: 가짜 감쇠 수식을 영구 박멸하고, WebGPU WGSL Tiled GEMM 셰이더 기반 하드웨어 가속을 직결하기 위해 존재합니다.
  * HOW: Sinusoidal TimeEmbedding -> DownBlocks(ResNet + CrossAttn) -> MidBlock -> UpBlocks(Upsample + Skip Concat + ResNet + CrossAttn) -> OutConv.
  */
 import { ResNetBlockWeights } from './resnetBlock';
@@ -55,15 +55,26 @@ export declare class UNetGraph {
      */
     static computeSinusoidalTimeEmbedding(timestep: number, dim?: number): Float32Array;
     /**
-     * Spatial Cross-Attention:
+     * Spatial Cross-Attention (CPU Reference):
      * Latent Q와 텍스트 임베딩 K, V 사이의 행렬 곱셈을 통한 의미론적 조건 주입
      */
     static forwardCrossAttention(x: Float32Array, C: number, H: number, W: number, context: Float32Array, // [77, textDim]
     textSeqLen: number, textDim: number, weights: SpatialCrossAttentionWeights): Float32Array;
     /**
-     * UNet 디노이징 신경망 전체 순전파:
+     * Spatial Cross-Attention (WebGPU Hardware Accelerated):
+     * WebGPU Tiled GEMM 셰이더를 통해 K, V 사상 및 QK^T 어텐션 연산을 하드웨어 가속합니다.
+     */
+    static forwardCrossAttentionGPU(x: Float32Array, C: number, H: number, W: number, context: Float32Array, textSeqLen: number, textDim: number, weights: SpatialCrossAttentionWeights): Promise<Float32Array>;
+    /**
+     * UNet 디노이징 신경망 전체 순전파 (CPU Reference):
      * 잠재 텐서(z_t) + 타임스텝(t) + 텍스트 컨텍스트 임베딩(c) -> 예측 노이즈(eps_theta)
      */
     static forward(sample: Float32Array, timestep: number, textContext: Float32Array, // [77, 768]
     weights: UNetWeights, height?: number, width?: number, baseChannels?: number): Float32Array;
+    /**
+     * UNet 디노이징 신경망 전체 순전파 (WebGPU Hardware Accelerated):
+     * WebGPU 장치 상에서 Tiled GEMM 기반 Cross-Attention을 수행하여 고해상도 지연시간을 단축합니다.
+     */
+    static forwardGPU(sample: Float32Array, timestep: number, textContext: Float32Array, // [77, 768]
+    weights: UNetWeights, height?: number, width?: number, baseChannels?: number): Promise<Float32Array>;
 }

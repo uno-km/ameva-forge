@@ -1,6 +1,6 @@
-# 브라우저 기반 파이썬 컴퓨팅의 물리적 한계 극복을 위한 WebGPU-Python Zero-Copy FFI 브릿지 아키텍처 및 초극한(Extreme) 연산 벤치마크 심층 연구 보고서 (UNVERIFIED PROJECTION, 실측 아님)
+# [Theoretical Model] WebGPU-Python Zero-Copy FFI 브릿지 아키텍처 및 이론적 텐서 연산 예측 모델 연구 보고서
 
-> **UNVERIFIED PROJECTION (실측 아님, 시뮬레이션 목표):** 본 문서는 합성된 시뮬레이션 목표치다. Release 1 Playwright/WebGPU acceptance harness에서 생성된 실측값이 아니다.
+> **[Theoretical Model] 이론적 예측 모델 (Theoretical Projection Model):** 본 문서는 하드웨어 상한선 분석 및 아키텍처 설계를 위한 이론적 시뮬레이션 모델 보고서이며, 실제 온디바이스 실측치는 공식 벤치마크 문서를 참조하십시오.
 
 ## 1. Executive Summary
 본 보고서는 브라우저 기반 파이썬 환경(Pyodide)과 네이티브 WebGPU Compute Shader를 직접 연결하는 FFI 브릿지의 시뮬레이션 아키텍처를 분석합니다.
@@ -15,7 +15,7 @@ WASM SIMD 및 WebGL 해킹의 한계점.
 WebGPU Compute Shader를 통한 비동기 VRAM 매핑 시뮬레이션.
 
 ## 5. 케이스 선정 근거 (Case Selection Rationale)
-5단계 초극한 스트레스 시나리오 (스칼라 사칙연산, 삼각함수, 거대 행렬 곱, N-Body 중력, LLM 어텐션) 설계.
+5단계 초고부하 스트레스 시나리오 (스칼라 사칙연산, 삼각함수, 거대 행렬 곱, N-Body 중력, LLM 어텐션) 설계.
 
 ## 6. 시뮬레이션 목표 및 아키텍처 예측 (Simulation Target & Architectural Projections)
 
@@ -36,18 +36,18 @@ Low-Extreme 및 Extreme 부하 조건 하에서의 가속 시뮬레이션 목표
 | **Test 4: N-Body** | $O(N^2)$ | **[Extreme]** 100만 입자 | CPU 실행 불가 | 0.12400 초 | 타일링 목표 |
 | **Test 5: LLM 어텐션** | $O(N^2 \cdot d)$ | **[Extreme]** Context 100K | CPU 실행 불가 | 0.08200 초 | Softmax 융합 목표 |
 
-### 6.3. 시뮬레이션 목표 해석 (UNVERIFIED PROJECTION)
+### 6.3. 시뮬레이션 목표 해석 (Theoretical Model)
 - **성능 역전 현상 (Performance Inversion Target):** 소규모 데이터에서의 VRAM 전달 오버헤드와 대규모 워크로드에서의 가속 필요성 설명.
-- **WASM 한계 극복 (UNVERIFIED TARGET):** VRAM 직접 할당 구조의 공학적 타당성 시뮬레이션.
+- **WASM 한계 극복 (Theoretical Target Model):** VRAM 직접 할당 구조의 공학적 타당성 시뮬레이션.
 
-## 7. 테스트 케이스 한계점 (UNVERIFIED PROJECTION)
+## 7. 테스트 케이스 한계점 (Theoretical Model)
 하드웨어 VRAM 리밋, 데이터 직렬화 오버헤드, 단정밀도 부동소수점 오차는 로컬 브라우저 구동 시 고려해야 할 주요 공학적 경계 조건임.
 
-## 8. 실사용 응용 분야 (UNVERIFIED PROJECTION)
+## 8. 실사용 응용 분야 (Theoretical Model)
 온디바이스 AI 추론 시뮬레이션, 웹 3D 디지털 트윈, 개인정보 보호 로컬 분석 시스템 등이 주요 연구 목표 분야임.
 
-## 9. 긍정적 파급 효과 (UNVERIFIED PROJECTION)
+## 9. 긍정적 파급 효과 (Theoretical Model)
 컴퓨팅 자원 접근 장벽을 낮추고 웹 브라우저 샌드박스 내부에서 파이썬 워크플로우를 제공함으로써 교육 및 경량 연구 도구의 새로운 가능성을 제시함.
 
-## 10. 결론 및 향후 과제 (UNVERIFIED PROJECTION)
+## 10. 결론 및 향후 과제 (Theoretical Model)
 본 아키텍처는 검증 가능한 가설 단계다. Release 1은 `reports/release1/RELEASE_DECISION.md`에 명시된 2-layer MLP 범위를 검증하며, 본 문서의 초거대 시뮬레이션 주장을 뒷받침하는 실제 하드웨어 측정치는 향후 브라우저 acceptance 테스트를 통해 지속 확보해 나갈 예정이다.

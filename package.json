@@ -1,6 +1,6 @@
 {
   "name": "@uno-km/ameva-forge",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Server-cost zero Browser-Native WebGPU Autograd & Deep Learning Engine",
   "main": "experimental/playgrounds/autograd/index.html",
   "keywords": [

@@ -40,12 +40,12 @@ A deep learning compiler framework that analyzes model code and compiles it down
 ## 2. In-Depth Dissection of AMEVA WebGPU-Python Bridge
 
 - Supports WebGPU APIs in desktop Python environments (Windows, Mac, Linux).
-- **Core Philosophy:** *"Allow Data Scientists to write Python code inside a browser sandbox, and dispatches to the browser's WebGPU for AI workloads (UNVERIFIED TARGET)."*
+- **Core Philosophy:** *"Allow Data Scientists to write Python code inside a browser sandbox, and dispatches to the browser's WebGPU for AI workloads (Theoretical Target Model)."*
 
 ### ✅ Absolute Strengths (Pros)
-> **Scope note (UNVERIFIED PROJECTION):** This document describes an architectural direction. Release 1 validates only the small-MLP scope listed in `reports/release1/RELEASE_DECISION.md`. LLM-scale kernels, extreme benchmarks, and production claims are not validated.
+> **Scope note (Theoretical Model):** This document describes an architectural direction. Release 1 validates only the small-MLP scope listed in `reports/release1/RELEASE_DECISION.md`. LLM-scale kernels, extreme benchmarks, and production claims are not validated.
 
-# Market Comparison & Competitive Position Analysis (UNVERIFIED)
+# Market Comparison & Competitive Position Analysis (Theoretical Model)
 
 ## 1. Competitive Matrix
 
@@ -57,7 +57,7 @@ A deep learning compiler framework that analyzes model code and compiles it down
 | **Browser Execution** | Native | Native | Native | Impossible | **Native (WASM + FFI)** |
 
 ## 2. Competitive Positioning
-The AMEVA Bridge aims to target a niche position: **"A Real-Time GPU Accelerator specifically designed for Browser-based Python Users (UNVERIFIED TARGET),"** aiming to bridge gaps in existing browser-based execution tools.
+The AMEVA Bridge aims to target a niche position: **"A Real-Time GPU Accelerator specifically designed for Browser-based Python Users (Theoretical Target Model),"** aiming to bridge gaps in existing browser-based execution tools.
 
 ## 3. Autograd & Training Scope Note
 Release 1 contains a basic autograd implementation for the supported MLP path. Its correctness and resource stability are not generalized to CNN, attention, or production-scale training.

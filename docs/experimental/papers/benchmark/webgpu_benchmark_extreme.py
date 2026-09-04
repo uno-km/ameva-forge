@@ -77,7 +77,7 @@ async def run_extreme_benchmark():
     print(f" -> [WebGPU] 소요 시간: {gpu_time_3:.5f}초")
     
     # --- Test 4: N-Body 시뮬레이션 (100만 개 입자) ---
-    print("\n[Test 4] [초극한] O(N^2) 100만 개 은하 입자 상호작용 (1 Trillion Ops)")
+    print("\n[Test 4] [고부하] O(N^2) 100만 개 은하 입자 상호작용 (1 Trillion Ops)")
     print(" -> [CPU] 연산 시뮬레이션: 추정 소요 시간 약 48시간 이상 (생략)")
     
     start_gpu = time.time()
@@ -89,7 +89,7 @@ async def run_extreme_benchmark():
     print(f" -> [WebGPU] 소요 시간: {gpu_time_4:.5f}초 (공유 메모리 타일링 최적화 렌더링)")
 
     # --- Test 5: 초거대 LLM 어텐션 메커니즘 (Context 100K) ---
-    print("\n[Test 5] [초극한] LLM Multi-Head Attention (100K Token Context Window)")
+    print("\n[Test 5] [고부하] LLM Multi-Head Attention (100K Token Context Window)")
     print(" -> [CPU] 100,000 x 100,000 어텐션 스코어 매트릭스 생성 시도 중 OOM (생략)")
     
     start_gpu = time.time()

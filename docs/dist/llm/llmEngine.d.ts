@@ -1,17 +1,18 @@
 /**
  * 파일 생성일: 2026-09-04
- * AMEVA-Forge Release 3.0: High-Performance On-Device LLM & BitNet 1.58b Execution Engine
+ * AMEVA-Forge Release 3.0: SCRUM-334 & SCRUM-335 High-Performance On-Device LLM & BitNet 1.58b Execution Engine
  *
- * WHAT: RoPE, RMSNorm, SwiGLU, KV-Cache 및 BitNet 1.58b 3진(-1, 0, +1) 양자화를 지원하는
- *      완전한 온디바이스 거대언어모델(LLM) 트랜스포머 디코더 엔진입니다.
- * WHY: 외부 클라우드 통신 없는 100% 로컬 텍스트 생성, 추론, 및 올모달 멀티모달 두뇌 역할을 수행하기 위함입니다.
+ * WHAT: RoPE, RMSNorm, SwiGLU, KV-Cache 및 BitNet 1.58b 3진(-1, 0, +1) 양자화를 지원하고,
+ *      WebGPU WGSL FlashAttention / Tiled Matmul / SwiGLU 셰이더 기반 하드웨어 가속을 직결한 트랜스포머 디코더 엔진입니다.
+ * WHY: 외부 클라우드 통신 없는 100% 로컬 텍스트 생성, 추론, 및 올모달 멀티모달 두뇌 역할을 초고속으로 수행하기 위함입니다.
  * HOW: Token Embedding -> N-Layer Decoder(RMSNorm -> QKV Proj -> RoPE -> Causal Attn -> RMSNorm -> SwiGLU MLP) -> LM Head -> Sampler.
  */
 export declare enum LLMErrorCode {
     LLM_EMPTY_PROMPT = "LLM_EMPTY_PROMPT",
     LLM_WEIGHTS_REQUIRED = "LLM_WEIGHTS_REQUIRED",
     LLM_NON_FINITE_LOGITS = "LLM_NON_FINITE_LOGITS",
-    LLM_CONTEXT_OVERFLOW = "LLM_CONTEXT_OVERFLOW"
+    LLM_CONTEXT_OVERFLOW = "LLM_CONTEXT_OVERFLOW",
+    WEBGPU_NOT_AVAILABLE = "WEBGPU_NOT_AVAILABLE"
 }
 export declare class LLMError extends Error {
     readonly code: LLMErrorCode;
@@ -58,7 +59,26 @@ export declare class LLMEngine {
      */
     static swiglu(x: Float32Array, dim: number, hiddenDim: number, wGate: Float32Array, wUp: Float32Array, wDown: Float32Array): Float32Array;
     /**
-     * 단일 토큰 순전파 및 다음 토큰 확률 분포(Logits) 예측
+     * 단일 토큰 순전파 및 다음 토큰 확률 분포(Logits) 예측 (CPU Reference)
      */
     static forwardToken(tokenId: number, pos: number, weights: LLMWeights, kvCaches: KVCache[], dim?: number, vocabSize?: number): Float32Array;
+    /**
+     * 단일 토큰 순전파 및 다음 토큰 확률 분포(Logits) 예측 (WebGPU Hardware Accelerated):
+     * WebGPU Tiled GEMM 및 SwiGLU 셰이더를 통해 VRAM 내에서 하드웨어 가속 실행합니다.
+     */
+    static forwardTokenGPU(tokenId: number, pos: number, weights: LLMWeights, kvCaches: KVCache[], dim?: number, vocabSize?: number): Promise<Float32Array>;
+    /**
+     * 토큰 시퀀스 전체 순전파
+     */
+    static forward(tokens: number[], weights: LLMWeights, dim?: number, vocabSize?: number): {
+        logits: Float32Array;
+        kvCaches: KVCache[];
+    };
+    /**
+     * 토큰 시퀀스 전체 WebGPU 하드웨어 가속 순전파
+     */
+    static forwardGPU(tokens: number[], weights: LLMWeights, dim?: number, vocabSize?: number): Promise<{
+        logits: Float32Array;
+        kvCaches: KVCache[];
+    }>;
 }
